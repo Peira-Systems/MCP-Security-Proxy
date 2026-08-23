@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "phoenix-dev",
+      "url": "http://localhost:4001",
+      "port": 4001
+    }
+  ]
+}
