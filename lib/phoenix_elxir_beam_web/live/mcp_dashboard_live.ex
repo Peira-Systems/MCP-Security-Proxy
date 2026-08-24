@@ -26,7 +26,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      socket
      |> assign(:page_title, "MCP Dashboard")
      |> assign(:graph, graph)
-     |> assign(:positions, seed_positions(graph))
+     |> assign(:positions, layout_positions(graph))
      |> assign(:running, false)
      |> assign(:scenario, nil)
      |> assign(:real_servers, ServerRegistry.list_servers())
@@ -35,29 +35,29 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      |> stream(:events, [])}
   end
 
-  # Spreads sibling nodes apart on distinct starting x coordinates, tier by
-  # tier, so the client-side force relaxation has something to untangle —
-  # nodes seeded on top of each other never separate (zero-length repulsion
-  # vector).
-  defp seed_positions(graph) do
+  # Fixed four-tier layout — agent, policy gate, server, tool — left to
+  # right. Positions are final, not a seed for client-side relaxation: the
+  # graph no longer jitters into place, it's laid out once here.
+  defp layout_positions(graph) do
     server_count = length(graph)
-    server_spacing = 300
-    first_server_x = 450 - server_spacing * (server_count - 1) / 2
+    server_spacing = 170
+    first_server_y = 240 - server_spacing * (server_count - 1) / 2
 
     graph
     |> Enum.with_index()
-    |> Enum.reduce(%{"agent" => {450, 50}}, fn {%{id: server_id, tools: tools}, i}, acc ->
-      server_x = first_server_x + i * server_spacing
-      acc = Map.put(acc, "server-" <> server_id, {server_x, 190})
+    |> Enum.reduce(%{"agent" => {70, 240}, "gate" => {240, 240}}, fn
+      {%{id: server_id, tools: tools}, i}, acc ->
+        server_y = first_server_y + i * server_spacing
+        acc = Map.put(acc, "server-" <> server_id, {450, server_y})
 
-      tool_spacing = 160
-      first_tool_x = server_x - tool_spacing * (length(tools) - 1) / 2
+        tool_spacing = 70
+        first_tool_y = server_y - tool_spacing * (length(tools) - 1) / 2
 
-      tools
-      |> Enum.with_index()
-      |> Enum.reduce(acc, fn {tool, j}, acc2 ->
-        Map.put(acc2, "tool-" <> tool.name, {first_tool_x + j * tool_spacing, 380})
-      end)
+        tools
+        |> Enum.with_index()
+        |> Enum.reduce(acc, fn {tool, j}, acc2 ->
+          Map.put(acc2, "tool-" <> tool.name, {700, first_tool_y + j * tool_spacing})
+        end)
     end)
   end
 
@@ -86,6 +86,25 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       end)
 
       {:noreply, socket |> assign(:registering, true) |> clear_flash()}
+    end
+  end
+
+  def handle_event("register_stdio_preset", %{"preset" => preset}, socket) do
+    liveview = self()
+
+    case stdio_preset(preset) do
+      {:ok, name, cmd, args} ->
+        Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+          send(
+            liveview,
+            {:server_registered, ServerRegistry.register_stdio_server(name, cmd, args)}
+          )
+        end)
+
+        {:noreply, socket |> assign(:registering, true) |> clear_flash()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, reason)}
     end
   end
 
@@ -132,6 +151,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, :manual_session_id, generate_manual_session_id())}
   end
 
+  def handle_event("clear_feed", _params, socket) do
+    # The manual "Call tool" flow never emits a `:session_start` event (see
+    # `apply_event/2` below), so it never gets the clean-slate reset a demo
+    # run gets for free — this button is that reset, made explicit instead
+    # of implicit.
+    {:noreply,
+     socket
+     |> stream(:events, [], reset: true)
+     |> push_event("mcp_graph_reset", %{})}
+  end
+
   @impl true
   def handle_info({:mcp_event, event}, socket) do
     {:noreply, apply_event(socket, event)}
@@ -170,6 +200,43 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp tag_atom("sensitive_read"), do: :sensitive_read
   defp tag_atom("network_egress"), do: :network_egress
+
+  # Fixed commands, not user-supplied — the dashboard form only ever passes a
+  # preset key, never a raw command string, so there's no arbitrary-command
+  # injection surface here.
+  defp stdio_preset("filesystem") do
+    node = System.find_executable("node")
+
+    entry =
+      Path.expand(
+        "priv/mcp_servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+        File.cwd!()
+      )
+
+    cond do
+      is_nil(node) ->
+        {:error, "node not found on PATH — install Node.js to run the real filesystem server"}
+
+      not File.exists?(entry) ->
+        {:error,
+         "#{entry} not found — run: npm install --prefix priv/mcp_servers @modelcontextprotocol/server-filesystem"}
+
+      true ->
+        sandbox = Path.expand("priv/mcp_sandbox", File.cwd!())
+        {:ok, "real-filesystem (stdio)", node, [entry, sandbox]}
+    end
+  end
+
+  defp stdio_preset("fetch") do
+    python = Path.expand(".venv/Scripts/python.exe", File.cwd!())
+
+    if File.exists?(python) do
+      {:ok, "real-fetch (stdio)", python, ["-m", "mcp_server_fetch"]}
+    else
+      {:error,
+       "#{python} not found — run: python -m venv .venv && .venv/Scripts/python -m pip install mcp-server-fetch"}
+    end
+  end
 
   defp generate_manual_session_id do
     "manual-" <> (:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower))

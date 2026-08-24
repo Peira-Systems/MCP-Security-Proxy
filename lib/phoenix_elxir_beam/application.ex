@@ -9,10 +9,12 @@ defmodule PhoenixElxirBeam.Application do
   def start(_type, _args) do
     children = [
       PhoenixElxirBeamWeb.Telemetry,
+      PhoenixElxirBeam.Repo,
       {DNSCluster,
        query: Application.get_env(:phoenix_elxir_beam, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: PhoenixElxirBeam.PubSub},
       PhoenixElxirBeam.MCP.PolicyEngine,
+      {DynamicSupervisor, name: PhoenixElxirBeam.MCP.StdioServerSupervisor},
       PhoenixElxirBeam.MCP.ServerRegistry,
       {Task.Supervisor, name: PhoenixElxirBeam.MCP.TaskSupervisor},
       # Start a worker by calling: PhoenixElxirBeam.Worker.start_link(arg)

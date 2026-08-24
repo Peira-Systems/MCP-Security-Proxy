@@ -11,6 +11,9 @@
       </div>
 
       <div class="flex items-center gap-3">
+        <.link navigate={~p"/mcp/logs"} class="btn btn-ghost btn-sm">
+          Event log
+        </.link>
         <button
           id="run-benign-btn"
           type="button"
@@ -50,15 +53,26 @@
       <svg viewBox="0 0 900 480" class="h-[420px] w-full">
         <g>
           <% {ax, ay} = @positions["agent"] %>
+          <% {gx, gy} = @positions["gate"] %>
+          <line
+            id="edge-agent-gate"
+            data-from="agent"
+            data-to="gate"
+            class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+            x1={ax}
+            y1={ay}
+            x2={gx}
+            y2={gy}
+          />
           <%= for %{id: server_id} <- @graph do %>
             <% {sx, sy} = @positions["server-" <> server_id] %>
             <line
-              id={"edge-agent-server-" <> server_id}
-              data-from="agent"
+              id={"edge-gate-server-" <> server_id}
+              data-from="gate"
               data-to={"server-" <> server_id}
               class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-              x1={ax}
-              y1={ay}
+              x1={gx}
+              y1={gy}
               x2={sx}
               y2={sy}
             />
@@ -86,13 +100,32 @@
             class="mcp-node"
             transform={"translate(#{ax},#{ay})"}
           >
-            <circle r="28" class="fill-primary" />
+            <circle r="24" class="mcp-node-shape fill-primary" />
             <text
               text-anchor="middle"
-              dy="5"
-              class="fill-primary-content text-[11px] font-semibold"
+              dy="4"
+              class="fill-primary-content text-[10px] font-semibold"
             >
-              Agent
+              agent
+            </text>
+          </g>
+
+          <g id="node-gate" data-key="gate" class="mcp-node" transform={"translate(#{gx},#{gy})"}>
+            <polygon
+              points="0,-20 20,0 0,20 -20,0"
+              class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
+            />
+            <path
+              d="M-4,-3 a4,4 0 0 1 8,0"
+              class="fill-none stroke-base-content/60 [stroke-width:1.3px]"
+            />
+            <rect x="-5" y="-3" width="10" height="7" rx="1.5" class="fill-base-content/60" />
+            <text
+              text-anchor="middle"
+              dy="34"
+              class="fill-base-content/70 text-[10px] font-medium"
+            >
+              policy gate
             </text>
           </g>
 
@@ -104,10 +137,39 @@
               class="mcp-node"
               transform={"translate(#{sx},#{sy})"}
             >
-              <circle r="25" class="fill-base-100 stroke-base-content/40 [stroke-width:2px]" />
+              <rect
+                x="-42"
+                y="-18"
+                width="84"
+                height="36"
+                rx="9"
+                class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
+              />
+              <line
+                x1="-32"
+                y1="-8"
+                x2="-18"
+                y2="-8"
+                class="stroke-base-content/40 [stroke-width:1.2px]"
+              />
+              <line
+                x1="-32"
+                y1="-2"
+                x2="-18"
+                y2="-2"
+                class="stroke-base-content/40 [stroke-width:1.2px]"
+              />
+              <line
+                x1="-32"
+                y1="4"
+                x2="-18"
+                y2="4"
+                class="stroke-base-content/40 [stroke-width:1.2px]"
+              />
               <text
+                x="8"
                 text-anchor="middle"
-                dy="5"
+                dy="4"
                 class="fill-base-content text-[11px] font-semibold"
               >
                 {server_id}
@@ -123,25 +185,45 @@
               class="mcp-node"
               transform={"translate(#{tx},#{ty})"}
             >
-              <circle
-                r="20"
+              <rect
+                x="-46"
+                y="-14"
+                width="92"
+                height="28"
+                rx="14"
                 class={[
-                  "stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
-                  if(tool.tags != [], do: "fill-warning/20", else: "fill-base-200")
+                  "mcp-node-shape stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
+                  if(tool.tags != [], do: "fill-warning/10", else: "fill-base-200")
                 ]}
               />
-              <text text-anchor="middle" dy="35" class="fill-base-content/80 text-[10px]">
+              <circle
+                :if={:sensitive_read in tool.tags}
+                cx="-36"
+                cy="-9"
+                r="3.5"
+                class="fill-warning"
+              />
+              <circle
+                :if={:network_egress in tool.tags}
+                cx="36"
+                cy="-9"
+                r="3.5"
+                class="fill-none stroke-error [stroke-width:1.3px]"
+              />
+              <text text-anchor="middle" dy="4" class="fill-base-content text-[10px] font-medium">
                 {tool.name}
               </text>
             </g>
           <% end %>
         </g>
 
+        <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
+
         <text
           id="graph-reason-label"
           text-anchor="middle"
           x="450"
-          y="455"
+          y="465"
           class="fill-error text-[12px] font-medium opacity-0 transition-opacity duration-300"
         >
         </text>
@@ -149,7 +231,12 @@
     </div>
 
     <div>
-      <h2 class="text-sm font-semibold text-base-content/70">Event feed</h2>
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-base-content/70">Event feed</h2>
+        <button type="button" phx-click="clear_feed" class="btn btn-ghost btn-xs">
+          Clear feed
+        </button>
+      </div>
       <div id="mcp-event-feed" phx-update="stream" class="mt-2 space-y-1">
         <div
           id="mcp-event-feed-empty"
@@ -186,9 +273,10 @@
       <div>
         <h2 class="text-lg font-semibold tracking-tight">Real MCP servers</h2>
         <p class="mt-1 text-sm text-base-content/70">
-          Register a real MCP server over Streamable HTTP to discover its tools. Tag which
-          tools are sensitive reads or network egress, then call them through the same
-          policy-enforcing proxy — calls that reach a real server here are real, not simulated.
+          Register a real MCP server — over Streamable HTTP, or spawned locally and spoken to
+          over stdio — to discover its tools. Tag which tools are sensitive reads or network
+          egress, then call them through the same policy-enforcing proxy — calls that reach a
+          real server here are real, not simulated.
         </p>
       </div>
 
@@ -227,6 +315,28 @@
         </button>
       </.form>
 
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-xs text-base-content/60">Or spawn a real stdio server:</span>
+        <button
+          type="button"
+          phx-click="register_stdio_preset"
+          phx-value-preset="filesystem"
+          disabled={@registering}
+          class="btn btn-outline btn-xs"
+        >
+          + real filesystem server
+        </button>
+        <button
+          type="button"
+          phx-click="register_stdio_preset"
+          phx-value-preset="fetch"
+          disabled={@registering}
+          class="btn btn-outline btn-xs"
+        >
+          + real fetch server
+        </button>
+      </div>
+
       <div class="flex items-center gap-2 text-xs text-base-content/60">
         <span>Manual call session:</span>
         <span class="font-mono">{@manual_session_id}</span>
@@ -247,16 +357,15 @@
         id={"real-server-" <> server.id}
         class="space-y-3 rounded-box border border-base-300 bg-base-100 p-4"
       >
-        <div class="flex items-center justify-between gap-3">
-          <div>
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
             <h3 class="font-semibold">{server.name}</h3>
-            <p class="font-mono text-xs text-base-content/60">{server.base_url}</p>
           </div>
           <button
             type="button"
             phx-click="remove_server"
             phx-value-server_id={server.id}
-            class="btn btn-ghost btn-xs text-error"
+            class="btn btn-ghost btn-xs shrink-0 text-error"
           >
             Remove
           </button>
@@ -331,97 +440,30 @@
   <script :type={Phoenix.LiveView.ColocatedHook} name=".ToolGraph">
     export default {
       mounted() {
-        this.relax()
+        this.pulseToken = 0
         this.handleEvent("mcp_graph_reset", () => this.reset())
         this.handleEvent("mcp_graph_event", (payload) => this.pulse(payload))
       },
 
-      relax() {
-        const nodeEls = Array.from(this.el.querySelectorAll(".mcp-node"))
-        const edgeEls = Array.from(this.el.querySelectorAll(".mcp-edge"))
-
-        const nodes = nodeEls.map((el) => {
-          const match = /translate\(([-\d.]+),([-\d.]+)\)/.exec(el.getAttribute("transform") || "")
-          return {
-            key: el.dataset.key,
-            el,
-            x: match ? parseFloat(match[1]) : 450,
-            y: match ? parseFloat(match[2]) : 240,
-            vx: 0,
-            vy: 0
-          }
-        })
-        const byKey = Object.fromEntries(nodes.map((n) => [n.key, n]))
-        const edges = edgeEls.map((el) => {
-          const from = byKey[el.dataset.from]
-          const to = byKey[el.dataset.to]
-          return { el, from, to, length: Math.hypot(to.x - from.x, to.y - from.y) || 140 }
-        })
-
-        const viewBox = (this.el.querySelector("svg").getAttribute("viewBox") || "0 0 900 480")
-          .split(" ")
-          .map(Number)
-        const [minX, minY, w, h] = viewBox
-        const pad = 50
-
-        for (let iter = 0; iter < 150; iter++) {
-          for (let i = 0; i < nodes.length; i++) {
-            for (let j = i + 1; j < nodes.length; j++) {
-              const a = nodes[i]
-              const b = nodes[j]
-              let dx = a.x - b.x
-              let dy = a.y - b.y
-              const distSq = dx * dx + dy * dy || 0.01
-              const dist = Math.sqrt(distSq)
-              const force = 2200 / distSq
-              dx /= dist
-              dy /= dist
-              a.vx += dx * force
-              a.vy += dy * force
-              b.vx -= dx * force
-              b.vy -= dy * force
-            }
-          }
-
-          edges.forEach(({ from, to, length }) => {
-            let dx = to.x - from.x
-            let dy = to.y - from.y
-            const dist = Math.hypot(dx, dy) || 0.01
-            const diff = (dist - length) * 0.03
-            dx /= dist
-            dy /= dist
-            from.vx += dx * diff
-            from.vy += dy * diff
-            to.vx -= dx * diff
-            to.vy -= dy * diff
-          })
-
-          nodes.forEach((n) => {
-            n.vx *= 0.8
-            n.vy *= 0.8
-            n.x += n.vx
-            n.y += n.vy
-            n.x = Math.min(Math.max(n.x, minX + pad), minX + w - pad)
-            n.y = Math.min(Math.max(n.y, minY + pad), minY + h - pad)
-          })
-        }
-
-        nodes.forEach((n) => n.el.setAttribute("transform", `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`))
-        edges.forEach(({ el, from, to }) => {
-          el.setAttribute("x1", from.x.toFixed(1))
-          el.setAttribute("y1", from.y.toFixed(1))
-          el.setAttribute("x2", to.x.toFixed(1))
-          el.setAttribute("y2", to.y.toFixed(1))
-        })
+      // Layout is fixed server-side now — no relaxation pass. Node
+      // coordinates are read straight off each node's `transform`.
+      nodeXY(key) {
+        const el = this.el.querySelector(`.mcp-node[data-key="${key}"]`)
+        if (!el) return null
+        const match = /translate\(([-\d.]+),([-\d.]+)\)/.exec(el.getAttribute("transform") || "")
+        return match ? { x: parseFloat(match[1]), y: parseFloat(match[2]) } : null
       },
 
       reset() {
+        this.pulseToken++
         this.el.querySelectorAll(".mcp-edge").forEach((el) => {
           el.classList.remove("stroke-primary", "stroke-error", "[stroke-width:3px]", "[stroke-dasharray:6_4]")
         })
-        this.el.querySelectorAll(".mcp-node").forEach((el) => {
+        this.el.querySelectorAll(".mcp-node-shape").forEach((el) => {
           el.classList.remove("stroke-primary", "stroke-error", "fill-error/20", "[stroke-width:3px]")
         })
+        const dot = this.el.querySelector("#graph-pulse-dot")
+        if (dot) dot.classList.add("opacity-0")
         const label = this.el.querySelector("#graph-reason-label")
         if (label) {
           label.textContent = ""
@@ -429,20 +471,34 @@
         }
       },
 
-      pulse({ server_id, tool_name, status, reason }) {
+      // Walks the dot agent → gate → server → tool. A blocked call still
+      // travels the first two hops (it was a real, permitted request up to
+      // that point) and then stops partway into the tool hop — the call
+      // never actually reached the tool.
+      async pulse({ server_id, tool_name, status, reason }) {
+        const token = ++this.pulseToken
         const serverKey = `server-${server_id}`
         const toolKey = `tool-${tool_name}`
-        const agentEdge = this.el.querySelector(`#edge-agent-${serverKey}`)
-        const toolEdge = this.el.querySelector(`#edge-${serverKey}-${toolKey}`)
-        const toolNode = this.el.querySelector(`#node-${toolKey}`)
-        const serverNode = this.el.querySelector(`#node-${serverKey}`)
+        const blocked = status === "blocked"
 
-        this.flash(agentEdge)
-        this.flash(serverNode)
+        await this.travel("agent", "gate", false, 1, token)
+        if (token !== this.pulseToken) return
+        this.flashNode("gate", false)
 
-        if (status === "blocked") {
+        await this.travel("gate", serverKey, false, 1, token)
+        if (token !== this.pulseToken) return
+        this.flashNode(serverKey, false)
+
+        await this.travel(serverKey, toolKey, blocked, blocked ? 0.55 : 1, token)
+        if (token !== this.pulseToken) return
+
+        if (blocked) {
+          const toolEdge = this.el.querySelector(`#edge-server-${serverKey}-tool-${toolKey}`)
+          const toolShape = this.el.querySelector(`#node-${toolKey} .mcp-node-shape`)
           if (toolEdge) toolEdge.classList.add("stroke-error", "[stroke-width:3px]", "[stroke-dasharray:6_4]")
-          if (toolNode) toolNode.classList.add("stroke-error", "fill-error/20", "[stroke-width:3px]")
+          if (toolShape) toolShape.classList.add("stroke-error", "fill-error/20", "[stroke-width:3px]")
+          this.flashNode(serverKey, true)
+          this.flashNode("gate", true)
 
           const label = this.el.querySelector("#graph-reason-label")
           if (label) {
@@ -450,15 +506,48 @@
             label.classList.remove("opacity-0")
           }
         } else {
-          this.flash(toolEdge)
-          this.flash(toolNode)
+          this.flashNode(toolKey, false)
         }
       },
 
-      flash(el) {
-        if (!el) return
-        el.classList.add("stroke-primary", "[stroke-width:3px]")
-        setTimeout(() => el.classList.remove("stroke-primary", "[stroke-width:3px]"), 700)
+      travel(fromKey, toKey, blocked, t, token) {
+        return new Promise((resolve) => {
+          const from = this.nodeXY(fromKey)
+          const to = this.nodeXY(toKey)
+          const dot = this.el.querySelector("#graph-pulse-dot")
+          if (!from || !to || !dot) return resolve()
+
+          dot.classList.remove("fill-primary", "fill-error", "opacity-0")
+          if (blocked) dot.classList.add("fill-error")
+          else dot.classList.add("fill-primary")
+
+          const duration = 180
+          const start = performance.now()
+
+          const frame = (now) => {
+            if (token !== this.pulseToken) return resolve()
+
+            const progress = Math.min(1, (now - start) / duration) * t
+            dot.setAttribute("cx", from.x + (to.x - from.x) * progress)
+            dot.setAttribute("cy", from.y + (to.y - from.y) * progress)
+
+            if (now - start < duration) {
+              requestAnimationFrame(frame)
+            } else {
+              dot.classList.add("opacity-0")
+              resolve()
+            }
+          }
+          requestAnimationFrame(frame)
+        })
+      },
+
+      flashNode(key, blocked) {
+        const shape = this.el.querySelector(`.mcp-node[data-key="${key}"] .mcp-node-shape`)
+        if (!shape) return
+        const cls = blocked ? "stroke-error" : "stroke-primary"
+        shape.classList.add(cls, "[stroke-width:3px]")
+        setTimeout(() => shape.classList.remove(cls, "[stroke-width:3px]"), 450)
       }
     }
   </script>

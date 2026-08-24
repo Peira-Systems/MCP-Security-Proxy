@@ -46,3 +46,16 @@ npm-debug.log
 .env.*
 *.pem
 
+# Local SQLite databases (dev/test) — migrations are checked in, the
+# data files are not.
+/priv/repo/*.db
+/priv/repo/*.db-shm
+/priv/repo/*.db-wal
+
+# Python venv for the real "mcp-server-fetch" stdio demo server.
+/.venv/
+
+# Local npm install of the real "@modelcontextprotocol/server-filesystem"
+# stdio demo server.
+/priv/mcp_servers/node_modules/
+

@@ -11,7 +11,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
   use PhoenixElxirBeamWeb, :controller
 
-  alias PhoenixElxirBeam.MCP.{PolicyEngine, ServerRegistry, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.{PolicyEngine, ServerRegistry, StdioServer, ToolCatalog}
 
   @chain_blocked_code -32001
 
@@ -34,6 +34,11 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   defp route_tool_call(conn, server_id, session_id, id, jsonrpc_version, rpc_params) do
     tool_name = rpc_params["name"]
     tags = tool_tags(server_id, tool_name)
+
+    # Ensures session state exists before the policy decision runs, so a
+    # lookup miss inside `record_call/5` is an anomaly PolicyEngine can
+    # fail closed on rather than the normal shape of a new session.
+    :ok = PolicyEngine.ensure_session(session_id)
 
     case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
       {:allow, _event} ->
@@ -87,7 +92,14 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  defp forward_to_real(conn, server, body, id) do
+  defp forward_to_real(conn, %{transport: :stdio, pid: pid}, body, id) do
+    case StdioServer.request(pid, body) do
+      {:ok, resp_body} -> json(conn, resp_body)
+      {:error, _reason} -> upstream_error(conn, id, "upstream real server error")
+    end
+  end
+
+  defp forward_to_real(conn, %{transport: :http} = server, body, id) do
     headers = if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
 
     case Req.post(server.base_url, json: body, headers: headers, receive_timeout: 15_000) do

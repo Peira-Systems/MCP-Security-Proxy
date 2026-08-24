@@ -1,11 +1,19 @@
 defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
   use ExUnit.Case, async: true
 
-  alias PhoenixElxirBeam.MCP.PolicyEngine
+  alias PhoenixElxirBeam.MCP.{EventLog, PolicyEngine}
+  alias PhoenixElxirBeam.Repo
 
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
+
     name = :"policy_engine_#{System.unique_integer([:positive])}"
-    start_supervised!({PolicyEngine, name: name})
+    {:ok, pid} = start_supervised({PolicyEngine, name: name})
+    # PolicyEngine persists every verdict from its own GenServer process —
+    # let it borrow this test's sandboxed connection so that write is
+    # visible (and rolled back) within this test rather than erroring.
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)
+
     %{name: name}
   end
 
@@ -59,5 +67,60 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
              PolicyEngine.record_call(session_b, "net", "post_webhook", [:network_egress], name)
 
     assert event.status == :ok
+  end
+
+  test "a call for a session with no state on record fails closed", %{name: name} do
+    assert {:block, event} =
+             PolicyEngine.record_call("never-started", "files", "list_files", [], name)
+
+    assert event.status == :blocked
+    assert event.reason =~ "no session state on record"
+  end
+
+  test "a call with no session id fails closed", %{name: name} do
+    assert {:block, event} = PolicyEngine.record_call(nil, "files", "list_files", [], name)
+
+    assert event.status == :blocked
+    assert event.reason =~ "no session id"
+  end
+
+  test "ensure_session is idempotent and never resets tags already accumulated", %{name: name} do
+    session_id = "session-ensure"
+    :ok = PolicyEngine.ensure_session(session_id, name)
+
+    assert {:allow, _event} =
+             PolicyEngine.record_call(
+               session_id,
+               "files",
+               "read_secrets",
+               [:sensitive_read],
+               name
+             )
+
+    :ok = PolicyEngine.ensure_session(session_id, name)
+
+    assert {:block, event} =
+             PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    assert event.status == :blocked
+  end
+
+  test "verdicts are durably persisted for allows as well as blocks", %{name: name} do
+    session_id = "session-receipts"
+    :ok = PolicyEngine.start_session(session_id, :benign, name)
+
+    assert {:allow, allow_event} =
+             PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    assert {:block, block_event} =
+             PolicyEngine.record_call("never-started", "net", "post_webhook", [], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    entry_ids = Enum.map(entries, & &1.event_id)
+
+    assert allow_event.id in entry_ids
+    assert block_event.id in entry_ids
+
+    assert Enum.find(entries, &(&1.event_id == allow_event.id)).status == "ok"
   end
 end

@@ -8,6 +8,7 @@
 import Config
 
 config :phoenix_elxir_beam,
+  ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint

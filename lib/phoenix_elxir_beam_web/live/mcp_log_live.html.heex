@@ -1,0 +1,153 @@
+<Layouts.app flash={@flash}>
+  <div class="space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">Event log</h1>
+        <p class="mt-1 text-sm text-base-content/70">
+          Every policy verdict PolicyEngine has recorded, durably — independent of whether a
+          dashboard was open to see it live.
+        </p>
+      </div>
+      <.link navigate={~p"/mcp/dashboard"} class="btn btn-outline btn-sm">
+        Back to dashboard
+      </.link>
+    </div>
+
+    <.form
+      for={to_form(%{})}
+      id="log-filter-form"
+      phx-change="filter"
+      class="flex flex-wrap items-end gap-3 rounded-box border border-base-300 bg-base-100 p-4"
+    >
+      <div>
+        <label class="text-xs font-medium text-base-content/60" for="filter-status">Status</label>
+        <select id="filter-status" name="status" class="select select-bordered select-sm">
+          <option value="all" selected={@status == "all"}>All</option>
+          <option value="ok" selected={@status == "ok"}>Allowed</option>
+          <option value="blocked" selected={@status == "blocked"}>Blocked</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="text-xs font-medium text-base-content/60" for="filter-server">
+          MCP server
+        </label>
+        <select id="filter-server" name="server_id" class="select select-bordered select-sm">
+          <option value="all" selected={@server_id == "all"}>All</option>
+          <option
+            :for={server_id <- @server_options}
+            value={server_id}
+            selected={@server_id == server_id}
+          >
+            {server_id}
+          </option>
+        </select>
+      </div>
+
+      <div>
+        <label class="text-xs font-medium text-base-content/60" for="filter-from">From</label>
+        <input
+          id="filter-from"
+          type="date"
+          name="from"
+          value={@from}
+          class="input input-bordered input-sm"
+        />
+      </div>
+
+      <div>
+        <label class="text-xs font-medium text-base-content/60" for="filter-to">To</label>
+        <input
+          id="filter-to"
+          type="date"
+          name="to"
+          value={@to}
+          class="input input-bordered input-sm"
+        />
+      </div>
+
+      <.link patch={~p"/mcp/logs"} class="btn btn-ghost btn-sm">
+        Clear filters
+      </.link>
+    </.form>
+
+    <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Status</th>
+            <th>Session</th>
+            <th>Server / tool</th>
+            <th>Tags</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :if={@result.entries == []}>
+            <td colspan="6" class="py-8 text-center text-sm text-base-content/50">
+              No events match these filters.
+            </td>
+          </tr>
+          <tr :for={entry <- @result.entries} class="hover">
+            <td class="whitespace-nowrap font-mono text-xs text-base-content/70">
+              {format_time(entry.occurred_at)}
+            </td>
+            <td>
+              <span class={[
+                "rounded-full px-2 py-0.5 text-xs font-medium",
+                status_badge_class(entry.status)
+              ]}>
+                {status_label(entry.status)}
+              </span>
+            </td>
+            <td class="whitespace-nowrap font-mono text-xs text-base-content/60">
+              {entry.session_id || "—"}
+            </td>
+            <td class="whitespace-nowrap font-mono text-xs">
+              <span :if={entry.server_id}>{entry.server_id}/{entry.tool_name}</span>
+              <span :if={!entry.server_id} class="text-base-content/40">—</span>
+            </td>
+            <td class="text-xs text-base-content/60">
+              {if entry.tags == [], do: "—", else: Enum.join(entry.tags, ", ")}
+            </td>
+            <td class="max-w-xs truncate text-xs text-error" title={entry.reason}>
+              {entry.reason}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center justify-between text-sm text-base-content/60">
+      <span>
+        <%= if @result.total_count == 0 do %>
+          0 events
+        <% else %>
+          Page {@result.page} of {@result.total_pages} &middot; {@result.total_count} event(s)
+        <% end %>
+      </span>
+
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          phx-click="paginate"
+          phx-value-page={@result.page - 1}
+          disabled={@result.page <= 1}
+          class="btn btn-outline btn-sm"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          phx-click="paginate"
+          phx-value-page={@result.page + 1}
+          disabled={@result.page >= @result.total_pages}
+          class="btn btn-outline btn-sm"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  </div>
+</Layouts.app>

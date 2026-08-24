@@ -53,4 +53,26 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     assert ServerRegistry.get_server(server.id, name) == nil
     assert ServerRegistry.list_servers(name) == []
   end
+
+  test "registering a stdio server discovers its tools via a real process handshake", %{
+    name: name
+  } do
+    node = System.find_executable("node") || raise "node not found on PATH"
+    fixture = Path.expand("../../support/fixtures/echo_mcp_server.js", __DIR__)
+
+    assert {:ok, server} = ServerRegistry.register_stdio_server("Echo", node, [fixture], name)
+    assert server.transport == :stdio
+    assert server.base_url == nil
+    assert Enum.map(server.tools, & &1.name) == ["echo"]
+
+    assert :ok = ServerRegistry.remove_server(server.id, name)
+    assert ServerRegistry.get_server(server.id, name) == nil
+  end
+
+  test "registering a stdio server with a bad command returns an error", %{name: name} do
+    assert {:error, reason} =
+             ServerRegistry.register_stdio_server("Bad", "/no/such/executable", [], name)
+
+    assert is_binary(reason)
+  end
 end

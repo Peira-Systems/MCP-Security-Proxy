@@ -42,6 +42,8 @@ defmodule PhoenixElxirBeam.MixProject do
     [
       {:phoenix, "~> 1.8.9"},
       {:phoenix_html, "~> 4.1"},
+      {:ecto_sql, "~> 3.13"},
+      {:ecto_sqlite3, "~> 0.19"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
@@ -81,7 +83,9 @@ defmodule PhoenixElxirBeam.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "assets.setup", "assets.build"],
+      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
+      "ecto.setup": ["ecto.create", "ecto.migrate"],
+      "ecto.reset": ["ecto.drop", "ecto.setup"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind phoenix_elxir_beam", "esbuild phoenix_elxir_beam"],
       "assets.deploy": [
@@ -89,6 +93,7 @@ defmodule PhoenixElxirBeam.MixProject do
         "esbuild phoenix_elxir_beam --minify",
         "phx.digest"
       ],
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

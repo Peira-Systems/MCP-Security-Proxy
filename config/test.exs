@@ -1,5 +1,10 @@
 import Config
 
+config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
+  database: Path.expand("../priv/repo/test.db", __DIR__),
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
+
 # The MCP proxy controller forwards calls to the mock server over a real
 # loopback HTTP request (via Req), so the server must actually be running
 # during tests for that hop to succeed.
