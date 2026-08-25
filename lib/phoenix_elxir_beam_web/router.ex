@@ -17,7 +17,7 @@ defmodule PhoenixElxirBeamWeb.Router do
   scope "/", PhoenixElxirBeamWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", MCPDashboardLive
     live "/mcp/dashboard", MCPDashboardLive
     live "/mcp/logs", MCPLogLive
   end
