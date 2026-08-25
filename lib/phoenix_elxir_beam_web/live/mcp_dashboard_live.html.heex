@@ -1,25 +1,30 @@
 <Layouts.app flash={@flash}>
-  <div class="space-y-8">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h1 class="text-2xl font-semibold tracking-tight">MCP Security Proxy</h1>
-        <p class="mt-1 text-sm text-base-content/70">
-          Watch tool calls flow from a simulated agent through the policy-enforcing proxy to
-          two mock MCP servers. A dangerous tool-chain — reading a secret, then posting it to
-          the network — lights up red and is blocked before it ever reaches the server.
-        </p>
+  <div class="space-y-4">
+    <div class="flex flex-wrap items-center gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-3">
+      <div class="flex items-center gap-2">
+        <span class="flex size-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-content">
+          M
+        </span>
+        <h1 class="text-base font-semibold tracking-tight">MCP Security Proxy</h1>
       </div>
 
-      <div class="flex items-center gap-3">
-        <.link navigate={~p"/mcp/logs"} class="btn btn-ghost btn-sm">
-          Event log
-        </.link>
+      <div class="flex items-center gap-1.5 text-sm">
+        <span :if={@running} class="inline-flex items-center gap-1.5 font-medium text-primary">
+          <span class="size-2 animate-pulse rounded-full bg-primary"></span>
+          running {@scenario && "(#{@scenario})"}
+        </span>
+        <span :if={!@running} class="inline-flex items-center gap-1.5 text-base-content/50">
+          <span class="size-2 rounded-full bg-base-content/30"></span> idle
+        </span>
+      </div>
+
+      <div class="ml-auto flex items-center gap-2">
         <button
           id="run-benign-btn"
           type="button"
           phx-click="run_benign"
           disabled={@running}
-          class="btn btn-outline"
+          class="btn btn-outline btn-sm"
         >
           Run benign session
         </button>
@@ -28,295 +33,614 @@
           type="button"
           phx-click="run_attack"
           disabled={@running}
-          class="btn btn-primary"
+          class="btn btn-primary btn-sm"
         >
           Run attack simulation
         </button>
       </div>
     </div>
 
-    <div class="flex items-center gap-2 text-sm">
-      <span class="text-base-content/60">Status:</span>
-      <span :if={@running} class="inline-flex items-center gap-1.5 font-medium text-primary">
-        <span class="size-2 animate-pulse rounded-full bg-primary"></span>
-        running {@scenario && "(#{@scenario})"}
-      </span>
-      <span :if={!@running} class="text-base-content/60">idle</span>
-    </div>
-
-    <div
-      id="mcp-tool-graph"
-      phx-hook=".ToolGraph"
-      phx-update="ignore"
-      class="rounded-box border border-base-300 bg-base-100 p-2"
-    >
-      <svg viewBox="0 0 900 480" class="h-[420px] w-full">
-        <g>
-          <% {ax, ay} = @positions["agent"] %>
-          <% {gx, gy} = @positions["gate"] %>
-          <line
-            id="edge-agent-gate"
-            data-from="agent"
-            data-to="gate"
-            class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-            x1={ax}
-            y1={ay}
-            x2={gx}
-            y2={gy}
-          />
-          <%= for %{id: server_id} <- @graph do %>
-            <% {sx, sy} = @positions["server-" <> server_id] %>
+    <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+      <div
+        id="mcp-tool-graph"
+        phx-hook=".ToolGraph"
+        phx-update="ignore"
+        class="flex h-[360px] items-center rounded-box border border-base-300 bg-base-100 p-2"
+      >
+        <svg viewBox="0 0 900 480" class="h-full w-full">
+          <g>
+            <% {ax, ay} = @positions["agent"] %>
+            <% {gx, gy} = @positions["gate"] %>
             <line
-              id={"edge-gate-server-" <> server_id}
-              data-from="gate"
-              data-to={"server-" <> server_id}
+              id="edge-agent-gate"
+              data-from="agent"
+              data-to="gate"
               class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-              x1={gx}
-              y1={gy}
-              x2={sx}
-              y2={sy}
+              x1={ax}
+              y1={ay}
+              x2={gx}
+              y2={gy}
             />
-          <% end %>
-          <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
-            <% {sx, sy} = @positions["server-" <> server_id] %>
-            <% {tx, ty} = @positions["tool-" <> tool.name] %>
-            <line
-              id={"edge-server-" <> server_id <> "-tool-" <> tool.name}
-              data-from={"server-" <> server_id}
-              data-to={"tool-" <> tool.name}
-              class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-              x1={sx}
-              y1={sy}
-              x2={tx}
-              y2={ty}
-            />
-          <% end %>
-        </g>
-
-        <g>
-          <g
-            id="node-agent"
-            data-key="agent"
-            class="mcp-node"
-            transform={"translate(#{ax},#{ay})"}
-          >
-            <circle r="24" class="mcp-node-shape fill-primary" />
-            <text
-              text-anchor="middle"
-              dy="4"
-              class="fill-primary-content text-[10px] font-semibold"
-            >
-              agent
-            </text>
+            <%= for %{id: server_id} <- @graph do %>
+              <% {sx, sy} = @positions["server-" <> server_id] %>
+              <line
+                id={"edge-gate-server-" <> server_id}
+                data-from="gate"
+                data-to={"server-" <> server_id}
+                class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+                x1={gx}
+                y1={gy}
+                x2={sx}
+                y2={sy}
+              />
+            <% end %>
+            <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
+              <% {sx, sy} = @positions["server-" <> server_id] %>
+              <% {tx, ty} = @positions["tool-" <> tool.name] %>
+              <line
+                id={"edge-server-" <> server_id <> "-tool-" <> tool.name}
+                data-from={"server-" <> server_id}
+                data-to={"tool-" <> tool.name}
+                class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+                x1={sx}
+                y1={sy}
+                x2={tx}
+                y2={ty}
+              />
+            <% end %>
           </g>
 
-          <g id="node-gate" data-key="gate" class="mcp-node" transform={"translate(#{gx},#{gy})"}>
-            <polygon
-              points="0,-20 20,0 0,20 -20,0"
-              class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
-            />
-            <path
-              d="M-4,-3 a4,4 0 0 1 8,0"
-              class="fill-none stroke-base-content/60 [stroke-width:1.3px]"
-            />
-            <rect x="-5" y="-3" width="10" height="7" rx="1.5" class="fill-base-content/60" />
-            <text
-              text-anchor="middle"
-              dy="34"
-              class="fill-base-content/70 text-[10px] font-medium"
-            >
-              policy gate
-            </text>
-          </g>
-
-          <%= for %{id: server_id} <- @graph do %>
-            <% {sx, sy} = @positions["server-" <> server_id] %>
+          <g>
             <g
-              id={"node-server-" <> server_id}
-              data-key={"server-" <> server_id}
+              id="node-agent"
+              data-key="agent"
               class="mcp-node"
-              transform={"translate(#{sx},#{sy})"}
+              transform={"translate(#{ax},#{ay})"}
             >
-              <rect
-                x="-42"
-                y="-18"
-                width="84"
-                height="36"
-                rx="9"
-                class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
-              />
-              <line
-                x1="-32"
-                y1="-8"
-                x2="-18"
-                y2="-8"
-                class="stroke-base-content/40 [stroke-width:1.2px]"
-              />
-              <line
-                x1="-32"
-                y1="-2"
-                x2="-18"
-                y2="-2"
-                class="stroke-base-content/40 [stroke-width:1.2px]"
-              />
-              <line
-                x1="-32"
-                y1="4"
-                x2="-18"
-                y2="4"
-                class="stroke-base-content/40 [stroke-width:1.2px]"
-              />
+              <circle r="24" class="mcp-node-shape fill-primary" />
               <text
-                x="8"
                 text-anchor="middle"
                 dy="4"
-                class="fill-base-content text-[11px] font-semibold"
+                class="fill-primary-content text-[10px] font-semibold"
               >
-                {server_id}
+                agent
               </text>
             </g>
-          <% end %>
 
-          <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
-            <% {tx, ty} = @positions["tool-" <> tool.name] %>
             <g
-              id={"node-tool-" <> tool.name}
-              data-key={"tool-" <> tool.name}
+              id="node-gate"
+              data-key="gate"
               class="mcp-node"
-              transform={"translate(#{tx},#{ty})"}
+              transform={"translate(#{gx},#{gy})"}
             >
-              <rect
-                x="-46"
-                y="-14"
-                width="92"
-                height="28"
-                rx="14"
-                class={[
-                  "mcp-node-shape stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
-                  if(tool.tags != [], do: "fill-warning/10", else: "fill-base-200")
-                ]}
+              <polygon
+                points="0,-20 20,0 0,20 -20,0"
+                class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
               />
-              <circle
-                :if={:sensitive_read in tool.tags}
-                cx="-36"
-                cy="-9"
-                r="3.5"
-                class="fill-warning"
+              <path
+                d="M-4,-3 a4,4 0 0 1 8,0"
+                class="fill-none stroke-base-content/60 [stroke-width:1.3px]"
               />
-              <circle
-                :if={:network_egress in tool.tags}
-                cx="36"
-                cy="-9"
-                r="3.5"
-                class="fill-none stroke-error [stroke-width:1.3px]"
-              />
-              <text text-anchor="middle" dy="4" class="fill-base-content text-[10px] font-medium">
-                {tool.name}
+              <rect x="-5" y="-3" width="10" height="7" rx="1.5" class="fill-base-content/60" />
+              <text
+                text-anchor="middle"
+                dy="34"
+                class="fill-base-content/70 text-[10px] font-medium"
+              >
+                policy gate
               </text>
             </g>
-          <% end %>
-        </g>
 
-        <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
+            <%= for %{id: server_id} <- @graph do %>
+              <% {sx, sy} = @positions["server-" <> server_id] %>
+              <g
+                id={"node-server-" <> server_id}
+                data-key={"server-" <> server_id}
+                class="mcp-node"
+                transform={"translate(#{sx},#{sy})"}
+              >
+                <rect
+                  x="-42"
+                  y="-18"
+                  width="84"
+                  height="36"
+                  rx="9"
+                  class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
+                />
+                <line
+                  x1="-32"
+                  y1="-8"
+                  x2="-18"
+                  y2="-8"
+                  class="stroke-base-content/40 [stroke-width:1.2px]"
+                />
+                <line
+                  x1="-32"
+                  y1="-2"
+                  x2="-18"
+                  y2="-2"
+                  class="stroke-base-content/40 [stroke-width:1.2px]"
+                />
+                <line
+                  x1="-32"
+                  y1="4"
+                  x2="-18"
+                  y2="4"
+                  class="stroke-base-content/40 [stroke-width:1.2px]"
+                />
+                <text
+                  x="8"
+                  text-anchor="middle"
+                  dy="4"
+                  class="fill-base-content text-[11px] font-semibold"
+                >
+                  {server_id}
+                </text>
+              </g>
+            <% end %>
 
-        <text
-          id="graph-reason-label"
-          text-anchor="middle"
-          x="450"
-          y="465"
-          class="fill-error text-[12px] font-medium opacity-0 transition-opacity duration-300"
-        >
-        </text>
-      </svg>
-    </div>
+            <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
+              <% {tx, ty} = @positions["tool-" <> tool.name] %>
+              <g
+                id={"node-tool-" <> tool.name}
+                data-key={"tool-" <> tool.name}
+                class="mcp-node"
+                transform={"translate(#{tx},#{ty})"}
+              >
+                <rect
+                  x="-46"
+                  y="-14"
+                  width="92"
+                  height="28"
+                  rx="14"
+                  class={[
+                    "mcp-node-shape stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
+                    if(tool.tags != [], do: "fill-warning/10", else: "fill-base-200")
+                  ]}
+                />
+                <circle
+                  :if={:sensitive_read in tool.tags}
+                  cx="-36"
+                  cy="-9"
+                  r="3.5"
+                  class="fill-warning"
+                />
+                <circle
+                  :if={:network_egress in tool.tags}
+                  cx="36"
+                  cy="-9"
+                  r="3.5"
+                  class="fill-none stroke-error [stroke-width:1.3px]"
+                />
+                <text
+                  text-anchor="middle"
+                  dy="4"
+                  class="fill-base-content text-[10px] font-medium"
+                >
+                  {tool.name}
+                </text>
+              </g>
+            <% end %>
+          </g>
 
-    <div>
-      <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-base-content/70">Event feed</h2>
-        <button type="button" phx-click="clear_feed" class="btn btn-ghost btn-xs">
-          Clear feed
-        </button>
+          <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
+
+          <text
+            id="graph-reason-label"
+            text-anchor="middle"
+            x="450"
+            y="465"
+            class="fill-error text-[12px] font-medium opacity-0 transition-opacity duration-300"
+          >
+          </text>
+        </svg>
       </div>
-      <div id="mcp-event-feed" phx-update="stream" class="mt-2 space-y-1">
-        <div
-          id="mcp-event-feed-empty"
-          class="hidden only:block rounded-box border border-dashed border-base-300 p-4 text-center text-sm text-base-content/50"
-        >
-          No events yet — run a scenario to see tool calls appear here.
+
+      <div class="flex h-[360px] flex-col overflow-hidden rounded-box border border-base-300 bg-neutral text-neutral-content">
+        <div class="flex items-center gap-2 border-b border-neutral-content/10 px-3 py-2">
+          <span class="flex gap-1">
+            <span class="size-2 rounded-full bg-neutral-content/20"></span>
+            <span class="size-2 rounded-full bg-neutral-content/20"></span>
+            <span class="size-2 rounded-full bg-neutral-content/20"></span>
+          </span>
+          <span class="font-mono text-xs text-neutral-content/60">event-log · mcp-proxy</span>
+
+          <div class="ml-auto flex items-center gap-1 rounded-full bg-neutral-content/10 p-0.5">
+            <button
+              type="button"
+              phx-click="set_console_mode"
+              phx-value-mode="live"
+              class={[
+                "rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold",
+                if(@console_mode == "live",
+                  do: "bg-primary text-primary-content",
+                  else: "text-neutral-content/60"
+                )
+              ]}
+            >
+              live
+            </button>
+            <button
+              type="button"
+              phx-click="set_console_mode"
+              phx-value-mode="history"
+              class={[
+                "rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold",
+                if(@console_mode == "history",
+                  do: "bg-primary text-primary-content",
+                  else: "text-neutral-content/60"
+                )
+              ]}
+            >
+              history
+            </button>
+          </div>
         </div>
+
         <div
-          :for={{dom_id, event} <- @streams.events}
-          id={dom_id}
-          class="flex items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-2 text-sm"
+          :if={@console_mode == "live"}
+          class="flex items-center justify-end border-b border-neutral-content/10 px-3 py-1.5"
         >
-          <span class="w-20 shrink-0 font-mono text-xs text-base-content/50">
-            {format_time(event.timestamp)}
-          </span>
-          <span class={[
-            "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
-            status_badge_class(event.status)
-          ]}>
-            {status_label(event.status)}
-          </span>
-          <span class="flex-1 truncate">
-            <span :if={event.server_id} class="font-mono text-xs text-base-content/70">
-              {event.server_id}/{event.tool_name}
+          <button
+            type="button"
+            phx-click="clear_feed"
+            class="font-mono text-[11px] text-neutral-content/50 hover:text-neutral-content"
+          >
+            clear feed
+          </button>
+        </div>
+
+        <div :if={@console_mode == "history"} class="border-b border-neutral-content/10">
+          <.form
+            for={to_form(%{})}
+            id="history-filter-form"
+            phx-change="history_filter"
+            class="flex flex-wrap items-end gap-3 px-3 py-2"
+          >
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
+                Status
+              </span>
+              <div class="inline-flex overflow-hidden rounded-md border border-neutral-content/20">
+                <button
+                  type="button"
+                  phx-click="history_set_status"
+                  phx-value-status="all"
+                  class={[
+                    "px-2.5 py-1 font-mono text-[11px] font-semibold",
+                    if(@history_status == "all",
+                      do: "bg-primary text-primary-content",
+                      else: "text-neutral-content/60 hover:bg-neutral-content/10"
+                    )
+                  ]}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  phx-click="history_set_status"
+                  phx-value-status="ok"
+                  class={[
+                    "border-l border-neutral-content/20 px-2.5 py-1 font-mono text-[11px] font-semibold",
+                    if(@history_status == "ok",
+                      do: "bg-success text-success-content",
+                      else: "text-neutral-content/60 hover:bg-neutral-content/10"
+                    )
+                  ]}
+                >
+                  Allowed
+                </button>
+                <button
+                  type="button"
+                  phx-click="history_set_status"
+                  phx-value-status="blocked"
+                  class={[
+                    "border-l border-neutral-content/20 px-2.5 py-1 font-mono text-[11px] font-semibold",
+                    if(@history_status == "blocked",
+                      do: "bg-error text-error-content",
+                      else: "text-neutral-content/60 hover:bg-neutral-content/10"
+                    )
+                  ]}
+                >
+                  Blocked
+                </button>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
+                Server
+              </span>
+              <select
+                name="server_id"
+                class="select select-xs bg-neutral-content/10 font-mono text-[11px] text-neutral-content border-none"
+              >
+                <option value="all" selected={@history_server_id == "all"}>all servers</option>
+                <option
+                  :for={server_id <- @server_options}
+                  value={server_id}
+                  selected={@history_server_id == server_id}
+                >
+                  {server_id}
+                </option>
+              </select>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
+                From
+              </span>
+              <input
+                type="date"
+                name="from"
+                value={@history_from}
+                class="input input-xs bg-neutral-content/10 font-mono text-[11px] text-neutral-content border-none"
+              />
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
+                To
+              </span>
+              <input
+                type="date"
+                name="to"
+                value={@history_to}
+                class="input input-xs bg-neutral-content/10 font-mono text-[11px] text-neutral-content border-none"
+              />
+            </div>
+
+            <button
+              type="button"
+              phx-click="history_clear_filters"
+              class="ml-auto self-end pb-0.5 font-mono text-[11px] text-neutral-content/50 hover:text-neutral-content"
+            >
+              clear all
+            </button>
+          </.form>
+
+          <div
+            :if={
+              @history_status != "all" or @history_server_id != "all" or @history_from != "" or
+                @history_to != ""
+            }
+            class="flex flex-wrap items-center gap-1.5 px-3 pb-2"
+          >
+            <span
+              :if={@history_status != "all"}
+              class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
+            >
+              status: {status_label(@history_status)}
+              <button
+                type="button"
+                phx-click="history_remove_filter"
+                phx-value-key="status"
+                class="rounded-full bg-neutral-content/20 px-1 text-[9px] leading-none"
+              >
+                ×
+              </button>
             </span>
-            <span :if={event.reason} class="ml-2 text-error">{event.reason}</span>
-          </span>
-          <span class="shrink-0 text-xs text-base-content/40">{event.scenario}</span>
+            <span
+              :if={@history_server_id != "all"}
+              class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
+            >
+              server: {@history_server_id}
+              <button
+                type="button"
+                phx-click="history_remove_filter"
+                phx-value-key="server"
+                class="rounded-full bg-neutral-content/20 px-1 text-[9px] leading-none"
+              >
+                ×
+              </button>
+            </span>
+            <span
+              :if={@history_from != ""}
+              class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
+            >
+              from: {@history_from}
+              <button
+                type="button"
+                phx-click="history_remove_filter"
+                phx-value-key="from"
+                class="rounded-full bg-neutral-content/20 px-1 text-[9px] leading-none"
+              >
+                ×
+              </button>
+            </span>
+            <span
+              :if={@history_to != ""}
+              class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
+            >
+              to: {@history_to}
+              <button
+                type="button"
+                phx-click="history_remove_filter"
+                phx-value-key="to"
+                class="rounded-full bg-neutral-content/20 px-1 text-[9px] leading-none"
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        </div>
+
+        <div class="min-h-0 flex-1 overflow-y-auto">
+          <div
+            id="mcp-event-feed"
+            phx-update="stream"
+            class={["font-mono text-xs", @console_mode != "live" && "hidden"]}
+          >
+            <div
+              id="mcp-event-feed-empty"
+              class="hidden only:block px-3 py-6 text-center text-neutral-content/40"
+            >
+              No events yet — run a scenario to see tool calls appear here.
+            </div>
+            <div
+              :for={{dom_id, event} <- @streams.events}
+              id={dom_id}
+              class="flex items-center gap-2 px-3 py-1"
+            >
+              <span class="text-neutral-content/40">{format_time(event.timestamp)}</span>
+              <span class={["w-16 shrink-0 font-semibold", console_status_class(event.status)]}>
+                {status_label(event.status)}
+              </span>
+              <span class="min-w-0 flex-1 truncate">
+                <span :if={event.server_id}>{event.server_id}/{event.tool_name}</span>
+                <span :if={event.reason} class="ml-2 text-error">{event.reason}</span>
+              </span>
+              <span class="shrink-0 text-neutral-content/30">{event.scenario}</span>
+            </div>
+          </div>
+
+          <table :if={@console_mode == "history"} class="w-full border-collapse font-mono text-xs">
+            <thead>
+              <tr>
+                <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-left">
+                  <button
+                    type="button"
+                    phx-click="history_sort"
+                    phx-value-by="time"
+                    class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-content/50 hover:text-neutral-content"
+                  >
+                    time
+                    <span class={sort_caret_class(@history_sort_by, "time")}>
+                      {sort_caret_symbol(@history_sort_by, @history_sort_dir, "time")}
+                    </span>
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-left">
+                  <button
+                    type="button"
+                    phx-click="history_sort"
+                    phx-value-by="status"
+                    class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-content/50 hover:text-neutral-content"
+                  >
+                    status
+                    <span class={sort_caret_class(@history_sort_by, "status")}>
+                      {sort_caret_symbol(@history_sort_by, @history_sort_dir, "status")}
+                    </span>
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-left">
+                  <button
+                    type="button"
+                    phx-click="history_sort"
+                    phx-value-by="who"
+                    class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-content/50 hover:text-neutral-content"
+                  >
+                    server / tool
+                    <span class={sort_caret_class(@history_sort_by, "who")}>
+                      {sort_caret_symbol(@history_sort_by, @history_sort_dir, "who")}
+                    </span>
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wide text-neutral-content/50">
+                  session
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :if={@history_result.entries == []}>
+                <td colspan="4" class="px-3 py-6 text-center text-neutral-content/40">
+                  No events match these filters.
+                </td>
+              </tr>
+              <tr
+                :for={entry <- @history_result.entries}
+                class={[
+                  "border-t border-neutral-content/10",
+                  entry.status == "blocked" && "bg-error/10"
+                ]}
+              >
+                <td class="px-3 py-1.5 whitespace-nowrap text-neutral-content/50">
+                  {format_datetime(entry.occurred_at)}
+                </td>
+                <td class={["px-3 py-1.5 font-semibold", console_status_class(entry.status)]}>
+                  {status_label(entry.status)}
+                </td>
+                <td class="px-3 py-1.5">
+                  <span :if={entry.server_id}>{entry.server_id}/{entry.tool_name}</span>
+                  <span :if={!entry.server_id} class="text-neutral-content/30">—</span>
+                  <span
+                    :for={tag <- entry.tags}
+                    class={["ml-1 rounded-full px-1.5 py-0.5 text-[10px]", tag_pill_class(tag)]}
+                  >
+                    {tag_label(tag)}
+                  </span>
+                  <div :if={entry.reason} class="text-error">{entry.reason}</div>
+                </td>
+                <td class="px-3 py-1.5 text-right text-neutral-content/40">
+                  {entry.session_id}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div
+          :if={@console_mode == "history"}
+          class="flex items-center justify-between border-t border-neutral-content/10 px-3 py-1.5 font-mono text-[11px] text-neutral-content/50"
+        >
+          <span>{@history_result.total_count} event(s)</span>
+          <div class="flex items-center gap-2">
+            <span>page {@history_result.page} / {@history_result.total_pages}</span>
+            <button
+              type="button"
+              phx-click="history_paginate"
+              phx-value-page={@history_result.page - 1}
+              disabled={@history_result.page <= 1}
+              class="rounded px-1.5 py-0.5 hover:bg-neutral-content/10 disabled:opacity-30"
+            >
+              ‹ prev
+            </button>
+            <button
+              type="button"
+              phx-click="history_paginate"
+              phx-value-page={@history_result.page + 1}
+              disabled={@history_result.page >= @history_result.total_pages}
+              class="rounded px-1.5 py-0.5 hover:bg-neutral-content/10 disabled:opacity-30"
+            >
+              next ›
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="space-y-4 border-t border-base-300 pt-8">
-      <div>
-        <h2 class="text-lg font-semibold tracking-tight">Real MCP servers</h2>
-        <p class="mt-1 text-sm text-base-content/70">
-          Register a real MCP server — over Streamable HTTP, or spawned locally and spoken to
-          over stdio — to discover its tools. Tag which tools are sensitive reads or network
-          egress, then call them through the same policy-enforcing proxy — calls that reach a
-          real server here are real, not simulated.
-        </p>
+    <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Servers &amp; tools</h2>
+        <span class="text-xs text-base-content/40">
+          {length(@real_servers)} registered — real Streamable HTTP or stdio MCP servers, tools discovered live
+        </span>
       </div>
 
       <.form
         for={to_form(%{})}
         id="register-server-form"
         phx-submit="register_server"
-        class="flex flex-wrap items-end gap-3"
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-2.5"
       >
-        <div class="min-w-[10rem] flex-1">
-          <label class="text-xs font-medium text-base-content/60" for="register-server-name">
-            Name
-          </label>
-          <input
-            id="register-server-name"
-            type="text"
-            name="name"
-            placeholder="My filesystem server"
-            class="input input-bordered input-sm w-full"
-          />
-        </div>
-        <div class="min-w-[16rem] flex-[2]">
-          <label class="text-xs font-medium text-base-content/60" for="register-server-url">
-            Base URL
-          </label>
-          <input
-            id="register-server-url"
-            type="text"
-            name="base_url"
-            placeholder="http://localhost:9000/mcp"
-            class="input input-bordered input-sm w-full"
-          />
-        </div>
+        <input
+          id="register-server-name"
+          type="text"
+          name="name"
+          placeholder="Name"
+          class="input input-bordered input-sm w-40"
+        />
+        <input
+          id="register-server-url"
+          type="text"
+          name="base_url"
+          placeholder="http://localhost:9000/mcp"
+          class="input input-bordered input-sm min-w-[16rem] flex-1"
+        />
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
-          {if @registering, do: "Registering…", else: "Register server"}
+          {if @registering, do: "Registering…", else: "Register"}
         </button>
-      </.form>
-
-      <div class="flex flex-wrap items-center gap-2">
-        <span class="text-xs text-base-content/60">Or spawn a real stdio server:</span>
+        <span class="text-xs text-base-content/40">or spawn:</span>
         <button
           type="button"
           phx-click="register_stdio_preset"
@@ -324,7 +648,7 @@
           disabled={@registering}
           class="btn btn-outline btn-xs"
         >
-          + real filesystem server
+          + filesystem
         </button>
         <button
           type="button"
@@ -333,106 +657,118 @@
           disabled={@registering}
           class="btn btn-outline btn-xs"
         >
-          + real fetch server
+          + fetch
         </button>
-      </div>
-
-      <div class="flex items-center gap-2 text-xs text-base-content/60">
-        <span>Manual call session:</span>
-        <span class="font-mono">{@manual_session_id}</span>
-        <button type="button" phx-click="new_manual_session" class="btn btn-ghost btn-xs">
-          New session
-        </button>
-      </div>
+        <span class="ml-auto flex items-center gap-1.5 text-xs text-base-content/40">
+          session <span class="font-mono">{@manual_session_id}</span>
+          <button type="button" phx-click="new_manual_session" class="btn btn-ghost btn-xs">
+            new
+          </button>
+        </span>
+      </.form>
 
       <div
         :if={@real_servers == []}
-        class="rounded-box border border-dashed border-base-300 p-4 text-center text-sm text-base-content/50"
+        class="p-4 text-center text-sm text-base-content/50"
       >
         No real servers registered yet.
       </div>
 
-      <div
-        :for={server <- @real_servers}
-        id={"real-server-" <> server.id}
-        class="space-y-3 rounded-box border border-base-300 bg-base-100 p-4"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div class="min-w-0">
-            <h3 class="font-semibold">{server.name}</h3>
-          </div>
-          <button
-            type="button"
-            phx-click="remove_server"
-            phx-value-server_id={server.id}
-            class="btn btn-ghost btn-xs shrink-0 text-error"
-          >
-            Remove
-          </button>
-        </div>
-
-        <div class="space-y-2">
-          <div
-            :for={tool <- server.tools}
-            class="flex flex-wrap items-center gap-2 rounded-box bg-base-200/50 px-3 py-2 text-sm"
-          >
-            <span class="font-mono font-medium">{tool.name}</span>
-            <span class="text-xs text-base-content/60">{tool.description}</span>
-            <span class="ml-auto flex items-center gap-1.5">
-              <button
-                type="button"
-                phx-click="toggle_tool_tag"
-                phx-value-server_id={server.id}
-                phx-value-tool_name={tool.name}
-                phx-value-tag="sensitive_read"
-                class={[
-                  "rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
-                  if(:sensitive_read in tool.tags,
-                    do: "bg-warning/20 text-warning",
-                    else: "bg-base-300 text-base-content/50"
-                  )
-                ]}
-              >
-                sensitive read
-              </button>
-              <button
-                type="button"
-                phx-click="toggle_tool_tag"
-                phx-value-server_id={server.id}
-                phx-value-tool_name={tool.name}
-                phx-value-tag="network_egress"
-                class={[
-                  "rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
-                  if(:network_egress in tool.tags,
-                    do: "bg-error/20 text-error",
-                    else: "bg-base-300 text-base-content/50"
-                  )
-                ]}
-              >
-                network egress
-              </button>
-            </span>
-          </div>
-        </div>
-
-        <.form
-          for={to_form(%{})}
-          id={"call-tool-form-" <> server.id}
-          phx-submit="call_tool"
-          class="flex flex-wrap items-end gap-2 border-t border-base-300 pt-3"
+      <div :for={server <- @real_servers} class="border-t border-base-300 first:border-t-0">
+        <button
+          type="button"
+          phx-click="toggle_server_drawer"
+          phx-value-server_id={server.id}
+          class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-base-200/50"
         >
-          <input type="hidden" name="server_id" value={server.id} />
-          <select name="tool_name" class="select select-bordered select-sm">
-            <option :for={tool <- server.tools} value={tool.name}>{tool.name}</option>
-          </select>
-          <input
-            type="text"
-            name="arguments"
-            placeholder={~s({"key": "value"})}
-            class="input input-bordered input-sm flex-1 font-mono"
-          />
-          <button type="submit" class="btn btn-sm btn-outline">Call tool</button>
-        </.form>
+          <span class={[
+            "text-base-content/40 transition-transform",
+            MapSet.member?(@expanded_server_ids, server.id) && "rotate-90"
+          ]}>
+            ▶
+          </span>
+          <span class="font-semibold">{server.name}</span>
+          <span class="text-xs text-base-content/40">{length(server.tools)} tool(s)</span>
+        </button>
+
+        <div
+          :if={MapSet.member?(@expanded_server_ids, server.id)}
+          class="space-y-3 border-t border-base-300/60 bg-base-200/20 px-4 py-3"
+        >
+          <div class="flex items-start justify-end gap-3">
+            <button
+              type="button"
+              phx-click="remove_server"
+              phx-value-server_id={server.id}
+              class="btn btn-ghost btn-xs text-error"
+            >
+              Remove
+            </button>
+          </div>
+
+          <div class="space-y-2">
+            <div
+              :for={tool <- server.tools}
+              class="flex flex-wrap items-center gap-2 rounded-box bg-base-200/50 px-3 py-2 text-sm"
+            >
+              <span class="font-mono font-medium">{tool.name}</span>
+              <span class="text-xs text-base-content/60">{tool.description}</span>
+              <span class="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  phx-click="toggle_tool_tag"
+                  phx-value-server_id={server.id}
+                  phx-value-tool_name={tool.name}
+                  phx-value-tag="sensitive_read"
+                  class={[
+                    "rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
+                    if(:sensitive_read in tool.tags,
+                      do: "bg-warning/20 text-warning",
+                      else: "bg-base-300 text-base-content/50"
+                    )
+                  ]}
+                >
+                  sensitive read
+                </button>
+                <button
+                  type="button"
+                  phx-click="toggle_tool_tag"
+                  phx-value-server_id={server.id}
+                  phx-value-tool_name={tool.name}
+                  phx-value-tag="network_egress"
+                  class={[
+                    "rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
+                    if(:network_egress in tool.tags,
+                      do: "bg-error/20 text-error",
+                      else: "bg-base-300 text-base-content/50"
+                    )
+                  ]}
+                >
+                  network egress
+                </button>
+              </span>
+            </div>
+          </div>
+
+          <.form
+            for={to_form(%{})}
+            id={"call-tool-form-" <> server.id}
+            phx-submit="call_tool"
+            class="flex flex-wrap items-end gap-2 border-t border-base-300 pt-3"
+          >
+            <input type="hidden" name="server_id" value={server.id} />
+            <select name="tool_name" class="select select-bordered select-sm">
+              <option :for={tool <- server.tools} value={tool.name}>{tool.name}</option>
+            </select>
+            <input
+              type="text"
+              name="arguments"
+              placeholder={~s({"key": "value"})}
+              class="input input-bordered input-sm flex-1 font-mono"
+            />
+            <button type="submit" class="btn btn-sm btn-outline">Call tool</button>
+          </.form>
+        </div>
       </div>
     </div>
   </div>

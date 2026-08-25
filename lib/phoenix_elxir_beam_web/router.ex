@@ -19,7 +19,6 @@ defmodule PhoenixElxirBeamWeb.Router do
 
     live "/", MCPDashboardLive
     live "/mcp/dashboard", MCPDashboardLive
-    live "/mcp/logs", MCPLogLive
   end
 
   scope "/", PhoenixElxirBeamWeb do

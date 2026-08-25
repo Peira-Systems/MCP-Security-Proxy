@@ -42,12 +42,16 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
     * `:server_id` — exact match; omit or pass `"all"` for no filter.
     * `:page` — 1-indexed, defaults to 1.
     * `:page_size` — defaults to #{@default_page_size}.
+    * `:sort_by` — `"time"` (default), `"status"`, or `"who"` (server_id, then tool_name).
+    * `:sort_dir` — `"asc"` or `"desc"` (default).
 
   Returns `%{entries:, page:, page_size:, total_count:, total_pages:}`.
   """
   def list(filters \\ %{}) do
     page = max(Map.get(filters, :page, 1), 1)
     page_size = Map.get(filters, :page_size, @default_page_size)
+    sort_by = Map.get(filters, :sort_by, "time")
+    sort_dir = Map.get(filters, :sort_dir, "desc")
 
     base = filtered_query(filters)
     total_count = Repo.aggregate(base, :count, :id)
@@ -55,7 +59,7 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
 
     entries =
       base
-      |> order_by(desc: :occurred_at)
+      |> apply_sort(sort_by, sort_dir)
       |> limit(^page_size)
       |> offset(^((page - 1) * page_size))
       |> Repo.all()
@@ -98,6 +102,21 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
 
   defp filter_server(query, server_id) when server_id in [nil, "", "all"], do: query
   defp filter_server(query, server_id), do: where(query, [e], e.server_id == ^server_id)
+
+  defp apply_sort(query, "status", "asc"),
+    do: order_by(query, [e], asc: e.status, desc: e.occurred_at)
+
+  defp apply_sort(query, "status", _desc),
+    do: order_by(query, [e], desc: e.status, desc: e.occurred_at)
+
+  defp apply_sort(query, "who", "asc"),
+    do: order_by(query, [e], asc: e.server_id, asc: e.tool_name)
+
+  defp apply_sort(query, "who", _desc),
+    do: order_by(query, [e], desc: e.server_id, desc: e.tool_name)
+
+  defp apply_sort(query, _time, "asc"), do: order_by(query, [e], asc: e.occurred_at)
+  defp apply_sort(query, _time, _desc), do: order_by(query, [e], desc: e.occurred_at)
 
   defp ceil_div(a, b), do: div(a + b - 1, b)
 end

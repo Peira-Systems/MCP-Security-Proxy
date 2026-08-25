@@ -2,15 +2,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @moduledoc """
   Live dashboard visualizing MCP tool calls flowing through the policy
   proxy: a small tool graph that lights up as calls are made and turns red
-  when a dangerous tool-chain is detected and blocked, plus a scrolling
-  event feed.
+  when a dangerous tool-chain is detected and blocked, a console-style
+  event log (live session feed, or the durable history browser), and
+  real-server registration/testing.
   """
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{Demo, ServerRegistry, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.{Demo, EventLog, ServerRegistry, ToolCatalog}
 
   @topic "mcp:events"
+  @history_page_size 20
 
   @impl true
   def mount(_params, _session, socket) do
@@ -22,17 +24,29 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       for server_id <- ToolCatalog.servers(),
           do: %{id: server_id, tools: ToolCatalog.tools(server_id)}
 
-    {:ok,
-     socket
-     |> assign(:page_title, "MCP Dashboard")
-     |> assign(:graph, graph)
-     |> assign(:positions, layout_positions(graph))
-     |> assign(:running, false)
-     |> assign(:scenario, nil)
-     |> assign(:real_servers, ServerRegistry.list_servers())
-     |> assign(:registering, false)
-     |> assign(:manual_session_id, generate_manual_session_id())
-     |> stream(:events, [])}
+    socket =
+      socket
+      |> assign(:page_title, "MCP Dashboard")
+      |> assign(:graph, graph)
+      |> assign(:positions, layout_positions(graph))
+      |> assign(:running, false)
+      |> assign(:scenario, nil)
+      |> assign(:real_servers, ServerRegistry.list_servers())
+      |> assign(:registering, false)
+      |> assign(:manual_session_id, generate_manual_session_id())
+      |> assign(:expanded_server_ids, MapSet.new())
+      |> assign(:console_mode, "live")
+      |> assign(:history_status, "all")
+      |> assign(:history_server_id, "all")
+      |> assign(:history_from, "")
+      |> assign(:history_to, "")
+      |> assign(:history_page, 1)
+      |> assign(:history_sort_by, "time")
+      |> assign(:history_sort_dir, "desc")
+      |> assign(:server_options, EventLog.distinct_server_ids())
+      |> stream(:events, [])
+
+    {:ok, refresh_history(socket)}
   end
 
   # Fixed four-tier layout — agent, policy gate, server, tool — left to
@@ -70,6 +84,85 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   def handle_event("run_attack", _params, socket) do
     {:ok, _pid} = Demo.run_attack_simulation()
     {:noreply, assign(socket, running: true)}
+  end
+
+  def handle_event("set_console_mode", %{"mode" => mode}, socket)
+      when mode in ["live", "history"] do
+    socket = assign(socket, :console_mode, mode)
+    {:noreply, if(mode == "history", do: refresh_history(socket), else: socket)}
+  end
+
+  def handle_event("history_filter", params, socket) do
+    socket =
+      socket
+      |> assign(:history_server_id, params["server_id"] || "all")
+      |> assign(:history_from, params["from"] || "")
+      |> assign(:history_to, params["to"] || "")
+      |> assign(:history_page, 1)
+
+    {:noreply, refresh_history(socket)}
+  end
+
+  def handle_event("history_set_status", %{"status" => status}, socket) do
+    {:noreply,
+     socket |> assign(:history_status, status) |> assign(:history_page, 1) |> refresh_history()}
+  end
+
+  def handle_event("history_sort", %{"by" => by}, socket) do
+    {sort_by, sort_dir} =
+      if socket.assigns.history_sort_by == by do
+        {by, if(socket.assigns.history_sort_dir == "asc", do: "desc", else: "asc")}
+      else
+        {by, "asc"}
+      end
+
+    {:noreply,
+     socket
+     |> assign(:history_sort_by, sort_by)
+     |> assign(:history_sort_dir, sort_dir)
+     |> assign(:history_page, 1)
+     |> refresh_history()}
+  end
+
+  def handle_event("history_remove_filter", %{"key" => "status"}, socket) do
+    {:noreply,
+     socket |> assign(:history_status, "all") |> assign(:history_page, 1) |> refresh_history()}
+  end
+
+  def handle_event("history_remove_filter", %{"key" => "server"}, socket) do
+    {:noreply,
+     socket |> assign(:history_server_id, "all") |> assign(:history_page, 1) |> refresh_history()}
+  end
+
+  def handle_event("history_remove_filter", %{"key" => "from"}, socket) do
+    {:noreply,
+     socket |> assign(:history_from, "") |> assign(:history_page, 1) |> refresh_history()}
+  end
+
+  def handle_event("history_remove_filter", %{"key" => "to"}, socket) do
+    {:noreply, socket |> assign(:history_to, "") |> assign(:history_page, 1) |> refresh_history()}
+  end
+
+  def handle_event("history_clear_filters", _params, socket) do
+    socket =
+      socket
+      |> assign(:history_status, "all")
+      |> assign(:history_server_id, "all")
+      |> assign(:history_from, "")
+      |> assign(:history_to, "")
+      |> assign(:history_page, 1)
+
+    {:noreply, refresh_history(socket)}
+  end
+
+  def handle_event("history_paginate", %{"page" => page}, socket) do
+    page =
+      case Integer.parse(page) do
+        {n, _} when n > 0 -> n
+        _ -> 1
+      end
+
+    {:noreply, refresh_history(assign(socket, :history_page, page))}
   end
 
   def handle_event("register_server", %{"name" => name, "base_url" => base_url}, socket) do
@@ -110,7 +203,22 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   def handle_event("remove_server", %{"server_id" => server_id}, socket) do
     :ok = ServerRegistry.remove_server(server_id)
-    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+
+    {:noreply,
+     socket
+     |> assign(:real_servers, ServerRegistry.list_servers())
+     |> assign(:expanded_server_ids, MapSet.delete(socket.assigns.expanded_server_ids, server_id))}
+  end
+
+  def handle_event("toggle_server_drawer", %{"server_id" => server_id}, socket) do
+    expanded_server_ids =
+      if MapSet.member?(socket.assigns.expanded_server_ids, server_id) do
+        MapSet.delete(socket.assigns.expanded_server_ids, server_id)
+      else
+        MapSet.put(socket.assigns.expanded_server_ids, server_id)
+      end
+
+    {:noreply, assign(socket, :expanded_server_ids, expanded_server_ids)}
   end
 
   def handle_event(
@@ -172,6 +280,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      socket
      |> assign(:registering, false)
      |> assign(:real_servers, ServerRegistry.list_servers())
+     |> assign(:expanded_server_ids, MapSet.put(socket.assigns.expanded_server_ids, server.id))
      |> put_flash(:info, "Registered #{server.name} — #{length(server.tools)} tool(s) discovered")}
   end
 
@@ -180,6 +289,36 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      socket
      |> assign(:registering, false)
      |> put_flash(:error, "Couldn't register server: #{reason}")}
+  end
+
+  defp refresh_history(socket) do
+    filters = %{
+      status: socket.assigns.history_status,
+      server_id: socket.assigns.history_server_id,
+      from: parse_date(socket.assigns.history_from, :beginning),
+      to: parse_date(socket.assigns.history_to, :end),
+      page: socket.assigns.history_page,
+      page_size: @history_page_size,
+      sort_by: socket.assigns.history_sort_by,
+      sort_dir: socket.assigns.history_sort_dir
+    }
+
+    socket
+    |> assign(:history_result, EventLog.list(filters))
+    |> assign(:server_options, EventLog.distinct_server_ids())
+  end
+
+  defp parse_date("", _edge), do: nil
+
+  defp parse_date(date_string, edge) do
+    case Date.from_iso8601(date_string) do
+      {:ok, date} ->
+        time = if edge == :beginning, do: ~T[00:00:00.000000], else: ~T[23:59:59.999999]
+        DateTime.new!(date, time, "Etc/UTC")
+
+      {:error, _reason} ->
+        nil
+    end
   end
 
   defp call_real_tool(server_id, tool_name, arguments, session_id) do
@@ -274,12 +413,42 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     Calendar.strftime(ts, "%H:%M:%S")
   end
 
-  defp status_label(:session_start), do: "session started"
+  defp format_datetime(%DateTime{} = ts) do
+    Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")
+  end
+
+  defp status_label(:session_start), do: "started"
   defp status_label(:ok), do: "allowed"
   defp status_label(:blocked), do: "blocked"
-  defp status_label(:session_complete), do: "session complete"
+  defp status_label(:session_complete), do: "complete"
+  defp status_label("ok"), do: "allowed"
+  defp status_label("blocked"), do: "blocked"
+  defp status_label("session_start"), do: "started"
+  defp status_label("session_complete"), do: "complete"
+  defp status_label(other), do: other
 
-  defp status_badge_class(:ok), do: "bg-success/15 text-success"
-  defp status_badge_class(:blocked), do: "bg-error/15 text-error"
-  defp status_badge_class(_), do: "bg-base-300 text-base-content/70"
+  defp console_status_class(status) when status in [:ok, "ok"], do: "text-success"
+  defp console_status_class(status) when status in [:blocked, "blocked"], do: "text-error"
+
+  defp console_status_class(status) when status in [:session_start, "session_start"],
+    do: "text-info"
+
+  defp console_status_class(_), do: "text-base-content/50"
+
+  defp sort_caret_class(sort_by, column) when sort_by == column, do: "text-primary"
+  defp sort_caret_class(_sort_by, _column), do: "text-neutral-content/30"
+
+  defp sort_caret_symbol(sort_by, sort_dir, column) when sort_by == column do
+    if sort_dir == "asc", do: "▲", else: "▼"
+  end
+
+  defp sort_caret_symbol(_sort_by, _sort_dir, _column), do: "▾"
+
+  defp tag_pill_class("sensitive_read"), do: "bg-warning/20 text-warning"
+  defp tag_pill_class("network_egress"), do: "bg-error/20 text-error"
+  defp tag_pill_class(_), do: "bg-base-300 text-base-content/50"
+
+  defp tag_label("sensitive_read"), do: "sensitive"
+  defp tag_label("network_egress"), do: "egress"
+  defp tag_label(other), do: other
 end
