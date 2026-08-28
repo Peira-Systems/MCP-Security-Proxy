@@ -1,5 +1,8 @@
 import Config
 
+# The test env inherits `config.exs`'s in-process-only plugin list. Sidecar
+# behaviour is exercised via the Node fixture + `Registry`'s `:plugins` opt.
+
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   database: Path.expand("../priv/repo/test.db", __DIR__),
   pool: Ecto.Adapters.SQL.Sandbox,

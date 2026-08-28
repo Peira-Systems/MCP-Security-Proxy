@@ -25,20 +25,23 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   require Logger
 
   alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding}
-  alias PhoenixElxirBeam.MCP.Plugin.Scanner
+  alias PhoenixElxirBeam.MCP.Plugin.{Scanner, SidecarRunner, Wire}
 
   @task_supervisor PhoenixElxirBeam.MCP.TaskSupervisor
 
   @type entry :: %{
           name: String.t(),
           version: String.t(),
-          module: module(),
+          impl: {:module, module()} | {:sidecar, atom()},
+          config: map(),
           kind: :policy | :scanner | :audit_sink,
           phases: [atom()],
           tool_tags: [atom()],
+          data_needs: [String.t()],
           timeout_ms: pos_integer(),
           fail_mode: :fail_open | :fail_closed,
           can_mutate: [atom()],
+          can_block: boolean(),
           order: non_neg_integer(),
           enabled: boolean()
         }
@@ -84,10 +87,7 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   end
 
   defp invoke_discovery(entry, ctx) do
-    task =
-      Task.Supervisor.async_nolink(@task_supervisor, fn ->
-        entry.module.scan(:discovery, ctx)
-      end)
+    task = Task.Supervisor.async_nolink(@task_supervisor, fn -> discovery_scan(entry, ctx) end)
 
     case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, findings, updates}} when is_list(findings) and is_list(updates) ->
@@ -102,6 +102,31 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
       nil ->
         {[scanner_error_finding(entry, "timed out after #{entry.timeout_ms}ms")], []}
     end
+  end
+
+  defp discovery_scan(%{impl: {:module, mod}}, ctx), do: mod.scan(:discovery, ctx)
+
+  defp discovery_scan(%{impl: {:sidecar, name}} = entry, ctx) do
+    case SidecarRunner.request(
+           name,
+           "discovery/inspect",
+           Wire.encode_discovery(ctx),
+           entry.timeout_ms
+         ) do
+      {:ok, result} ->
+        {findings, updates} = Wire.decode_discovery_result(result)
+        {:ok, findings, drop_quarantine_unless_allowed(updates, entry)}
+
+      {:error, reason} ->
+        raise "sidecar discovery/inspect failed: #{inspect(reason)}"
+    end
+  end
+
+  # A sidecar's quarantine is honoured only if the operator granted blocking.
+  defp drop_quarantine_unless_allowed(updates, %{can_block: true}), do: updates
+
+  defp drop_quarantine_unless_allowed(updates, _entry) do
+    Enum.map(updates, &Map.put(&1, :quarantine, false))
   end
 
   # Scanners are advisory (`fail_open`): a failure is dropped, not fatal, but
@@ -170,13 +195,29 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
   defp invoke(entry, phase, ctx) do
     task =
-      Task.Supervisor.async_nolink(@task_supervisor, fn -> entry.module.evaluate(phase, ctx) end)
+      Task.Supervisor.async_nolink(@task_supervisor, fn -> policy_evaluate(entry, phase, ctx) end)
 
     case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, %Decision{} = decision} -> decision
       {:ok, other} -> fail(entry, "returned #{inspect(other)}")
       {:exit, reason} -> fail(entry, "crashed (#{inspect(reason)})")
       nil -> fail(entry, "timed out after #{entry.timeout_ms}ms")
+    end
+  end
+
+  defp policy_evaluate(%{impl: {:module, mod}}, phase, ctx), do: mod.evaluate(phase, ctx)
+
+  defp policy_evaluate(%{impl: {:sidecar, name}} = entry, phase, ctx) do
+    ctx = %{ctx | phase: phase}
+
+    case SidecarRunner.request(
+           name,
+           "call/evaluate",
+           %{"context" => Wire.encode_context(ctx, entry)},
+           entry.timeout_ms
+         ) do
+      {:ok, result} -> Wire.decode_decision(result)
+      {:error, reason} -> raise "sidecar call/evaluate failed: #{inspect(reason)}"
     end
   end
 

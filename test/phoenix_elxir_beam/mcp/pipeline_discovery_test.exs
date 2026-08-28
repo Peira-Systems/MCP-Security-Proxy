@@ -27,6 +27,8 @@ defmodule PhoenixElxirBeam.MCP.PipelineDiscoveryTest do
       name: Keyword.get(opts, :name, inspect(module)),
       version: "1.0.0",
       module: module,
+      impl: {:module, module},
+      config: %{},
       kind: :scanner,
       phases: Keyword.get(opts, :phases, [:discovery]),
       timeout_ms: 200,

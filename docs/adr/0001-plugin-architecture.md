@@ -148,7 +148,11 @@ instances under a dynamic supervisor.
    deciding-plugin pill + "verify audit chain" button. Test DB switched to WAL; the
    write-heavy suites made `async: false`.)
 5. **Sidecar transport** — out-of-process JSON-RPC runner; ship the Python example from
-   `docs/plugin-protocol.md` §17.1 running end-to-end.
+   `docs/plugin-protocol.md` §17.1 running end-to-end. ✔ (stdio only: `Plugin.SidecarRunner`
+   + `Plugin.Wire` + `Manifest.from_wire/1`; `Registry` spawns runners in `handle_continue`;
+   `Pipeline` dispatches on `entry.impl`; `priv/plugins/prompt_injection_scanner.py`
+   registered in dev/prod; circuit breaker in the runner; read-only dashboard Plugins panel.
+   HTTP transport deferred.)
 6. **`hold` verdict + approval UI** — LiveView-native; third verdict through the pipeline.
 7. Incremental, no new infrastructure: taint tracking, prompt-injection scanner,
    declarative policy, agent identity, behavioural baselining, OTel/SIEM sinks.

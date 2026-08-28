@@ -32,7 +32,17 @@ fan-out from `PolicyEngine`), `decisions` / `findings` persisted, and a `prev_ha
 chain over `policy_events` with `EventLog.verify_chain/0` + a dashboard "verify audit chain"
 button.
 
-Not built yet: `pre_call` / `post_call` scanner invocation and the `post_call` phase;
+Sidecars: the **stdio** transport (§5.1) is built — `Plugin.SidecarRunner` (spawn +
+`initialize` handshake + per-request timeout + circuit breaker), `Plugin.Wire` (the §7/§9
+codec, camelCase + string tags + `dataNeeds` filtering), `Manifest.from_wire/1`.
+`Plugin.Registry` starts one runner per `{:sidecar, _}` config entry in `handle_continue/2`
+and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the same
+`timeout_ms` / `fail_mode` path as an in-process plugin. The reference
+`priv/plugins/prompt_injection_scanner.py` runs as a `discovery` scanner. A read-only
+**Plugins** panel on the dashboard lists every plugin and each sidecar's health.
+
+Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` / `post_call` scanner
+invocation and the `post_call` phase;
 batched / remote audit sinks and a real `audit/record` notification (steps 5, 7); the
 sidecar JSON-RPC runner and `{:sidecar, _}` activation (step 5); circuit breaker, decision
 cache, `:hold` + approval UI (step 6); a dashboard UI for the plugin registry. `Pipeline`
@@ -817,6 +827,12 @@ Plugin → proxy:
 ## 17. Reference skeletons
 
 ### 17.1 Python sidecar (stdio)
+
+> **As shipped.** The full, working version of this is
+> [`priv/plugins/prompt_injection_scanner.py`](../priv/plugins/prompt_injection_scanner.py),
+> registered by default in dev / prod via `config/{dev,prod}.exs` (skipped with a logged
+> warning if `python` isn't on `PATH`). The proxy resolves `cmd` on `PATH` and expands an
+> `{:priv, "plugins/…"}` arg through `Application.app_dir/2`.
 
 ```python
 import sys, json

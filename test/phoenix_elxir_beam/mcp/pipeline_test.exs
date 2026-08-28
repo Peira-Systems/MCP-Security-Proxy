@@ -52,6 +52,8 @@ defmodule PhoenixElxirBeam.MCP.PipelineTest do
       name: Keyword.get(opts, :name, inspect(module)),
       version: "1.0.0",
       module: module,
+      impl: {:module, module},
+      config: %{},
       kind: :policy,
       phases: Keyword.get(opts, :phases, [:pre_call]),
       tool_tags: Keyword.get(opts, :tool_tags, []),

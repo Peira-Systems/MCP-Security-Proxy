@@ -20,6 +20,11 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
   ]
 
+# The reference out-of-process (sidecar) plugin is added per-env in
+# `config/dev.exs` / `config/prod.exs` — not here, so the test env stays
+# in-process-only. (`Config` merges the `plugins:` list by key, so a plain
+# override in `test.exs` would not remove an entry added here.)
+
 # Configure the endpoint
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   url: [host: "localhost"],

@@ -21,8 +21,19 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
   end
 
   defp start_registry(plugins) do
-    name = :"plugin_registry_#{System.unique_integer([:positive])}"
-    {:ok, _pid} = start_supervised({Registry, name: name, plugins: plugins}, id: name)
+    suffix = System.unique_integer([:positive])
+    name = :"plugin_registry_#{suffix}"
+    sup = :"sidecar_sup_#{suffix}"
+
+    start_supervised!({DynamicSupervisor, name: sup, strategy: :one_for_one}, id: sup)
+
+    {:ok, _pid} =
+      start_supervised(
+        {Registry, name: name, plugins: plugins, sidecar_supervisor: sup},
+        id: name
+      )
+
+    Registry.await(name)
     name
   end
 
@@ -73,15 +84,35 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert {:error, :not_found} = Registry.disable("nope", reg)
   end
 
-  test "a sidecar spec is parsed but stored disabled and not active" do
-    reg = start_registry([{:sidecar, name: "py-scan", transport: :stdio, cmd: "python"}])
+  @sidecar_fixture Path.expand("../../../support/fixtures/sidecar_scanner.js", __DIR__)
 
-    assert [entry] = Registry.list(reg)
-    assert entry.name == "py-scan"
-    assert entry.kind == :sidecar
-    refute entry.enabled
-    assert entry.note == :not_implemented
-    assert [] = Registry.active_policies(:pre_call, reg)
+  test "a sidecar spec spawns a runner and registers its capability from the manifest" do
+    node = System.find_executable("node") || raise "node not found on PATH"
+    sc_name = "sc-#{System.unique_integer([:positive])}"
+
+    reg =
+      start_registry([
+        {ChainExfil, []},
+        {:sidecar, name: sc_name, transport: :stdio, cmd: node, args: [@sidecar_fixture]}
+      ])
+
+    entry = Enum.find(Registry.list(reg), &(&1.name == "test-sidecar-scanner"))
+    assert entry.kind == :scanner
+    assert entry.enabled
+    assert match?({:sidecar, _}, entry.impl)
+    assert [%{name: "test-sidecar-scanner"}] = Registry.active_scanners(:discovery, reg)
+  end
+
+  test "a sidecar with a bad command is skipped; other plugins still register" do
+    reg =
+      start_registry([
+        {ChainExfil, []},
+        {:sidecar, name: "broken", transport: :stdio, cmd: "/no/such/binary"}
+      ])
+
+    names = Enum.map(Registry.list(reg), & &1.name)
+    assert "chain-exfil" in names
+    refute Enum.any?(names, &(&1 == "broken"))
   end
 
   test "seeds a scanner plugin enabled and exposes it via active_scanners/2" do

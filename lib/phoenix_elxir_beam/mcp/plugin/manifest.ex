@@ -114,4 +114,81 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Manifest do
   defp normalize_capability(:policy, attrs), do: struct(Policy, attrs)
   defp normalize_capability(:scanner, attrs), do: struct(Scanner, attrs)
   defp normalize_capability(:audit_sink, attrs), do: struct(AuditSink, attrs)
+
+  @doc """
+  Builds a `Manifest` from the camelCase / string-keyed map a **sidecar**
+  returns from `initialize` (`docs/plugin-protocol.md` §8.1). Phases,
+  `toolTags`, `canMutate`, and `failMode` are converted from strings to the
+  atoms the in-process pipeline uses.
+  """
+  @spec from_wire(map()) :: t()
+  def from_wire(map) when is_map(map) do
+    plugin = map["plugin"] || %{}
+    caps = map["capabilities"] || %{}
+
+    normalize(%{
+      plugin: %{
+        name: plugin["name"],
+        version: plugin["version"] || "0.0.0",
+        vendor: plugin["vendor"],
+        description: plugin["description"],
+        homepage: plugin["homepage"]
+      },
+      capabilities: wire_capabilities(caps),
+      max_concurrency: map["maxConcurrency"],
+      requires_network: map["requiresNetwork"] == true,
+      config_schema: map["configSchema"]
+    })
+  end
+
+  defp wire_capabilities(caps) do
+    Enum.reduce([:policy, :scanner, :audit_sink], %{}, fn kind, acc ->
+      case caps[wire_key(kind)] do
+        nil -> acc
+        block -> Map.put(acc, kind, wire_capability(kind, block))
+      end
+    end)
+  end
+
+  defp wire_key(:audit_sink), do: "auditSink"
+  defp wire_key(kind), do: Atom.to_string(kind)
+
+  defp wire_capability(:policy, b) do
+    %{
+      phases: wire_atoms(b["phases"] || ["pre_call"]),
+      tool_tags: wire_atoms(b["toolTags"] || []),
+      servers: b["servers"] || [:*],
+      data_needs: b["dataNeeds"] || [],
+      timeout_ms: b["timeoutMs"] || 50,
+      fail_mode: wire_atom(b["failMode"] || "fail_closed"),
+      can_mutate: wire_atoms(b["canMutate"] || [])
+    }
+  end
+
+  defp wire_capability(:scanner, b) do
+    %{
+      phases: wire_atoms(b["phases"] || ["post_call"]),
+      data_needs: b["dataNeeds"] || [],
+      timeout_ms: b["timeoutMs"] || 500,
+      fail_mode: wire_atom(b["failMode"] || "fail_open"),
+      can_block: b["canBlock"] == true
+    }
+  end
+
+  defp wire_capability(:audit_sink, b) do
+    %{
+      batch: b["batch"] == true,
+      max_batch: b["maxBatch"] || 100,
+      flush_interval_ms: b["flushIntervalMs"] || 2000
+    }
+  end
+
+  # camelCase mutation names -> the pipeline's snake_case atoms.
+  defp wire_atom("addTags"), do: :add_tags
+  defp wire_atom("addTaintSources"), do: :add_taint_sources
+  defp wire_atom("redactResponse"), do: :redact_response
+  defp wire_atom(s) when is_binary(s), do: String.to_atom(s)
+  defp wire_atom(a) when is_atom(a), do: a
+
+  defp wire_atoms(list), do: Enum.map(list, &wire_atom/1)
 end

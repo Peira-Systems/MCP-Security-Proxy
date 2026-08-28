@@ -29,5 +29,18 @@ config :swoosh, local: false
 # Do not print debug messages in production
 config :logger, level: :info
 
+# Reference out-of-process plugin. The Docker image installs python3 and
+# bakes in priv/plugins/. Skipped with a logged warning if python is absent.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
+  plugins: [
+    {:sidecar,
+     name: "prompt-injection-scanner",
+     transport: :stdio,
+     cmd: "python3",
+     args: [{:priv, "plugins/prompt_injection_scanner.py"}],
+     config: %{},
+     grants: %{block: true, mutate: [], network: false}}
+  ]
+
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

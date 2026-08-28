@@ -635,6 +635,56 @@
 
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Plugins</h2>
+        <span class="text-xs text-base-content/40">
+          {length(@plugins)} registered — the proxy pipeline; in-process Elixir modules and out-of-process sidecars
+        </span>
+      </div>
+      <div class="divide-y divide-base-300/60">
+        <div
+          :for={plugin <- @plugins}
+          class="flex flex-wrap items-center gap-2 px-4 py-2 text-sm"
+        >
+          <span class={[
+            "size-2 rounded-full",
+            if(plugin.enabled, do: "bg-success", else: "bg-base-content/25")
+          ]}></span>
+          <span class="font-mono font-medium">{plugin.name}</span>
+          <span class="text-xs text-base-content/40">v{plugin.version}</span>
+          <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] text-base-content/60">
+            {plugin.kind}
+          </span>
+          <span class={[
+            "rounded-full px-2 py-0.5 text-[10px]",
+            if(plugin.source == "sidecar",
+              do: "bg-primary/15 text-primary",
+              else: "bg-base-300 text-base-content/50"
+            )
+          ]}>
+            {plugin.source}
+          </span>
+          <span
+            :if={plugin.health}
+            class={[
+              "ml-auto rounded-full px-2 py-0.5 text-[10px]",
+              case plugin.health do
+                :ready -> "bg-success/15 text-success"
+                :circuit_open -> "bg-warning/20 text-warning"
+                _ -> "bg-error/20 text-error"
+              end
+            ]}
+          >
+            {plugin.health}
+          </span>
+        </div>
+        <div :if={@plugins == []} class="px-4 py-3 text-center text-sm text-base-content/50">
+          No plugins registered.
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Servers &amp; tools</h2>
         <span class="text-xs text-base-content/40">
           {length(@real_servers)} registered — real Streamable HTTP or stdio MCP servers, tools discovered live
@@ -753,12 +803,15 @@
           </div>
 
           <div
-            :for={finding <- Enum.filter(server[:findings] || [], &(&1.type == "rug_pull"))}
+            :for={finding <- server[:findings] || []}
             class="rounded-box border border-error/40 bg-error/10 px-3 py-2 text-sm"
           >
             <div class="flex items-center gap-2 font-semibold text-error">
               <span>⚠</span>
               <span>{finding.title}</span>
+              <span class="rounded-full bg-error/20 px-1.5 py-0.5 text-[10px] font-normal">
+                {finding.type} · {finding.plugin && finding.plugin.name}
+              </span>
             </div>
             <p :if={finding.detail} class="mt-1 text-xs text-base-content/70">{finding.detail}</p>
             <p
@@ -766,7 +819,7 @@
               class="mt-1 truncate font-mono text-xs text-base-content/50"
               title={finding.evidence}
             >
-              new description: {finding.evidence}
+              {finding.evidence}
             </p>
           </div>
 

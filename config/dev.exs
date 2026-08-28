@@ -7,6 +7,19 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
+# Reference out-of-process plugin (merged onto config.exs's in-process list).
+# Skipped with a logged warning if `python` isn't on PATH.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
+  plugins: [
+    {:sidecar,
+     name: "prompt-injection-scanner",
+     transport: :stdio,
+     cmd: "python",
+     args: [{:priv, "plugins/prompt_injection_scanner.py"}],
+     config: %{},
+     grants: %{block: true, mutate: [], network: false}}
+  ]
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #

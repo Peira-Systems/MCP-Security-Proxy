@@ -10,6 +10,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   use PhoenixElxirBeamWeb, :live_view
 
   alias PhoenixElxirBeam.MCP.{Demo, EventLog, MockDrift, ServerRegistry, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
   @servers_topic "mcp:servers"
@@ -20,6 +21,9 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
+      # Sidecar plugins register a beat after boot and their health drifts;
+      # a light poll keeps the Plugins panel current.
+      :timer.send_interval(5_000, :refresh_plugins)
     end
 
     graph =
@@ -46,6 +50,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_by, "time")
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
+      |> assign(:plugins, plugin_rows())
       |> stream(:events, [])
 
     {:ok, refresh_history(socket)}
@@ -341,6 +346,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      |> assign(:server_options, EventLog.distinct_server_ids())}
   end
 
+  def handle_info(:refresh_plugins, socket) do
+    {:noreply, assign(socket, :plugins, plugin_rows())}
+  end
+
   def handle_info({:server_registered, {:ok, server}}, socket) do
     {:noreply,
      socket
@@ -407,6 +416,30 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end)
 
     socket |> assign(:registering, true) |> clear_flash()
+  end
+
+  # Rows for the read-only Plugins panel: name, kind, source, enabled, and
+  # (sidecar only) live health from the SidecarRunner.
+  defp plugin_rows do
+    Registry.list()
+    |> Enum.map(fn entry ->
+      {source, health} =
+        case entry.impl do
+          {:sidecar, runner} -> {"sidecar", SidecarRunner.health(runner)}
+          _ -> {"in-process", nil}
+        end
+
+      %{
+        name: entry.name,
+        version: entry.version,
+        kind: to_string(entry.kind),
+        source: source,
+        enabled: entry.enabled,
+        health: health
+      }
+    end)
+  rescue
+    _ -> []
   end
 
   # The mock `server_id` (e.g. "files") behind a registered server whose

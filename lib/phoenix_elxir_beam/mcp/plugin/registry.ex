@@ -13,19 +13,24 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
         plugins: [
           {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
-          {:sidecar, name: "...", transport: :stdio, cmd: "...", grants: %{...}}
+          {:sidecar, name: "...", transport: :stdio, cmd: "python",
+           args: [{:priv, "plugins/foo.py"}], config: %{...}, grants: %{...}}
         ]
 
-  `{:sidecar, _}` entries are parsed and stored **disabled** with a
-  `:not_implemented` note — the out-of-process runner is roadmap step 5.
+  In-process `{Module, opts}` entries are built synchronously at boot. Each
+  `{:sidecar, opts}` entry spawns a `PhoenixElxirBeam.MCP.Plugin.SidecarRunner`
+  under `SidecarSupervisor` in `handle_continue/2` — so sidecar plugins come
+  online a beat after boot, and a spawn / handshake failure is logged and
+  skipped rather than blocking the registry.
   """
 
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.Plugin.Manifest
+  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, SidecarRunner}
 
   @capability_kinds [:policy, :scanner, :audit_sink]
+  @sidecar_supervisor PhoenixElxirBeam.MCP.SidecarSupervisor
 
   # Client API
 
@@ -67,6 +72,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     |> Enum.filter(&(&1.kind == :audit_sink and &1.enabled))
   end
 
+  @doc "Blocks until sidecar startup (`handle_continue/2`) has finished. Mainly for tests."
+  def await(server \\ __MODULE__), do: GenServer.call(server, :await)
+
   def enable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, true})
   def disable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, false})
 
@@ -82,23 +90,43 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     table = Keyword.get(opts, :name, __MODULE__)
     :ets.new(table, [:named_table, :protected, :set, read_concurrency: true])
 
-    opts
-    |> Keyword.get_lazy(:plugins, &configured_plugins/0)
-    |> Enum.with_index()
-    |> Enum.each(fn {spec, index} ->
-      case build_entry(spec, index) do
-        {:ok, entry} ->
-          :ets.insert(table, {entry.name, entry})
+    specs =
+      opts
+      |> Keyword.get_lazy(:plugins, &configured_plugins/0)
+      |> Enum.with_index()
 
-        {:error, reason} ->
-          Logger.error("Plugin.Registry: skipping #{inspect(spec)}: #{reason}")
-      end
-    end)
+    {sidecars, in_process} =
+      Enum.split_with(specs, fn {spec, _index} -> match?({:sidecar, _}, spec) end)
 
-    {:ok, %{table: table}}
+    Enum.each(in_process, fn {spec, index} -> insert_entry(table, spec, index, &build_entry/2) end)
+
+    state = %{
+      table: table,
+      sidecar_supervisor: Keyword.get(opts, :sidecar_supervisor, @sidecar_supervisor)
+    }
+
+    {:ok, state, {:continue, {:start_sidecars, sidecars}}}
   end
 
   @impl true
+  def handle_continue({:start_sidecars, sidecars}, state) do
+    Enum.each(sidecars, fn {spec, index} ->
+      insert_entry(state.table, spec, index, &start_sidecar(&1, &2, state.sidecar_supervisor))
+    end)
+
+    {:noreply, state}
+  end
+
+  defp insert_entry(table, spec, index, builder) do
+    case builder.(spec, index) do
+      {:ok, entry} -> :ets.insert(table, {entry.name, entry})
+      {:error, reason} -> Logger.error("Plugin.Registry: skipping #{inspect(spec)}: #{reason}")
+    end
+  end
+
+  @impl true
+  def handle_call(:await, _from, state), do: {:reply, :ok, state}
+
   def handle_call({:set_enabled, name, value}, _from, state) do
     case :ets.lookup(state.table, name) do
       [{^name, entry}] ->
@@ -127,19 +155,6 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
 
   # Entry construction
 
-  defp build_entry({:sidecar, opts}, index) when is_list(opts) do
-    {:ok,
-     base_entry(%{
-       name: Keyword.get(opts, :name, "sidecar-#{index}"),
-       version: "0.0.0",
-       module: nil,
-       kind: :sidecar,
-       order: index,
-       enabled: false,
-       note: :not_implemented
-     })}
-  end
-
   defp build_entry({module, opts}, index) when is_atom(module) and is_list(opts) do
     manifest = Manifest.normalize(module.manifest())
     grants = Keyword.get(opts, :grants, %{})
@@ -149,7 +164,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         {:error, "manifest declares no supported capability"}
 
       kind ->
-        {:ok, capability_entry(kind, manifest, module, grants, index)}
+        entry =
+          kind
+          |> capability_entry(manifest, grants, index)
+          |> Map.merge(%{
+            module: module,
+            impl: {:module, module},
+            config: Keyword.get(opts, :config, %{})
+          })
+
+        {:ok, entry}
     end
   rescue
     error -> {:error, Exception.message(error)}
@@ -157,13 +181,74 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
 
   defp build_entry(other, _index), do: {:error, "unrecognized plugin spec: #{inspect(other)}"}
 
-  defp capability_entry(:policy, manifest, module, grants, index) do
+  # Spawns the sidecar subprocess, fetches its manifest, and builds an entry
+  # keyed on `impl: {:sidecar, runner_name}`.
+  defp start_sidecar({:sidecar, opts}, index, supervisor) do
+    with {:ok, name} <- Keyword.fetch(opts, :name),
+         cmd when is_binary(cmd) <- resolve_cmd(Keyword.get(opts, :cmd)),
+         runner = Module.concat(SidecarRunner, name),
+         {:ok, _pid} <-
+           DynamicSupervisor.start_child(
+             supervisor,
+             {SidecarRunner,
+              name: runner,
+              cmd: cmd,
+              args: Enum.map(Keyword.get(opts, :args, []), &resolve_arg/1),
+              config: Keyword.get(opts, :config, %{})}
+           ),
+         %Manifest{} = manifest <- SidecarRunner.manifest(runner),
+         kind when not is_nil(kind) <-
+           Enum.find(@capability_kinds, &Map.has_key?(manifest.capabilities, &1)) do
+      grants = Keyword.get(opts, :grants, %{})
+
+      entry =
+        kind
+        |> capability_entry(manifest, grants, index)
+        |> Map.merge(%{
+          module: nil,
+          impl: {:sidecar, runner},
+          transport: :stdio,
+          config: Keyword.get(opts, :config, %{})
+        })
+        |> cap_sidecar_grants(kind, grants)
+
+      {:ok, entry}
+    else
+      :error -> {:error, "sidecar spec missing :name"}
+      nil -> {:error, "sidecar #{Keyword.get(opts, :name)}: manifest declares no capability"}
+      {:error, reason} -> {:error, "sidecar #{Keyword.get(opts, :name)}: #{inspect(reason)}"}
+      other -> {:error, "sidecar #{Keyword.get(opts, :name)}: #{inspect(other)}"}
+    end
+  end
+
+  # A sidecar may only block if the operator granted it (`grants: %{block: true}`).
+  defp cap_sidecar_grants(entry, :scanner, grants) do
+    %{entry | can_block: entry.can_block and Map.get(grants, :block, false) == true}
+  end
+
+  defp cap_sidecar_grants(entry, _kind, _grants), do: entry
+
+  defp resolve_cmd(nil), do: {:error, :missing_cmd}
+
+  defp resolve_cmd(cmd) when is_binary(cmd) do
+    cond do
+      Path.type(cmd) == :absolute -> cmd
+      exe = System.find_executable(cmd) -> exe
+      true -> {:error, "command not found on PATH: #{cmd}"}
+    end
+  end
+
+  defp resolve_arg({:priv, rel}),
+    do: Application.app_dir(:phoenix_elxir_beam, Path.join("priv", rel))
+
+  defp resolve_arg(arg) when is_binary(arg), do: arg
+
+  defp capability_entry(:policy, manifest, grants, index) do
     cap = manifest.capabilities.policy
 
     base_entry(%{
       name: manifest.plugin.name,
       version: manifest.plugin.version,
-      module: module,
       kind: :policy,
       phases: cap.phases,
       tool_tags: cap.tool_tags,
@@ -175,13 +260,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     })
   end
 
-  defp capability_entry(:scanner, manifest, module, _grants, index) do
+  defp capability_entry(:scanner, manifest, _grants, index) do
     cap = manifest.capabilities.scanner
 
     base_entry(%{
       name: manifest.plugin.name,
       version: manifest.plugin.version,
-      module: module,
       kind: :scanner,
       phases: cap.phases,
       data_needs: cap.data_needs,
@@ -193,11 +277,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     })
   end
 
-  defp capability_entry(:audit_sink, manifest, module, _grants, index) do
+  defp capability_entry(:audit_sink, manifest, _grants, index) do
     base_entry(%{
       name: manifest.plugin.name,
       version: manifest.plugin.version,
-      module: module,
       kind: :audit_sink,
       order: index,
       enabled: true
@@ -210,6 +293,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         name: nil,
         version: "0.0.0",
         module: nil,
+        impl: {:module, nil},
+        config: %{},
+        transport: :in_process,
         kind: nil,
         phases: [],
         tool_tags: [],
