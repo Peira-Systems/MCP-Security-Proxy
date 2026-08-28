@@ -109,6 +109,11 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, running: true)}
   end
 
+  def handle_event("run_restricted_agent", _params, socket) do
+    {:ok, _pid} = Demo.run_restricted_agent()
+    {:noreply, assign(socket, running: true)}
+  end
+
   def handle_event("run_rug_pull_demo", _params, socket) do
     {:ok, _pid} = Demo.run_rug_pull_demo()
 
@@ -496,12 +501,19 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         kind: to_string(entry.kind),
         source: source,
         enabled: entry.enabled,
-        health: health
+        health: health,
+        note: plugin_note(entry)
       }
     end)
   rescue
     _ -> []
   end
+
+  defp plugin_note(%{name: "rule-engine", config: %{"rules" => rules}}) when is_list(rules) do
+    "#{length(rules)} rule#{if length(rules) == 1, do: "", else: "s"}"
+  end
+
+  defp plugin_note(_entry), do: nil
 
   # The mock `server_id` (e.g. "files") behind a registered server whose
   # base URL points at this app's own mock endpoint, or nil if it points
@@ -719,6 +731,11 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   defp format_time(%DateTime{} = ts) do
     Calendar.strftime(ts, "%H:%M:%S")
   end
+
+  # "agent://ci-runner" -> "ci-runner" for the compact feed / history views.
+  defp short_agent("agent://" <> rest), do: rest
+  defp short_agent(agent) when is_binary(agent), do: agent
+  defp short_agent(_), do: nil
 
   defp format_datetime(%DateTime{} = ts) do
     Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")

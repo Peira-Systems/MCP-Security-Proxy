@@ -176,6 +176,17 @@ instances under a dynamic supervisor.
      (`files/read_config`, untagged, leaks a key → redacted + tainted → `post_webhook`
      blocked). `Wire` carries `session.taint` / `addTaintSources` for sidecar parity.
      Byte-level HMAC markers into later call args still deferred.)
+   - 7c. **Agent identity.** ✔ (`mcp-agent-id` request header → recorded on the session the
+     first time seen, never overwritten; threaded into `CallContext.call.agentId`, live
+     `Event`, `AuditEvent`, and a new `policy_events.agent_id` column — kept outside the
+     hash chain as request metadata. Demo scenarios send an agent id; dashboard feed +
+     history show it.)
+   - 7d. **Declarative policy rules.** ✔ (`MCP.Plugins.RuleEngine` — a `pre_call` `policy`
+     whose allow/deny/hold verdicts come from operator-written `rules` in its registration
+     `config:`. `match` predicates: `agent` / `agent_prefix` / `tool` / `server` /
+     `tool_tags_any` / `after_sensitive_read` / `if_tainted`; first match wins; unknown
+     predicate fails closed. Ships enabled in all envs with an `agent://ci-runner`
+     egress-deny rule; "Run restricted agent" demo; Plugins panel shows the rule count.)
 
 ## References
 

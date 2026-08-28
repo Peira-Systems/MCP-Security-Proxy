@@ -8,6 +8,7 @@ defmodule PhoenixElxirBeam.MCP.Event do
   defstruct [
     :id,
     :session_id,
+    :agent_id,
     :scenario,
     :server_id,
     :tool_name,
@@ -23,6 +24,7 @@ defmodule PhoenixElxirBeam.MCP.Event do
   @type t :: %__MODULE__{
           id: String.t(),
           session_id: String.t(),
+          agent_id: String.t() | nil,
           scenario: atom(),
           server_id: String.t() | nil,
           tool_name: String.t() | nil,

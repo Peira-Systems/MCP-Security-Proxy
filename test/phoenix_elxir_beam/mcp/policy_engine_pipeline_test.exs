@@ -29,7 +29,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEnginePipelineTest do
 
   defp egress_after_read(engine) do
     session = "s-#{System.unique_integer([:positive])}"
-    :ok = PolicyEngine.start_session(session, :attack, engine)
+    :ok = PolicyEngine.start_session(session, :attack, nil, engine)
 
     {:allow, _} =
       PolicyEngine.record_call(session, "files", "read_secrets", [:sensitive_read], engine)

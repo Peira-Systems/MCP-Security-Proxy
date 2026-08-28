@@ -5,6 +5,17 @@ import Config
 # Sidecar behaviour is exercised via the Node fixture + `Registry`'s `:plugins`.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.RuleEngine,
+     config: %{
+       "rules" => [
+         %{
+           "match" => %{"agent" => "agent://ci-runner", "tool_tags_any" => ["network_egress"]},
+           "action" => "deny",
+           "severity" => "high",
+           "reason" => "policy: agent ci-runner may not perform network egress"
+         }
+       ]
+     }},
     {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},

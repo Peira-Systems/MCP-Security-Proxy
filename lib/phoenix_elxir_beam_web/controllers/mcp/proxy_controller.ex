@@ -35,17 +35,18 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     jsonrpc_version = params["jsonrpc"] || "2.0"
     rpc_params = params["params"] || %{}
     session_id = conn |> get_req_header("mcp-session-id") |> List.first()
+    agent_id = conn |> get_req_header("mcp-agent-id") |> List.first()
 
     case method do
       "tools/call" ->
-        route_tool_call(conn, server_id, session_id, id, jsonrpc_version, rpc_params)
+        route_tool_call(conn, server_id, session_id, agent_id, id, jsonrpc_version, rpc_params)
 
       _ ->
         forward(conn, server_id, envelope(jsonrpc_version, id, method, rpc_params), id)
     end
   end
 
-  defp route_tool_call(conn, server_id, session_id, id, jsonrpc_version, rpc_params) do
+  defp route_tool_call(conn, server_id, session_id, agent_id, id, jsonrpc_version, rpc_params) do
     tool_name = rpc_params["name"]
 
     case quarantine_reason(server_id, tool_name) do
@@ -65,8 +66,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
         # Ensures session state exists before the policy decision runs, so a
         # lookup miss inside `record_call/5` is an anomaly PolicyEngine can
-        # fail closed on rather than the normal shape of a new session.
-        :ok = PolicyEngine.ensure_session(session_id)
+        # fail closed on rather than the normal shape of a new session. Also
+        # the point where a session's agent identity is first recorded.
+        :ok = PolicyEngine.ensure_session(session_id, agent_id)
 
         case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
           {:allow, _event} ->

@@ -21,7 +21,9 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   @default_page_size 25
 
   # Fields covered by the chain hash (everything meaningful except the
-  # chain columns themselves and the row id / inserted_at).
+  # chain columns themselves and the row id / inserted_at). `agent_id` is
+  # deliberately excluded so rows written before it existed still verify;
+  # it is request metadata, not a verdict-determining field.
   @hashed_keys ~w(event_id session_id scenario server_id tool_name tags status
                   reason occurred_at decisions findings)a
 
@@ -79,6 +81,7 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
     %{
       event_id: e.event_id,
       session_id: e.session_id,
+      agent_id: e.agent_id,
       scenario: e.scenario && to_string(e.scenario),
       server_id: e.server_id,
       tool_name: e.tool_name,

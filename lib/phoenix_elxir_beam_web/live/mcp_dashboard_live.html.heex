@@ -47,6 +47,15 @@
           Run untagged exfil
         </button>
         <button
+          id="run-restricted-agent-btn"
+          type="button"
+          phx-click="run_restricted_agent"
+          disabled={@running}
+          class="btn btn-outline btn-sm"
+        >
+          Run restricted agent
+        </button>
+        <button
           id="run-rug-pull-btn"
           type="button"
           phx-click="run_rug_pull_demo"
@@ -558,6 +567,13 @@
                   {finding_field(finding, :type)}
                 </span>
               </span>
+              <span
+                :if={event.agent_id}
+                class="shrink-0 text-neutral-content/30"
+                title="agent identity"
+              >
+                {short_agent(event.agent_id)}
+              </span>
               <span class="shrink-0 text-neutral-content/30">{event.scenario}</span>
             </div>
           </div>
@@ -656,6 +672,9 @@
                   </span>
                 </td>
                 <td class="px-3 py-1.5 text-right text-neutral-content/40">
+                  <div :if={entry.agent_id} class="text-neutral-content/60">
+                    {short_agent(entry.agent_id)}
+                  </div>
                   {entry.session_id}
                 </td>
               </tr>
@@ -732,6 +751,7 @@
           ]}>
             {plugin.source}
           </span>
+          <span :if={plugin.note} class="text-[10px] text-base-content/40">{plugin.note}</span>
           <span
             :if={plugin.health}
             class={[

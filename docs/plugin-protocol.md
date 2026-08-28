@@ -37,6 +37,16 @@ byte-level HMAC markers tracking the secret into later call arguments are not bu
 Scanner-proposed mutations are applied without an operator `canMutate` grant — a known
 simplification carried from the redaction path.)
 
+Agent identity: the proxy reads an `mcp-agent-id` request header, records it on the session
+the first time it is seen (fixed thereafter), and threads it into every `CallContext`
+(`call.agentId`), live `Event`, and durable `AuditEvent` / `policy_events` row (`agent_id`
+column — outside the hash chain, it is request metadata not a verdict input). `MCP.Plugins.RuleEngine`
+is a `pre_call` `policy` whose verdicts come from operator-written **rules** in its
+registration `config:` (`match` predicates on `agent` / `agent_prefix` / `tool` / `server` /
+`tool_tags_any` / `after_sensitive_read` / `if_tainted`; `action` `deny` / `allow` / `hold`;
+first match wins, no match → allow). It ships enabled in every env with an
+`agent://ci-runner` egress-deny rule.
+
 Hold (§7.2 / §9.4 / §16.3): a `policy` plugin's `verdict: :hold` parks the `tools/call`
 in `MCP.HoldRegistry` (the HTTP request stays open) and the dashboard shows an
 Approve / Deny card; `HoldRegistry.await/3` unblocks the controller, which drives

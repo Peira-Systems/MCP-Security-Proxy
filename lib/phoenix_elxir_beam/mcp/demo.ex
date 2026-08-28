@@ -1,7 +1,8 @@
 defmodule PhoenixElxirBeam.MCP.Demo do
   @moduledoc """
-  Drives the two demo scenarios as background tasks that make real HTTP
-  calls (via `Req`) to the proxy, exactly as a real MCP client would.
+  Drives the demo scenarios as background tasks that make real HTTP calls
+  (via `Req`) to the proxy, exactly as a real MCP client would — each with
+  an `mcp-session-id` and an `mcp-agent-id`.
   """
 
   alias PhoenixElxirBeam.MCP.{MockDrift, PolicyEngine, ServerRegistry}
@@ -59,6 +60,28 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   end
 
   @doc """
+  Restricted-agent simulation: the same benign-looking calls, but run as
+  `agent://ci-runner`. The operator's `RuleEngine` config denies that agent
+  network egress outright — pre-emptively, with no sensitive read needed.
+  """
+  def run_restricted_agent do
+    start_task(
+      :restricted_agent,
+      [
+        {"files", jsonrpc("initialize", %{})},
+        {"files", jsonrpc("tools/call", %{"name" => "list_files", "arguments" => %{}})},
+        {"net", jsonrpc("initialize", %{})},
+        {"net",
+         jsonrpc("tools/call", %{
+           "name" => "post_webhook",
+           "arguments" => %{"url" => "https://hooks.example/ci", "body" => "build result"}
+         })}
+      ],
+      "agent://ci-runner"
+    )
+  end
+
+  @doc """
   Rug-pull demo: register the `files` mock as an external server (a clean
   handshake), then poison its `tools/list` and re-handshake. The re-handshake
   trips `PhoenixElxirBeam.MCP.Plugins.RugPull`, quarantining `read_secrets`.
@@ -90,26 +113,28 @@ defmodule PhoenixElxirBeam.MCP.Demo do
     "http://127.0.0.1:#{port}/mcp/servers/#{server_id}"
   end
 
-  defp start_task(scenario, steps) do
+  @default_agent "agent://demo-client"
+
+  defp start_task(scenario, steps, agent \\ @default_agent) do
     Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
       session_id = generate_session_id()
-      PolicyEngine.start_session(session_id, scenario)
+      PolicyEngine.start_session(session_id, scenario, agent)
 
       Enum.each(steps, fn {server_id, body} ->
         Process.sleep(@step_delay_ms)
-        post(server_id, session_id, body)
+        post(server_id, session_id, agent, body)
       end)
 
       PolicyEngine.complete_session(session_id)
     end)
   end
 
-  defp post(server_id, session_id, body) do
+  defp post(server_id, session_id, agent, body) do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
 
     Req.post("http://127.0.0.1:#{port}/mcp/proxy/#{server_id}",
       json: body,
-      headers: [{"mcp-session-id", session_id}],
+      headers: [{"mcp-session-id", session_id}, {"mcp-agent-id", agent}],
       # A call parked for operator approval keeps the HTTP request open —
       # outlast the ApprovalGate hold timeout.
       receive_timeout: 130_000

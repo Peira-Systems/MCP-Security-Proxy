@@ -12,6 +12,23 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
 # skipped with a logged warning if `python` isn't on PATH.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.RuleEngine,
+     config: %{
+       "rules" => [
+         %{
+           "match" => %{"agent" => "agent://ci-runner", "tool_tags_any" => ["network_egress"]},
+           "action" => "deny",
+           "severity" => "high",
+           "reason" => "policy: agent ci-runner may not perform network egress"
+         },
+         %{
+           "match" => %{"agent" => "agent://ci-runner", "tool" => "read_secrets"},
+           "action" => "deny",
+           "severity" => "high",
+           "reason" => "policy: agent ci-runner may not read secrets"
+         }
+       ]
+     }},
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},

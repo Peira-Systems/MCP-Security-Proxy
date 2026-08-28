@@ -21,7 +21,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "benign two-call sequence is entirely allowed", %{name: name} do
     session_id = "session-benign"
-    :ok = PolicyEngine.start_session(session_id, :benign, name)
+    :ok = PolicyEngine.start_session(session_id, :benign, nil, name)
 
     assert {:allow, event1} =
              PolicyEngine.record_call(session_id, "files", "list_files", [], name)
@@ -36,7 +36,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "network egress after a sensitive read in the same session is blocked", %{name: name} do
     session_id = "session-attack"
-    :ok = PolicyEngine.start_session(session_id, :attack, name)
+    :ok = PolicyEngine.start_session(session_id, :attack, nil, name)
 
     assert {:allow, _event} =
              PolicyEngine.record_call(
@@ -59,8 +59,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
   } do
     session_a = "session-a"
     session_b = "session-b"
-    :ok = PolicyEngine.start_session(session_a, :attack, name)
-    :ok = PolicyEngine.start_session(session_b, :attack, name)
+    :ok = PolicyEngine.start_session(session_a, :attack, nil, name)
+    :ok = PolicyEngine.start_session(session_b, :attack, nil, name)
 
     assert {:allow, _event} =
              PolicyEngine.record_call(session_a, "files", "read_secrets", [:sensitive_read], name)
@@ -88,7 +88,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "ensure_session is idempotent and never resets tags already accumulated", %{name: name} do
     session_id = "session-ensure"
-    :ok = PolicyEngine.ensure_session(session_id, name)
+    :ok = PolicyEngine.ensure_session(session_id, nil, name)
 
     assert {:allow, _event} =
              PolicyEngine.record_call(
@@ -99,7 +99,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
                name
              )
 
-    :ok = PolicyEngine.ensure_session(session_id, name)
+    :ok = PolicyEngine.ensure_session(session_id, nil, name)
 
     assert {:block, event} =
              PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
@@ -109,7 +109,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "a pipeline block records which plugin decided in the durable log", %{name: name} do
     session_id = "session-decisions"
-    :ok = PolicyEngine.start_session(session_id, :attack, name)
+    :ok = PolicyEngine.start_session(session_id, :attack, nil, name)
 
     {:allow, _} =
       PolicyEngine.record_call(session_id, "files", "read_secrets", [:sensitive_read], name)
@@ -142,7 +142,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "verdicts are durably persisted for allows as well as blocks", %{name: name} do
     session_id = "session-receipts"
-    :ok = PolicyEngine.start_session(session_id, :benign, name)
+    :ok = PolicyEngine.start_session(session_id, :benign, nil, name)
 
     assert {:allow, allow_event} =
              PolicyEngine.record_call(session_id, "files", "list_files", [], name)
@@ -163,7 +163,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     name: name
   } do
     session_id = "session-taint"
-    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, name)
+    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, nil, name)
 
     # An untagged read: allowed, no tag accumulated.
     assert {:allow, _} = PolicyEngine.record_call(session_id, "files", "read_config", [], name)
@@ -192,7 +192,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
   test "taint accumulation is deduped and a clean scan with no taint is a no-op", %{name: name} do
     session_id = "session-taint-dedup"
-    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, name)
+    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, nil, name)
 
     source = %{origin_tool: "read_config", finding_type: "secret_leak", at: DateTime.utc_now()}
 
@@ -233,5 +233,52 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
     assert {:block, _event} =
              PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+  end
+
+  test "a session's agent identity is recorded and persisted on every event", %{name: name} do
+    session_id = "session-agent"
+    :ok = PolicyEngine.start_session(session_id, :benign, "agent://ci-runner", name)
+
+    {:allow, event} = PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+    assert row.agent_id == "agent://ci-runner"
+  end
+
+  test "a config rule denies a named agent's egress pre-emptively (no sensitive read)", %{
+    name: name
+  } do
+    session_id = "session-ci-runner"
+    :ok = PolicyEngine.start_session(session_id, :restricted_agent, "agent://ci-runner", name)
+
+    # A plain read is fine.
+    assert {:allow, _} = PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    # Egress is denied by the rule-engine rule, with no prior sensitive read.
+    assert {:block, event} =
+             PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    assert event.status == :blocked
+    assert event.reason =~ "ci-runner"
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+    assert [%{"plugin" => "rule-engine", "verdict" => "deny"}] = row.decisions
+  end
+
+  test "ensure_session records the agent the first time and never overwrites it", %{name: name} do
+    session_id = "session-agent-fixed"
+
+    :ok = PolicyEngine.ensure_session(session_id, "agent://first", name)
+    # A later call presenting a different (or absent) agent must not change it.
+    :ok = PolicyEngine.ensure_session(session_id, "agent://second", name)
+    :ok = PolicyEngine.ensure_session(session_id, nil, name)
+
+    {:allow, event} = PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+    assert row.agent_id == "agent://first"
   end
 end

@@ -58,8 +58,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @doc "Registers a new session and broadcasts `:session_start`."
-  def start_session(session_id, scenario, name \\ __MODULE__) do
-    GenServer.call(name, {:start_session, session_id, scenario})
+  def start_session(session_id, scenario, agent_id \\ nil, name \\ __MODULE__) do
+    GenServer.call(name, {:start_session, session_id, scenario, agent_id})
   end
 
   @doc """
@@ -67,9 +67,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   disturbing any tags already accumulated for it. The proxy calls this on
   every request so that a later lookup miss in `record_call/5` is a real
   anomaly rather than the normal shape of a new session.
+
+  `agent_id` is recorded the first time it is seen for a session and is
+  never overwritten or downgraded to `nil` afterwards — a session's agent
+  identity is fixed once established.
   """
-  def ensure_session(session_id, name \\ __MODULE__) do
-    GenServer.call(name, {:ensure_session, session_id})
+  def ensure_session(session_id, agent_id \\ nil, name \\ __MODULE__) do
+    GenServer.call(name, {:ensure_session, session_id, agent_id})
   end
 
   @doc """
@@ -147,9 +151,14 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @impl true
-  def handle_call({:start_session, session_id, scenario}, _from, state) do
+  def handle_call({:start_session, session_id, scenario, agent_id}, _from, state) do
     state =
-      put_in(state.sessions[session_id], %{scenario: scenario, tags: MapSet.new(), taint: []})
+      put_in(state.sessions[session_id], %{
+        scenario: scenario,
+        tags: MapSet.new(),
+        taint: [],
+        agent_id: agent_id
+      })
 
     event = %Event{
       id: generate_id(),
@@ -164,19 +173,29 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @impl true
-  def handle_call({:ensure_session, nil}, _from, state) do
+  def handle_call({:ensure_session, nil, _agent_id}, _from, state) do
     # No identity to key state on. Left unrecorded on purpose so a nil
     # session_id can never be silently pooled with other callers that
     # also have no session id — `record_call` fails closed on it instead.
     {:reply, :ok, state}
   end
 
-  def handle_call({:ensure_session, session_id}, _from, state) do
+  def handle_call({:ensure_session, session_id, agent_id}, _from, state) do
     state =
-      if Map.has_key?(state.sessions, session_id) do
-        state
-      else
-        put_in(state.sessions[session_id], %{scenario: nil, tags: MapSet.new(), taint: []})
+      case Map.get(state.sessions, session_id) do
+        nil ->
+          put_in(state.sessions[session_id], %{
+            scenario: nil,
+            tags: MapSet.new(),
+            taint: [],
+            agent_id: agent_id
+          })
+
+        %{agent_id: nil} = existing when not is_nil(agent_id) ->
+          put_in(state.sessions[session_id], %{existing | agent_id: agent_id})
+
+        _existing ->
+          state
       end
 
     {:reply, :ok, state}
@@ -239,6 +258,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
             call: %{
               id: generate_id(),
               session_id: session_id,
+              agent_id: session.agent_id,
               server_id: server_id,
               tool_name: tool_name,
               tags: tags,
@@ -420,7 +440,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   # A crash here would wipe every in-flight session's state, which is a worse
   # fail-open than the write failure it would be reacting to.
   defp receipt(event, state, opts \\ []) do
-    audit_event = AuditEvent.from_event(event, opts)
+    # A session's agent identity lives in session state, not on every Event
+    # construction site — stamp it here, on the way out.
+    agent_id = event.agent_id || get_in(state.sessions, [event.session_id, :agent_id])
+    event = %{event | agent_id: agent_id}
+    audit_event = AuditEvent.from_event(event, Keyword.put_new(opts, :agent_id, agent_id))
 
     try do
       broadcast(event)

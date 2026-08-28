@@ -18,6 +18,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEvent do
   schema "policy_events" do
     field(:event_id, :string)
     field(:session_id, :string)
+    field(:agent_id, :string)
     field(:scenario, :string)
     field(:server_id, :string)
     field(:tool_name, :string)
@@ -33,7 +34,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEvent do
     timestamps(updated_at: false, type: :utc_datetime_usec)
   end
 
-  @fields ~w(event_id session_id scenario server_id tool_name tags status reason
+  @fields ~w(event_id session_id agent_id scenario server_id tool_name tags status reason
              occurred_at prev_hash hash decisions findings)a
 
   @doc "Builds an insert changeset from a `PhoenixElxirBeam.MCP.AuditEvent` (via `EventLog`)."

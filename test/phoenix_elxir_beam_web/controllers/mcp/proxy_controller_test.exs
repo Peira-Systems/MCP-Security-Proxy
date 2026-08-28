@@ -26,6 +26,27 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert %{"isError" => false} = result
   end
 
+  test "the mcp-agent-id header is captured and stamped on the broadcast event", %{conn: conn} do
+    session_id = "proxy-test-agent-#{System.unique_integer([:positive])}"
+    Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, "mcp:events")
+
+    conn
+    |> with_session(session_id)
+    |> put_req_header("mcp-agent-id", "agent://ci-runner")
+    |> post(
+      ~p"/mcp/proxy/files",
+      call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
+    )
+
+    assert_receive {:mcp_event,
+                    %{
+                      session_id: ^session_id,
+                      tool_name: "list_files",
+                      agent_id: "agent://ci-runner"
+                    }},
+                   2_000
+  end
+
   test "the post_call scan redacts a credential in a tool response", %{conn: conn} do
     session_id = "proxy-test-redact-#{System.unique_integer([:positive])}"
 
