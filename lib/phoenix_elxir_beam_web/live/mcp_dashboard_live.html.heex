@@ -538,6 +538,16 @@
               <span class="min-w-0 flex-1 truncate">
                 <span :if={event.server_id}>{event.server_id}/{event.tool_name}</span>
                 <span :if={event.reason} class="ml-2 text-error">{event.reason}</span>
+                <span
+                  :for={finding <- event.findings || []}
+                  class={[
+                    "ml-1 rounded-full px-1.5 py-0.5 text-[10px]",
+                    finding_pill_class(finding)
+                  ]}
+                  title={finding_field(finding, :title)}
+                >
+                  {finding_field(finding, :type)}
+                </span>
               </span>
               <span class="shrink-0 text-neutral-content/30">{event.scenario}</span>
             </div>
@@ -625,6 +635,16 @@
                     {decision["plugin"]} · {decision["verdict"]}
                   </span>
                   <div :if={entry.reason} class="text-error">{entry.reason}</div>
+                  <span
+                    :for={finding <- entry.findings || []}
+                    class={[
+                      "mr-1 mt-0.5 inline-block rounded-full px-1.5 py-0.5 text-[10px]",
+                      finding_pill_class(finding)
+                    ]}
+                    title={finding_field(finding, :title)}
+                  >
+                    {finding_field(finding, :type)}
+                  </span>
                 </td>
                 <td class="px-3 py-1.5 text-right text-neutral-content/40">
                   {entry.session_id}

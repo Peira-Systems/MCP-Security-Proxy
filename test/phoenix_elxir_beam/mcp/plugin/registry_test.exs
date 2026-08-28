@@ -3,7 +3,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
 
   alias PhoenixElxirBeam.MCP.Decision
   alias PhoenixElxirBeam.MCP.Plugin.{Manifest, Registry}
-  alias PhoenixElxirBeam.MCP.Plugins.{ChainExfil, EventLogSink, RugPull}
+  alias PhoenixElxirBeam.MCP.Plugins.{ChainExfil, EventLogSink, RugPull, SecretLeak}
 
   defmodule AuditPolicy do
     @behaviour PhoenixElxirBeam.MCP.Plugin.Policy
@@ -124,6 +124,15 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert [%{name: "rug-pull"}] = Registry.active_scanners(:discovery, reg)
     assert [] = Registry.active_scanners(:pre_call, reg)
     assert [] = Registry.active_policies(:pre_call, reg)
+  end
+
+  test "active_post_call/1 lists a :post_call scanner and excludes a pre_call-only policy" do
+    reg = start_registry([{ChainExfil, []}, {SecretLeak, []}])
+
+    assert [%{name: "secret-leak", kind: :scanner}] = Registry.active_post_call(reg)
+
+    :ok = Registry.disable("secret-leak", reg)
+    assert [] = Registry.active_post_call(reg)
   end
 
   test "seeds an audit_sink plugin enabled and exposes it via active_sinks/1" do

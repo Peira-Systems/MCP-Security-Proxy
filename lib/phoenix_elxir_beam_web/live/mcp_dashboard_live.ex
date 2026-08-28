@@ -756,4 +756,18 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   defp tag_label("sensitive_read"), do: "sensitive"
   defp tag_label("network_egress"), do: "egress"
   defp tag_label(other), do: other
+
+  # A finding is a `Finding` struct on the live feed (broadcast straight from
+  # the pipeline) and a string-keyed map in the history table (round-tripped
+  # through the audit log).
+  defp finding_field(%{__struct__: _} = finding, key), do: Map.get(finding, key)
+  defp finding_field(finding, key) when is_map(finding), do: Map.get(finding, to_string(key))
+
+  defp finding_pill_class(finding) do
+    case finding_field(finding, :severity) do
+      s when s in [:critical, :high, "critical", "high"] -> "bg-error/20 text-error"
+      s when s in [:medium, "medium"] -> "bg-warning/20 text-warning"
+      _ -> "bg-base-300 text-base-content/60"
+    end
+  end
 end

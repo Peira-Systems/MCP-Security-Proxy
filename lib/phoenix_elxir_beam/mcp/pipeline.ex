@@ -86,6 +86,128 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     {:ok, findings, merge_tool_updates(updates)}
   end
 
+  @doc """
+  Runs every enabled `:post_call` `scanner` / `policy` in `entries` over `ctx`
+  (a `phase: :post_call` context, `response` populated), concurrently.
+
+  Returns `{verdict, findings, redactions, reason}`:
+
+    * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied
+      (the response is then withheld), else `:allow`;
+    * `redactions` — every `redact_response` mutation, to feed
+      `PhoenixElxirBeam.MCP.Redaction`.
+  """
+  @spec run_post_call(CallContext.t(), [entry()]) ::
+          {:allow | :deny, [Finding.t()], [map()], String.t() | nil}
+  def run_post_call(%CallContext{phase: :post_call} = ctx, entries) when is_list(entries) do
+    results =
+      entries
+      |> Enum.filter(&(&1.enabled and &1.kind in [:policy, :scanner] and :post_call in &1.phases))
+      |> Enum.sort_by(& &1.order)
+      |> Enum.map(&invoke_post_call(&1, ctx))
+
+    findings = Enum.flat_map(results, & &1.findings)
+    redactions = Enum.flat_map(results, & &1.redactions)
+    denial = Enum.find(results, &(&1.verdict == :deny))
+
+    if denial do
+      {:deny, findings, redactions, denial.reason || "response withheld by policy"}
+    else
+      {:allow, findings, redactions, nil}
+    end
+  end
+
+  defp invoke_post_call(entry, ctx) do
+    task = Task.Supervisor.async_nolink(@task_supervisor, fn -> post_call_eval(entry, ctx) end)
+
+    case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, findings}} when is_list(findings) ->
+        %{findings: findings, redactions: [], verdict: :allow, reason: nil}
+
+      {:ok, {:ok, findings, %Decision{} = d}} when is_list(findings) ->
+        %{
+          findings: findings,
+          redactions: redactions_of(d),
+          verdict: post_call_verdict(d, entry),
+          reason: d.reason
+        }
+
+      {:ok, %Decision{} = d} ->
+        %{
+          findings: d.findings,
+          redactions: redactions_of(d),
+          verdict: post_call_verdict(d, entry),
+          reason: d.reason
+        }
+
+      {:ok, other} ->
+        post_call_fail(entry, "returned #{inspect(other)}")
+
+      {:exit, reason} ->
+        post_call_fail(entry, "crashed (#{inspect(reason)})")
+
+      nil ->
+        post_call_fail(entry, "timed out after #{entry.timeout_ms}ms")
+    end
+  end
+
+  defp post_call_eval(%{impl: {:module, mod}, kind: :scanner} = entry, ctx) do
+    mod.scan(:post_call, %{ctx | plugin_config: entry.config})
+  end
+
+  defp post_call_eval(%{impl: {:module, mod}, kind: :policy} = entry, ctx) do
+    mod.evaluate(:post_call, %{ctx | phase: :post_call, plugin_config: entry.config})
+  end
+
+  defp post_call_eval(%{impl: {:sidecar, name}} = entry, ctx) do
+    case SidecarRunner.request(
+           name,
+           "call/inspectResponse",
+           %{"context" => Wire.encode_context(ctx, entry)},
+           entry.timeout_ms
+         ) do
+      {:ok, result} -> Wire.decode_decision(result)
+      {:error, reason} -> raise "sidecar call/inspectResponse failed: #{inspect(reason)}"
+    end
+  end
+
+  defp redactions_of(%Decision{mutations: m}) when is_map(m), do: Map.get(m, :redact_response, [])
+  defp redactions_of(_), do: []
+
+  # A scanner's `:deny` is only honoured with the `can_block` grant; `:hold` on
+  # post_call has no meaning (nothing to approve after the fact) → treat as deny.
+  defp post_call_verdict(%Decision{verdict: v}, %{kind: :scanner, can_block: false})
+       when v in [:deny, :hold],
+       do: :allow
+
+  defp post_call_verdict(%Decision{verdict: v}, _entry) when v in [:deny, :hold], do: :deny
+  defp post_call_verdict(_d, _entry), do: :allow
+
+  defp post_call_fail(entry, detail) do
+    Logger.warning("Pipeline: post_call #{entry.name} #{detail}; applying #{entry.fail_mode}")
+
+    finding =
+      Finding.new(%{
+        type: "plugin_error",
+        severity: :medium,
+        title: "post_call #{entry.kind} #{entry.name} #{detail}",
+        plugin: %{name: entry.name, version: entry.version}
+      })
+
+    case entry.fail_mode do
+      :fail_closed ->
+        %{
+          findings: [finding],
+          redactions: [],
+          verdict: :deny,
+          reason: "post_call plugin #{entry.name} unavailable"
+        }
+
+      :fail_open ->
+        %{findings: [finding], redactions: [], verdict: :allow, reason: nil}
+    end
+  end
+
   defp invoke_discovery(entry, ctx) do
     task = Task.Supervisor.async_nolink(@task_supervisor, fn -> discovery_scan(entry, ctx) end)
 

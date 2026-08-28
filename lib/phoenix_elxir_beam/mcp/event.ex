@@ -14,7 +14,8 @@ defmodule PhoenixElxirBeam.MCP.Event do
     :reason,
     :timestamp,
     tags: [],
-    status: :ok
+    status: :ok,
+    findings: []
   ]
 
   @type status :: :session_start | :ok | :blocked | :held | :session_complete
@@ -28,6 +29,7 @@ defmodule PhoenixElxirBeam.MCP.Event do
           tags: [atom()],
           status: status(),
           reason: String.t() | nil,
-          timestamp: DateTime.t()
+          timestamp: DateTime.t(),
+          findings: [map()]
         }
 end

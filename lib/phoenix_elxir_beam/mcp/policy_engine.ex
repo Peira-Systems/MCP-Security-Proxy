@@ -104,6 +104,30 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     GenServer.call(name, {:record_blocked, session_id, server_id, tool_name, reason})
   end
 
+  @doc """
+  Receipts the result of a `post_call` response scan. Skipped entirely when
+  the scan was clean (`findings == []` and not withheld). `withheld?` true →
+  a `:blocked` event (the whole response was discarded); otherwise an `:ok`
+  event carrying the `findings`.
+  """
+  def record_response_scan(
+        session_id,
+        server_id,
+        tool_name,
+        findings,
+        withheld?,
+        name \\ __MODULE__
+      )
+
+  def record_response_scan(_s, _sv, _t, [], false, _name), do: :ok
+
+  def record_response_scan(session_id, server_id, tool_name, findings, withheld?, name) do
+    GenServer.call(
+      name,
+      {:record_response_scan, session_id, server_id, tool_name, findings, withheld?}
+    )
+  end
+
   # Server callbacks
 
   @impl true
@@ -151,6 +175,32 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     event = blocked_event(session_id, nil, server_id, tool_name, [], reason)
     receipt(event, state)
     {:reply, {:block, event}, state}
+  end
+
+  def handle_call(
+        {:record_response_scan, session_id, server_id, tool_name, findings, withheld?},
+        _from,
+        state
+      ) do
+    scenario = get_in(state.sessions, [session_id, :scenario])
+
+    {status, reason} =
+      if withheld?, do: {:blocked, "response withheld by policy"}, else: {:ok, nil}
+
+    event = %Event{
+      id: generate_id(),
+      session_id: session_id,
+      scenario: scenario,
+      server_id: server_id,
+      tool_name: tool_name,
+      status: status,
+      reason: reason,
+      findings: findings,
+      timestamp: DateTime.utc_now()
+    }
+
+    receipt(event, state, findings: findings)
+    {:reply, :ok, state}
   end
 
   def handle_call({:record_call, nil, server_id, tool_name, tags}, _from, state) do

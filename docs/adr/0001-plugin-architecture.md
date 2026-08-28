@@ -160,6 +160,13 @@ instances under a dynamic supervisor.
    gate; `:held` event status. Approve = allow, chain not resumed — §9.4 deviation noted.)
 7. Incremental, no new infrastructure: taint tracking, prompt-injection scanner,
    declarative policy, agent identity, behavioural baselining, OTel/SIEM sinks.
+   - 7a. **`post_call` phase + response scanning.** ✔ (`Pipeline.run_post_call/2` runs the
+     `post_call` `scanner` + `policy` set concurrently; `Registry.active_post_call/1`;
+     `MCP.Redaction` applies `redactResponse` mutations; `MCP.Plugins.SecretLeak` redacts
+     credentials in a tool response before the agent sees them; `ProxyController` forwards
+     then scans, withholding the whole response as `-32002` on a `policy` / `canBlock`
+     `deny`; `Event` carries `findings`, shown as pills in the live feed + history.
+     Taint tracking and a shipped withholding policy still deferred.)
 
 ## References
 

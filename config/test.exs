@@ -7,6 +7,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
     {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
+    {PhoenixElxirBeam.MCP.Plugins.SecretLeak, []},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
   ]
 

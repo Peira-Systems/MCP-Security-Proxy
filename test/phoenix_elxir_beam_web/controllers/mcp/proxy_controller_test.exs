@@ -26,6 +26,38 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert %{"isError" => false} = result
   end
 
+  test "the post_call scan redacts a credential in a tool response", %{conn: conn} do
+    session_id = "proxy-test-redact-#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/files",
+        call_body("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
+      )
+
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(conn, 200)
+    refute text =~ "sk-demo-FAKE1234"
+    assert text =~ "redacted by secret-leak"
+    assert text =~ "(simulated content, not a real secret)"
+  end
+
+  test "a response with no secret is forwarded unchanged", %{conn: conn} do
+    session_id = "proxy-test-clean-#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/files",
+        call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
+      )
+
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(conn, 200)
+    assert text == "README.md\nnotes.txt\nsecrets.env\n(simulated directory listing)"
+  end
+
   test "a network-egress call following a sensitive read is blocked", %{conn: _conn} do
     session_id = "proxy-test-attack-#{System.unique_integer([:positive])}"
 

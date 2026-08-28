@@ -36,6 +36,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
+    {PhoenixElxirBeam.MCP.Plugins.SecretLeak, []},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},
     {:sidecar,
      name: "prompt-injection-scanner",

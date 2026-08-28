@@ -1,6 +1,6 @@
 # Proxy Plugin Protocol
 
-**Status:** Draft · **Version:** `0.1` · **Last updated:** 2026-08-27
+**Status:** Draft · **Version:** `0.1` · **Last updated:** 2026-08-28
 
 This document specifies how the MCP Security Proxy is extended with **plugins** — units of
 detection and enforcement logic that the proxy consults as MCP traffic flows through it.
@@ -18,13 +18,17 @@ identically.
 
 Built: `CallContext`, `Decision`, `Finding`, `Manifest`; the `Policy` / `Scanner` /
 `AuditSink` behaviours; the `Plugin.Registry` (config-seeded, `enable` / `disable` /
-`reorder`, `active_policies` / `active_scanners`); `Pipeline.run/3` for the **`pre_call`
-`policy` chain** (ordered, short-circuit on first `:deny`, granted `add_tags` applied
-between plugins) and `Pipeline.run_discovery/2` for the **`discovery` `scanner` set**
-(findings + per-tool `quarantine` / `add_tags` merged); per-plugin `timeout_ms` +
+`reorder`, `active_policies` / `active_scanners` / `active_post_call`); `Pipeline.run/3`
+for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, granted
+`add_tags` applied between plugins), `Pipeline.run_discovery/2` for the **`discovery`
+`scanner` set** (findings + per-tool `quarantine` / `add_tags` merged), and
+`Pipeline.run_post_call/2` for the **`post_call` `scanner` + `policy` set** (concurrent;
+`redactResponse` mutations merged and applied by `MCP.Redaction`; a `policy` `:deny` or a
+`canBlock` `scanner` `:deny` withholds the response as `-32002`). Per-plugin `timeout_ms` +
 `fail_mode` enforced by the proxy. `ServerRegistry.rehandshake/2` re-runs the
 handshake and drives the discovery scan; a quarantined tool is refused by
-`ProxyController` with JSON-RPC `-32003`.
+`ProxyController` with JSON-RPC `-32003`. `MCP.Plugins.SecretLeak` is the reference
+`post_call` scanner — it redacts credentials in a tool response before the agent sees them.
 
 Hold (§7.2 / §9.4 / §16.3): a `policy` plugin's `verdict: :hold` parks the `tools/call`
 in `MCP.HoldRegistry` (the HTTP request stays open) and the dashboard shows an
@@ -53,12 +57,12 @@ and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the 
 `priv/plugins/prompt_injection_scanner.py` runs as a `discovery` scanner. A read-only
 **Plugins** panel on the dashboard lists every plugin and each sidecar's health.
 
-Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` / `post_call` scanner
-invocation and the `post_call` phase;
-batched / remote audit sinks and a real `audit/record` notification (steps 5, 7); the
-sidecar JSON-RPC runner and `{:sidecar, _}` activation (step 5); circuit breaker, decision
-cache, `:hold` + approval UI (step 6); a dashboard UI for the plugin registry. `Pipeline`
-currently coerces `:hold` to `:deny`.
+Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation;
+`post_call` invocation of **sidecar** plugins (`call/inspectResponse` is wired in
+`Pipeline` but no sidecar declares `post_call` yet); taint tracking (`addTaintSources`);
+batched / remote audit sinks and a real `audit/record` notification; a dashboard UI for
+the plugin registry; circuit breaker and decision cache. On `post_call`, `:hold` is
+coerced to `:deny` (nothing to approve after the fact).
 
 ---
 

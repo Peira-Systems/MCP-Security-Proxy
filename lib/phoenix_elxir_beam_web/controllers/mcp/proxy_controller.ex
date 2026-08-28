@@ -12,15 +12,21 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   use PhoenixElxirBeamWeb, :controller
 
   alias PhoenixElxirBeam.MCP.{
+    CallContext,
     HoldRegistry,
     HttpTransport,
+    Pipeline,
     PolicyEngine,
+    Redaction,
     ServerRegistry,
     StdioServer,
     ToolCatalog
   }
 
+  alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
+
   @chain_blocked_code -32001
+  @response_withheld_code -32002
   @quarantined_code -32003
 
   def handle(conn, %{"server_id" => server_id} = params) do
@@ -64,7 +70,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
         case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
           {:allow, _event} ->
-            forward(conn, server_id, envelope(jsonrpc_version, id, "tools/call", rpc_params), id)
+            call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc_version, rpc_params)
 
           {:block, event} ->
             json(conn, %{
@@ -95,7 +101,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         {:allow, _event} =
           PolicyEngine.finalize_hold(c.session_id, c.server_id, c.tool_name, c.tags, :approved)
 
-        forward(conn, c.server_id, envelope(c.jsonrpc, c.id, "tools/call", c.rpc_params), c.id)
+        call_and_scan(conn, c.server_id, c.session_id, c.tool_name, c.id, c.jsonrpc, c.rpc_params)
 
       {:ok, :denied} ->
         {:block, event} =
@@ -138,43 +144,90 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
+  # Non-`tools/call` methods (initialize / tools/list): forward verbatim, no scan.
   defp forward(conn, server_id, body, id) do
-    case ServerRegistry.get_server(server_id) do
-      nil -> forward_to_mock(conn, server_id, body, id)
-      server -> forward_to_real(conn, server, body, id)
+    case fetch(server_id, body) do
+      {:ok, resp_body} -> json(conn, resp_body)
+      {:error, message} -> upstream_error(conn, id, message)
     end
   end
 
-  defp forward_to_mock(conn, server_id, body, id) do
+  # `tools/call`: forward, then run the `post_call` pipeline over the response
+  # and apply any redactions (or withhold the whole response) before replying.
+  defp call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc, rpc_params) do
+    case fetch(server_id, envelope(jsonrpc, id, "tools/call", rpc_params)) do
+      {:error, message} ->
+        upstream_error(conn, id, message)
+
+      {:ok, %{"result" => %{"content" => content}} = resp_body} when is_list(content) ->
+        ctx =
+          CallContext.new(%{
+            phase: :post_call,
+            call: %{
+              session_id: session_id,
+              server_id: server_id,
+              tool_name: tool_name,
+              method: "tools/call"
+            },
+            response: %{is_error: false, content: content}
+          })
+
+        {verdict, findings, redactions, reason} =
+          Pipeline.run_post_call(ctx, PluginRegistry.active_post_call())
+
+        case verdict do
+          :deny ->
+            PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, true)
+
+            json(conn, %{
+              "jsonrpc" => jsonrpc,
+              "id" => id,
+              "error" => %{"code" => @response_withheld_code, "message" => reason}
+            })
+
+          :allow ->
+            PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, false)
+            content = Redaction.apply(content, redactions)
+            json(conn, put_in(resp_body, ["result", "content"], content))
+        end
+
+      {:ok, resp_body} ->
+        # Error result or an unexpected shape — nothing to scan.
+        json(conn, resp_body)
+    end
+  end
+
+  defp fetch(server_id, body) do
+    case ServerRegistry.get_server(server_id) do
+      nil -> fetch_from_mock(server_id, body)
+      server -> fetch_from_real(server, body)
+    end
+  end
+
+  defp fetch_from_mock(server_id, body) do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
 
     case Req.post("http://127.0.0.1:#{port}/mcp/servers/#{server_id}", json: body) do
-      {:ok, %{status: 200, body: resp_body}} ->
-        json(conn, resp_body)
-
-      _ ->
-        upstream_error(conn, id, "upstream mock server error")
+      {:ok, %{status: 200, body: resp_body}} -> {:ok, resp_body}
+      _ -> {:error, "upstream mock server error"}
     end
   end
 
-  defp forward_to_real(conn, %{transport: :stdio, pid: pid}, body, id) do
+  defp fetch_from_real(%{transport: :stdio, pid: pid}, body) do
     case StdioServer.request(pid, body) do
-      {:ok, resp_body} -> json(conn, resp_body)
-      {:error, _reason} -> upstream_error(conn, id, "upstream real server error")
+      {:ok, resp_body} -> {:ok, resp_body}
+      {:error, _reason} -> {:error, "upstream real server error"}
     end
   end
 
-  defp forward_to_real(conn, %{transport: :http} = server, body, id) do
+  defp fetch_from_real(%{transport: :http} = server, body) do
     session_headers = if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
     {url, transport_headers} = HttpTransport.prepare(server.base_url)
     headers = transport_headers ++ session_headers
 
     case Req.post(url, json: body, headers: headers, receive_timeout: 15_000) do
-      {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
-        json(conn, resp_body)
-
-      _ ->
-        upstream_error(conn, id, "upstream real server error")
+      {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
+      _ -> {:error, "upstream real server error"}
     end
   end
 
