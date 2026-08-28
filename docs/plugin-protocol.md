@@ -64,10 +64,12 @@ Plugin lists are configured per-env (`config/{test,dev,prod}.exs`), each setting
 `plugins:` list once (`Config` merges keyword-shaped lists by key, so there is no base
 list to override).
 
-Audit: `AuditEvent` + the `AuditSink` behaviour + `Plugins.EventLogSink` (synchronous
-fan-out from `PolicyEngine`), `decisions` / `findings` persisted, and a `prev_hash` / `hash`
-chain over `policy_events` with `EventLog.verify_chain/0` + a dashboard "verify audit chain"
-button.
+Audit: `AuditEvent` + the `AuditSink` behaviour, synchronous fan-out from `PolicyEngine` to
+every enabled sink. Two ship: `Plugins.EventLogSink` (durable — `decisions` / `findings` /
+`agent_id` persisted, `prev_hash` / `hash` chain over `policy_events`, `EventLog.verify_chain/0`
++ a dashboard "verify audit chain" button) and `Plugins.StructuredLogSink` (one JSON line per
+event on the `Logger` at `:info`, prefixed `mcp.audit`, for a log shipper → SIEM / OTel).
+Adding an exporter is a new plugin + one `plugins:` entry, no core change.
 
 Sidecars: the **stdio** transport (§5.1) is built — `Plugin.SidecarRunner` (spawn +
 `initialize` handshake + per-request timeout + circuit breaker), `Plugin.Wire` (the §7/§9

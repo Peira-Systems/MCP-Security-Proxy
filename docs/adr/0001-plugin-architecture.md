@@ -194,6 +194,11 @@ instances under a dynamic supervisor.
      stringified arguments contain a tracked secret, with a `tainted_argument` critical
      finding. "Run secret-in-arg exfil" demo. Real HMAC markers still stand-in'd by
      substring match.)
+   - 7f. **Second audit sink.** ✔ (`MCP.Plugins.StructuredLogSink` — `@behaviour AuditSink`,
+     emits each `AuditEvent` as one `mcp.audit {…}` JSON line on `Logger` at `:info` for a
+     log shipper to forward to a SIEM / the OTel Collector. Runs alongside `EventLogSink`;
+     proves the fan-out is genuinely multi-sink with zero core change — two `plugins:`
+     entries. Verdict metadata only, no raw evidence.)
 
 ## References
 
