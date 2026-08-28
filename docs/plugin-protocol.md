@@ -28,7 +28,14 @@ for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, 
 `fail_mode` enforced by the proxy. `ServerRegistry.rehandshake/2` re-runs the
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`. `MCP.Plugins.SecretLeak` is the reference
-`post_call` scanner — it redacts credentials in a tool response before the agent sees them.
+`post_call` scanner — it redacts credentials in a tool response before the agent sees them
+and proposes an `addTaintSources` mutation. The proxy folds those into session
+`taint` provenance; `MCP.Plugins.TaintGuard` (a `pre_call` `policy`, `toolTags:
+[network_egress]`) then denies egress once the session has handled a secret — even when the
+leaking tool carried no `:sensitive_read` tag. (Taint is session-level provenance;
+byte-level HMAC markers tracking the secret into later call arguments are not built.
+Scanner-proposed mutations are applied without an operator `canMutate` grant — a known
+simplification carried from the redaction path.)
 
 Hold (§7.2 / §9.4 / §16.3): a `policy` plugin's `verdict: :hold` parks the `tools/call`
 in `MCP.HoldRegistry` (the HTTP request stays open) and the dashboard shows an
@@ -59,10 +66,11 @@ and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the 
 
 Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation;
 `post_call` invocation of **sidecar** plugins (`call/inspectResponse` is wired in
-`Pipeline` but no sidecar declares `post_call` yet); taint tracking (`addTaintSources`);
-batched / remote audit sinks and a real `audit/record` notification; a dashboard UI for
-the plugin registry; circuit breaker and decision cache. On `post_call`, `:hold` is
-coerced to `:deny` (nothing to approve after the fact).
+`Pipeline` but no sidecar declares `post_call` yet); byte-level taint markers (session
+provenance is built — `addTaintSources` + `TaintGuard` — but the secret bytes are not
+tracked into later call arguments); batched / remote audit sinks and a real `audit/record`
+notification; a dashboard UI for the plugin registry; circuit breaker and decision cache.
+On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after the fact).
 
 ---
 
@@ -282,14 +290,14 @@ interface CallContext {
     descriptionHash: string;            // "sha256:…" over {name,description,inputSchema}
   };
 
-  session?: {                           // gated by dataNeeds
+  session?: {                           // gated by dataNeeds ("session.taint")
     seenTags: string[];                 // tags accumulated earlier in this session
     taint: {
       sources: Array<{
-        marker: string;                 // HMAC token, safe to log/compare, not reversible
-        originTool: string;
-        originCallId: string;
-        createdAt: string;
+        originTool: string;             // tool whose response leaked a secret
+        findingType: string;            // e.g. "secret_leak"
+        at: string;                     // RFC 3339
+        // marker/originCallId (byte-level HMAC tracking) — reserved, not yet emitted
       }>;
     };
     callsSoFar: number;

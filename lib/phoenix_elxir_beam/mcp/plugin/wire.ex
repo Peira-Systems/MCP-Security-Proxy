@@ -45,6 +45,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
 
     base
     |> maybe_put("call", "arguments", needs, "call.arguments", fn -> call[:arguments] end)
+    |> maybe_put_session_taint(ctx.session, needs)
     |> maybe_put_tool(ctx.tool, needs)
     |> maybe_put_response(ctx.response, needs)
   end
@@ -131,6 +132,29 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
     end
   end
 
+  defp maybe_put_session_taint(acc, session, needs) do
+    if "session.taint" in needs do
+      sources =
+        session
+        |> Map.get(:taint, %{})
+        |> Map.get(:sources, [])
+        |> Enum.map(fn s ->
+          %{
+            "originTool" => Map.get(s, :origin_tool),
+            "findingType" => Map.get(s, :finding_type),
+            "at" => encode_time(Map.get(s, :at))
+          }
+        end)
+
+      put_in(acc, ["session", "taint"], %{"sources" => sources})
+    else
+      acc
+    end
+  end
+
+  defp encode_time(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp encode_time(other), do: other
+
   defp maybe_put_tool(acc, nil, _needs), do: acc
 
   defp maybe_put_tool(acc, tool, needs) do
@@ -208,7 +232,29 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
     %{}
     |> put_mutation(:add_tags, decode_tags(map["addTags"] || []))
     |> put_mutation(:redact_response, map["redactResponse"])
+    |> put_mutation(:add_taint_sources, decode_taint_sources(map["addTaintSources"]))
   end
+
+  defp decode_taint_sources(nil), do: []
+
+  defp decode_taint_sources(list) when is_list(list) do
+    Enum.map(list, fn s ->
+      %{
+        origin_tool: s["originTool"] || s["origin_tool"],
+        finding_type: s["findingType"] || s["finding_type"] || "unknown",
+        at: decode_time(s["at"])
+      }
+    end)
+  end
+
+  defp decode_time(s) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+
+  defp decode_time(_), do: nil
 
   defp put_mutation(acc, _key, nil), do: acc
   defp put_mutation(acc, _key, []), do: acc

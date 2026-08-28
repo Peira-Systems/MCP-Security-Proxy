@@ -104,6 +104,11 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, running: true)}
   end
 
+  def handle_event("run_untagged_exfil", _params, socket) do
+    {:ok, _pid} = Demo.run_untagged_exfil()
+    {:noreply, assign(socket, running: true)}
+  end
+
   def handle_event("run_rug_pull_demo", _params, socket) do
     {:ok, _pid} = Demo.run_rug_pull_demo()
 

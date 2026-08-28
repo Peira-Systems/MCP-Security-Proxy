@@ -13,6 +13,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
+    {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
     {PhoenixElxirBeam.MCP.Plugins.SecretLeak, []},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},

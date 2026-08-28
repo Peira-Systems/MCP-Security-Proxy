@@ -20,6 +20,18 @@ defmodule PhoenixElxirBeam.MCP.ToolCatalog do
         tags: [:sensitive_read],
         input_schema: %{"type" => "object", "properties" => %{}},
         response: "API_KEY=sk-demo-FAKE1234 (simulated content, not a real secret)"
+      },
+      %{
+        name: "read_config",
+        description: "Read the app config file",
+        # Deliberately untagged: the operator never marked this sensitive, so
+        # tag-based rules (ChainExfil / ApprovalGate) never fire on it. The
+        # `post_call` secret scanner still catches the leak in its response
+        # and taints the session, so TaintGuard blocks a later egress.
+        tags: [],
+        input_schema: %{"type" => "object", "properties" => %{}},
+        response:
+          "region=us-east-1\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE (simulated, not a real secret)"
       }
     ],
     "net" => [

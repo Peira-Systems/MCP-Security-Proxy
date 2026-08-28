@@ -38,6 +38,15 @@
           Run attack simulation
         </button>
         <button
+          id="run-untagged-exfil-btn"
+          type="button"
+          phx-click="run_untagged_exfil"
+          disabled={@running}
+          class="btn btn-outline btn-sm"
+        >
+          Run untagged exfil
+        </button>
+        <button
           id="run-rug-pull-btn"
           type="button"
           phx-click="run_rug_pull_demo"

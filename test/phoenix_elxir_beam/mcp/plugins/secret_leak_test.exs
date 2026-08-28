@@ -44,9 +44,18 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeakTest do
     assert [%{path: "content[1].text"}] = decision.mutations.redact_response
   end
 
-  test "clean content yields no findings and no redactions" do
+  test "clean content yields no findings, no redactions and no taint" do
     assert {:ok, [], decision} = SecretLeak.scan(:post_call, ctx(["just some ordinary text"]))
     assert decision.mutations.redact_response == []
+    refute Map.has_key?(decision.mutations, :add_taint_sources)
+  end
+
+  test "a hit also proposes one taint source naming the origin tool" do
+    assert {:ok, [_ | _], decision} =
+             SecretLeak.scan(:post_call, ctx(["API_KEY=sk-demo-FAKE1234 trailing"]))
+
+    assert [%{origin_tool: "read_secrets", finding_type: "secret_leak", at: %DateTime{}}] =
+             decision.mutations.add_taint_sources
   end
 
   test "manifest declares a non-blocking post_call scanner" do

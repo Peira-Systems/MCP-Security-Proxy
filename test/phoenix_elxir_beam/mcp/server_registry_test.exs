@@ -20,7 +20,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     assert {:ok, server} = ServerRegistry.register_server("External files", base_url, name)
     assert server.name == "External files"
     assert server.base_url == base_url
-    assert Enum.map(server.tools, & &1.name) == ["list_files", "read_secrets"]
+    assert Enum.map(server.tools, & &1.name) == ["list_files", "read_secrets", "read_config"]
     assert Enum.all?(server.tools, &(&1.tags == []))
 
     assert ServerRegistry.list_servers(name) == [server]

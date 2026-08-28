@@ -105,10 +105,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @doc """
-  Receipts the result of a `post_call` response scan. Skipped entirely when
-  the scan was clean (`findings == []` and not withheld). `withheld?` true →
-  a `:blocked` event (the whole response was discarded); otherwise an `:ok`
-  event carrying the `findings`.
+  Receipts the result of a `post_call` response scan and folds any
+  `taint_sources` the scan produced into the session's taint provenance.
+  Skipped entirely when the scan was clean (no findings, not withheld, no
+  taint). `withheld?` true → a `:blocked` event (the whole response was
+  discarded); otherwise an `:ok` event carrying the `findings`.
   """
   def record_response_scan(
         session_id,
@@ -116,15 +117,25 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         tool_name,
         findings,
         withheld?,
+        taint_sources \\ [],
         name \\ __MODULE__
       )
 
-  def record_response_scan(_s, _sv, _t, [], false, _name), do: :ok
+  def record_response_scan(_s, _sv, _t, [], false, [], _name), do: :ok
 
-  def record_response_scan(session_id, server_id, tool_name, findings, withheld?, name) do
+  def record_response_scan(
+        session_id,
+        server_id,
+        tool_name,
+        findings,
+        withheld?,
+        taint_sources,
+        name
+      ) do
     GenServer.call(
       name,
-      {:record_response_scan, session_id, server_id, tool_name, findings, withheld?}
+      {:record_response_scan, session_id, server_id, tool_name, findings, withheld?,
+       taint_sources}
     )
   end
 
@@ -137,7 +148,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
   @impl true
   def handle_call({:start_session, session_id, scenario}, _from, state) do
-    state = put_in(state.sessions[session_id], %{scenario: scenario, tags: MapSet.new()})
+    state =
+      put_in(state.sessions[session_id], %{scenario: scenario, tags: MapSet.new(), taint: []})
 
     event = %Event{
       id: generate_id(),
@@ -164,7 +176,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       if Map.has_key?(state.sessions, session_id) do
         state
       else
-        put_in(state.sessions[session_id], %{scenario: nil, tags: MapSet.new()})
+        put_in(state.sessions[session_id], %{scenario: nil, tags: MapSet.new(), taint: []})
       end
 
     {:reply, :ok, state}
@@ -178,11 +190,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   def handle_call(
-        {:record_response_scan, session_id, server_id, tool_name, findings, withheld?},
+        {:record_response_scan, session_id, server_id, tool_name, findings, withheld?,
+         taint_sources},
         _from,
         state
       ) do
     scenario = get_in(state.sessions, [session_id, :scenario])
+    state = accumulate_taint(state, session_id, taint_sources)
 
     {status, reason} =
       if withheld?, do: {:blocked, "response withheld by policy"}, else: {:ok, nil}
@@ -230,7 +244,10 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
               tags: tags,
               method: "tools/call"
             },
-            session: %{seen_tags: MapSet.to_list(session.tags)}
+            session: %{
+              seen_tags: MapSet.to_list(session.tags),
+              taint: %{sources: session.taint}
+            }
           })
 
         {pipeline_verdict, decision, findings} =
@@ -301,6 +318,23 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     update_in(state.sessions[session_id], fn existing ->
       %{existing | tags: MapSet.union(existing.tags, MapSet.new(tags))}
     end)
+  end
+
+  # Appends taint sources to the session's provenance, deduped on
+  # {origin_tool, finding_type}. A no-op for an unknown / nil session id —
+  # a scan without recorded session state can't taint anything.
+  defp accumulate_taint(state, _session_id, []), do: state
+
+  defp accumulate_taint(state, session_id, sources) do
+    if Map.has_key?(state.sessions, session_id) do
+      update_in(state.sessions[session_id], fn existing ->
+        seen = MapSet.new(existing.taint, &{&1.origin_tool, &1.finding_type})
+        fresh = Enum.reject(sources, &MapSet.member?(seen, {&1.origin_tool, &1.finding_type}))
+        %{existing | taint: existing.taint ++ fresh}
+      end)
+    else
+      state
+    end
   end
 
   defp reply_verdict(

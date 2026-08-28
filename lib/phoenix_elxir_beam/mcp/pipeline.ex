@@ -90,15 +90,17 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   Runs every enabled `:post_call` `scanner` / `policy` in `entries` over `ctx`
   (a `phase: :post_call` context, `response` populated), concurrently.
 
-  Returns `{verdict, findings, redactions, reason}`:
+  Returns `{verdict, findings, redactions, taint_sources, reason}`:
 
     * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied
       (the response is then withheld), else `:allow`;
     * `redactions` — every `redact_response` mutation, to feed
-      `PhoenixElxirBeam.MCP.Redaction`.
+      `PhoenixElxirBeam.MCP.Redaction`;
+    * `taint_sources` — every `add_taint_sources` mutation, to fold into the
+      session's taint provenance.
   """
   @spec run_post_call(CallContext.t(), [entry()]) ::
-          {:allow | :deny, [Finding.t()], [map()], String.t() | nil}
+          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
   def run_post_call(%CallContext{phase: :post_call} = ctx, entries) when is_list(entries) do
     results =
       entries
@@ -108,12 +110,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
     findings = Enum.flat_map(results, & &1.findings)
     redactions = Enum.flat_map(results, & &1.redactions)
+    taint_sources = Enum.flat_map(results, & &1.taint_sources)
     denial = Enum.find(results, &(&1.verdict == :deny))
 
     if denial do
-      {:deny, findings, redactions, denial.reason || "response withheld by policy"}
+      {:deny, findings, redactions, taint_sources, denial.reason || "response withheld by policy"}
     else
-      {:allow, findings, redactions, nil}
+      {:allow, findings, redactions, taint_sources, nil}
     end
   end
 
@@ -122,12 +125,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
     case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, findings}} when is_list(findings) ->
-        %{findings: findings, redactions: [], verdict: :allow, reason: nil}
+        %{findings: findings, redactions: [], taint_sources: [], verdict: :allow, reason: nil}
 
       {:ok, {:ok, findings, %Decision{} = d}} when is_list(findings) ->
         %{
           findings: findings,
           redactions: redactions_of(d),
+          taint_sources: taint_sources_of(d),
           verdict: post_call_verdict(d, entry),
           reason: d.reason
         }
@@ -136,6 +140,7 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
         %{
           findings: d.findings,
           redactions: redactions_of(d),
+          taint_sources: taint_sources_of(d),
           verdict: post_call_verdict(d, entry),
           reason: d.reason
         }
@@ -174,6 +179,11 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   defp redactions_of(%Decision{mutations: m}) when is_map(m), do: Map.get(m, :redact_response, [])
   defp redactions_of(_), do: []
 
+  defp taint_sources_of(%Decision{mutations: m}) when is_map(m),
+    do: Map.get(m, :add_taint_sources, [])
+
+  defp taint_sources_of(_), do: []
+
   # A scanner's `:deny` is only honoured with the `can_block` grant; `:hold` on
   # post_call has no meaning (nothing to approve after the fact) → treat as deny.
   defp post_call_verdict(%Decision{verdict: v}, %{kind: :scanner, can_block: false})
@@ -199,12 +209,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
         %{
           findings: [finding],
           redactions: [],
+          taint_sources: [],
           verdict: :deny,
           reason: "post_call plugin #{entry.name} unavailable"
         }
 
       :fail_open ->
-        %{findings: [finding], redactions: [], verdict: :allow, reason: nil}
+        %{findings: [finding], redactions: [], taint_sources: [], verdict: :allow, reason: nil}
     end
   end
 

@@ -158,4 +158,80 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
     assert Enum.find(entries, &(&1.event_id == allow_event.id)).status == "ok"
   end
+
+  test "a post_call taint source blocks a later egress even with no sensitive_read tag", %{
+    name: name
+  } do
+    session_id = "session-taint"
+    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, name)
+
+    # An untagged read: allowed, no tag accumulated.
+    assert {:allow, _} = PolicyEngine.record_call(session_id, "files", "read_config", [], name)
+
+    # The response scan found a secret and tainted the session.
+    source = %{origin_tool: "read_config", finding_type: "secret_leak", at: DateTime.utc_now()}
+
+    :ok =
+      PolicyEngine.record_response_scan(
+        session_id,
+        "files",
+        "read_config",
+        [],
+        false,
+        [source],
+        name
+      )
+
+    assert {:block, event} =
+             PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    assert event.status == :blocked
+    assert event.reason =~ "secret"
+    assert event.reason =~ "read_config"
+  end
+
+  test "taint accumulation is deduped and a clean scan with no taint is a no-op", %{name: name} do
+    session_id = "session-taint-dedup"
+    :ok = PolicyEngine.start_session(session_id, :untagged_exfil, name)
+
+    source = %{origin_tool: "read_config", finding_type: "secret_leak", at: DateTime.utc_now()}
+
+    assert :ok =
+             PolicyEngine.record_response_scan(
+               session_id,
+               "files",
+               "read_config",
+               [],
+               false,
+               [source],
+               name
+             )
+
+    # Same origin+type again — no second taint row, still just one block.
+    assert :ok =
+             PolicyEngine.record_response_scan(
+               session_id,
+               "files",
+               "read_config",
+               [],
+               false,
+               [source],
+               name
+             )
+
+    # A genuinely clean scan short-circuits before the GenServer.
+    assert :ok =
+             PolicyEngine.record_response_scan(
+               session_id,
+               "files",
+               "list_files",
+               [],
+               false,
+               [],
+               name
+             )
+
+    assert {:block, _event} =
+             PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+  end
 end

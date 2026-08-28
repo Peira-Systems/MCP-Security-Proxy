@@ -12,7 +12,10 @@ defmodule PhoenixElxirBeam.MCP.PipelinePostCallTest do
       {:ok, [finding],
        %Decision{
          verdict: :annotate,
-         mutations: %{redact_response: [%{path: "content[0].text", match: "X", replacement: "Y"}]}
+         mutations: %{
+           redact_response: [%{path: "content[0].text", match: "X", replacement: "Y"}],
+           add_taint_sources: [%{origin_tool: "read_config", finding_type: "secret_leak"}]
+         }
        }}
     end
   end
@@ -63,45 +66,46 @@ defmodule PhoenixElxirBeam.MCP.PipelinePostCallTest do
     })
   end
 
-  test "merges findings and redactions and allows" do
+  test "merges findings, redactions and taint sources and allows" do
     entries = [entry(RedactScanner, order: 0), entry(PlainScanner, order: 1)]
 
-    assert {:allow, [%{type: "secret_leak"}], [redaction], nil} =
+    assert {:allow, [%{type: "secret_leak"}], [redaction], [taint], nil} =
              Pipeline.run_post_call(ctx(), entries)
 
     assert redaction.path == "content[0].text"
+    assert taint.origin_tool == "read_config"
   end
 
   test "a scanner :deny is ignored without the can_block grant" do
-    assert {:allow, _findings, _redactions, nil} =
+    assert {:allow, _findings, _redactions, _taint, nil} =
              Pipeline.run_post_call(ctx(), [entry(BlockingScanner)])
   end
 
   test "a can_block scanner :deny withholds the response" do
-    assert {:deny, _findings, _redactions, "not allowed"} =
+    assert {:deny, _findings, _redactions, _taint, "not allowed"} =
              Pipeline.run_post_call(ctx(), [entry(BlockingScanner, can_block: true)])
   end
 
   test "a policy :deny withholds the response" do
-    assert {:deny, _findings, _redactions, "response withheld by policy"} =
+    assert {:deny, _findings, _redactions, _taint, "response withheld by policy"} =
              Pipeline.run_post_call(ctx(), [entry(WithholdPolicy, kind: :policy)])
   end
 
   test "an entry without the :post_call phase is skipped" do
-    assert {:allow, [], [], nil} =
+    assert {:allow, [], [], [], nil} =
              Pipeline.run_post_call(ctx(), [entry(RedactScanner, phases: [:discovery])])
   end
 
   test "a raising scanner is dropped (fail_open) with a plugin_error finding" do
     capture_log(fn ->
-      assert {:allow, [%{type: "plugin_error"}], [], nil} =
+      assert {:allow, [%{type: "plugin_error"}], [], [], nil} =
                Pipeline.run_post_call(ctx(), [entry(BoomScanner, name: "boom")])
     end)
   end
 
   test "a raising scanner with fail_closed withholds the response" do
     capture_log(fn ->
-      assert {:deny, [%{type: "plugin_error"}], [], _reason} =
+      assert {:deny, [%{type: "plugin_error"}], [], [], _reason} =
                Pipeline.run_post_call(ctx(), [
                  entry(BoomScanner, name: "boom", fail_mode: :fail_closed)
                ])

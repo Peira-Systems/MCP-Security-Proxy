@@ -172,12 +172,19 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             response: %{is_error: false, content: content}
           })
 
-        {verdict, findings, redactions, reason} =
+        {verdict, findings, redactions, taint_sources, reason} =
           Pipeline.run_post_call(ctx, PluginRegistry.active_post_call())
 
         case verdict do
           :deny ->
-            PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, true)
+            PolicyEngine.record_response_scan(
+              session_id,
+              server_id,
+              tool_name,
+              findings,
+              true,
+              taint_sources
+            )
 
             json(conn, %{
               "jsonrpc" => jsonrpc,
@@ -186,7 +193,15 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             })
 
           :allow ->
-            PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, false)
+            PolicyEngine.record_response_scan(
+              session_id,
+              server_id,
+              tool_name,
+              findings,
+              false,
+              taint_sources
+            )
+
             content = Redaction.apply(content, redactions)
             json(conn, put_in(resp_body, ["result", "content"], content))
         end

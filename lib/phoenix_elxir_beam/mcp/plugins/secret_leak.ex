@@ -6,6 +6,11 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
 
   Advisory — it redacts, it does not block. The proxy applies the redactions
   (`PhoenixElxirBeam.MCP.Redaction`) to the response `content` before returning it.
+
+  When it finds anything it also proposes one `add_taint_sources` mutation:
+  the session has now handled a secret, so `PhoenixElxirBeam.MCP.Plugins.TaintGuard`
+  can block a later network-egress call even if the origin tool was never
+  tagged `:sensitive_read`.
   """
 
   @behaviour PhoenixElxirBeam.MCP.Plugin.Scanner
@@ -46,7 +51,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
   end
 
   @impl true
-  def scan(:post_call, %CallContext{response: response}) do
+  def scan(:post_call, %CallContext{response: response} = ctx) do
     parts = (response && response[:content]) || (response && response["content"]) || []
 
     {findings, redactions} =
@@ -55,7 +60,27 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
       |> Enum.flat_map(fn {part, i} -> scan_part(text_of(part), i) end)
       |> Enum.unzip()
 
-    {:ok, findings, %Decision{verdict: :annotate, mutations: %{redact_response: redactions}}}
+    mutations =
+      %{redact_response: redactions}
+      |> Map.merge(taint_mutation(findings, ctx))
+
+    {:ok, findings, %Decision{verdict: :annotate, mutations: mutations}}
+  end
+
+  # One taint source per scan that found something — the session has now
+  # handled a secret, whatever tool it came through.
+  defp taint_mutation([], _ctx), do: %{}
+
+  defp taint_mutation([_ | _], %CallContext{call: call}) do
+    %{
+      add_taint_sources: [
+        %{
+          origin_tool: call[:tool_name] || call["toolName"] || "unknown",
+          finding_type: "secret_leak",
+          at: DateTime.utc_now()
+        }
+      ]
+    }
   end
 
   defp text_of(%{"text" => t}), do: t

@@ -167,6 +167,15 @@ instances under a dynamic supervisor.
      then scans, withholding the whole response as `-32002` on a `policy` / `canBlock`
      `deny`; `Event` carries `findings`, shown as pills in the live feed + history.
      Taint tracking and a shipped withholding policy still deferred.)
+   - 7b. **Taint tracking (session provenance).** ✔ (`SecretLeak` also proposes an
+     `addTaintSources` mutation; `run_post_call/2` returns `taint_sources`;
+     `PolicyEngine` keeps per-session `taint` provenance (`accumulate_taint`, deduped),
+     threads it into the `pre_call` `CallContext`; `MCP.Plugins.TaintGuard` — `pre_call`
+     `policy`, `toolTags: [network_egress]` — denies egress once the session has handled a
+     secret, catching leaks the operator's tags missed. New "Run untagged exfil" demo
+     (`files/read_config`, untagged, leaks a key → redacted + tainted → `post_webhook`
+     blocked). `Wire` carries `session.taint` / `addTaintSources` for sidecar parity.
+     Byte-level HMAC markers into later call args still deferred.)
 
 ## References
 

