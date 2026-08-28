@@ -70,7 +70,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         # the point where a session's agent identity is first recorded.
         :ok = PolicyEngine.ensure_session(session_id, agent_id)
 
-        case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
+        args = rpc_params["arguments"] || %{}
+
+        case PolicyEngine.record_call(session_id, server_id, tool_name, tags, PolicyEngine, args) do
           {:allow, _event} ->
             call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc_version, rpc_params)
 

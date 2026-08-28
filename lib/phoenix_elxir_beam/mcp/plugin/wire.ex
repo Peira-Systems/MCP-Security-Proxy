@@ -139,9 +139,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
         |> Map.get(:taint, %{})
         |> Map.get(:sources, [])
         |> Enum.map(fn s ->
+          # `secret` (the raw match) is deliberately never sent over the wire —
+          # only the redacted `hint`.
           %{
             "originTool" => Map.get(s, :origin_tool),
             "findingType" => Map.get(s, :finding_type),
+            "hint" => Map.get(s, :hint),
             "at" => encode_time(Map.get(s, :at))
           }
         end)

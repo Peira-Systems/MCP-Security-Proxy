@@ -7,10 +7,13 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
   Advisory — it redacts, it does not block. The proxy applies the redactions
   (`PhoenixElxirBeam.MCP.Redaction`) to the response `content` before returning it.
 
-  When it finds anything it also proposes one `add_taint_sources` mutation:
-  the session has now handled a secret, so `PhoenixElxirBeam.MCP.Plugins.TaintGuard`
-  can block a later network-egress call even if the origin tool was never
-  tagged `:sensitive_read`.
+  When it finds anything it also proposes `add_taint_sources` mutations — one
+  per distinct secret — carrying the raw matched string (`secret`, kept only
+  in the proxy's in-memory session state, never broadcast or persisted) and a
+  redacted `hint`. `PhoenixElxirBeam.MCP.Plugins.TaintGuard` uses the session
+  provenance to block later egress; `PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard`
+  uses the `secret` to catch the exact bytes reappearing in a later call's
+  arguments.
   """
 
   @behaviour PhoenixElxirBeam.MCP.Plugin.Scanner
@@ -62,26 +65,41 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
 
     mutations =
       %{redact_response: redactions}
-      |> Map.merge(taint_mutation(findings, ctx))
+      |> Map.merge(taint_mutation(redactions, ctx))
 
     {:ok, findings, %Decision{verdict: :annotate, mutations: mutations}}
   end
 
-  # One taint source per scan that found something — the session has now
-  # handled a secret, whatever tool it came through.
+  # One taint source per distinct secret found — each carries the raw match
+  # (for byte-level arg matching) and a redacted hint (for everything visible).
   defp taint_mutation([], _ctx), do: %{}
 
-  defp taint_mutation([_ | _], %CallContext{call: call}) do
-    %{
-      add_taint_sources: [
+  defp taint_mutation(redactions, %CallContext{call: call}) do
+    origin = call[:tool_name] || call["toolName"] || "unknown"
+    now = DateTime.utc_now()
+
+    sources =
+      redactions
+      |> Enum.map(& &1.match)
+      |> Enum.uniq()
+      |> Enum.map(fn secret ->
         %{
-          origin_tool: call[:tool_name] || call["toolName"] || "unknown",
+          origin_tool: origin,
           finding_type: "secret_leak",
-          at: DateTime.utc_now()
+          at: now,
+          secret: secret,
+          hint: hint(secret)
         }
-      ]
-    }
+      end)
+
+    %{add_taint_sources: sources}
   end
+
+  defp hint(s) when byte_size(s) > 12 do
+    String.slice(s, 0, 6) <> "…" <> String.slice(s, -2, 2)
+  end
+
+  defp hint(_s), do: "‹secret›"
 
   defp text_of(%{"text" => t}), do: t
   defp text_of(%{text: t}), do: t

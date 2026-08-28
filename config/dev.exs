@@ -29,6 +29,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
          }
        ]
      }},
+    {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},

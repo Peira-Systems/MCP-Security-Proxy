@@ -50,12 +50,27 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeakTest do
     refute Map.has_key?(decision.mutations, :add_taint_sources)
   end
 
-  test "a hit also proposes one taint source naming the origin tool" do
+  test "a hit proposes a taint source with the raw secret and a redacted hint" do
     assert {:ok, [_ | _], decision} =
              SecretLeak.scan(:post_call, ctx(["API_KEY=sk-demo-FAKE1234 trailing"]))
 
-    assert [%{origin_tool: "read_secrets", finding_type: "secret_leak", at: %DateTime{}}] =
-             decision.mutations.add_taint_sources
+    assert [source] = decision.mutations.add_taint_sources
+    assert source.origin_tool == "read_secrets"
+    assert source.finding_type == "secret_leak"
+    assert %DateTime{} = source.at
+    assert source.secret == "API_KEY=sk-demo-FAKE1234"
+    assert source.hint != source.secret
+    refute source.hint =~ "FAKE1234"
+  end
+
+  test "distinct secrets in one response each get their own taint source" do
+    text = "AKIAIOSFODNN7EXAMPLE and also token: abcdefgh12345678"
+    assert {:ok, _findings, decision} = SecretLeak.scan(:post_call, ctx([text]))
+
+    secrets = Enum.map(decision.mutations.add_taint_sources, & &1.secret)
+    assert "AKIAIOSFODNN7EXAMPLE" in secrets
+    assert length(secrets) == length(Enum.uniq(secrets))
+    assert length(secrets) >= 2
   end
 
   test "manifest declares a non-blocking post_call scanner" do

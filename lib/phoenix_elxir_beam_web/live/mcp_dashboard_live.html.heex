@@ -56,6 +56,15 @@
           Run restricted agent
         </button>
         <button
+          id="run-secret-arg-exfil-btn"
+          type="button"
+          phx-click="run_secret_arg_exfil"
+          disabled={@running}
+          class="btn btn-outline btn-sm"
+        >
+          Run secret-in-arg exfil
+        </button>
+        <button
           id="run-rug-pull-btn"
           type="button"
           phx-click="run_rug_pull_demo"

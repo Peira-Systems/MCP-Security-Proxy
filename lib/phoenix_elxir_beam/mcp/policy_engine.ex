@@ -79,9 +79,14 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @doc """
   Records a `tools/call` invocation, returns `{:allow, event}` or
   `{:block, event}`, and receipts the resulting event either way.
+
+  `arguments` (the tool call's `params.arguments`) is threaded into the
+  `pre_call` `CallContext` so argument-inspecting policies — e.g.
+  `PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard` — can see it. It trails
+  `name` so the many `arity/5` callers keep working unchanged.
   """
-  def record_call(session_id, server_id, tool_name, tags, name \\ __MODULE__) do
-    GenServer.call(name, {:record_call, session_id, server_id, tool_name, tags})
+  def record_call(session_id, server_id, tool_name, tags, name \\ __MODULE__, arguments \\ %{}) do
+    GenServer.call(name, {:record_call, session_id, server_id, tool_name, tags, arguments})
   end
 
   @doc "Marks a session as finished and broadcasts `:session_complete`."
@@ -236,13 +241,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     {:reply, :ok, state}
   end
 
-  def handle_call({:record_call, nil, server_id, tool_name, tags}, _from, state) do
+  def handle_call({:record_call, nil, server_id, tool_name, tags, _arguments}, _from, state) do
     event = blocked_event(nil, nil, server_id, tool_name, tags, @missing_session_reason)
     receipt(event, state)
     {:reply, {:block, event}, state}
   end
 
-  def handle_call({:record_call, session_id, server_id, tool_name, tags}, _from, state) do
+  def handle_call({:record_call, session_id, server_id, tool_name, tags, arguments}, _from, state) do
     case Map.get(state.sessions, session_id) do
       nil ->
         event =
@@ -262,6 +267,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
               server_id: server_id,
               tool_name: tool_name,
               tags: tags,
+              arguments: arguments,
               method: "tools/call"
             },
             session: %{
@@ -340,22 +346,26 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     end)
   end
 
-  # Appends taint sources to the session's provenance, deduped on
-  # {origin_tool, finding_type}. A no-op for an unknown / nil session id —
-  # a scan without recorded session state can't taint anything.
+  # Appends taint sources to the session's provenance, deduped on the tracked
+  # secret (or, absent one, {origin_tool, finding_type}). A no-op for an
+  # unknown / nil session id — a scan without recorded session state can't
+  # taint anything.
   defp accumulate_taint(state, _session_id, []), do: state
 
   defp accumulate_taint(state, session_id, sources) do
     if Map.has_key?(state.sessions, session_id) do
       update_in(state.sessions[session_id], fn existing ->
-        seen = MapSet.new(existing.taint, &{&1.origin_tool, &1.finding_type})
-        fresh = Enum.reject(sources, &MapSet.member?(seen, {&1.origin_tool, &1.finding_type}))
+        seen = MapSet.new(existing.taint, &taint_key/1)
+        fresh = Enum.reject(sources, &MapSet.member?(seen, taint_key(&1)))
         %{existing | taint: existing.taint ++ fresh}
       end)
     else
       state
     end
   end
+
+  defp taint_key(%{secret: secret}) when is_binary(secret), do: {:secret, secret}
+  defp taint_key(source), do: {source[:origin_tool], source[:finding_type]}
 
   defp reply_verdict(
          {session, session_id, server_id, tool_name, tags},
@@ -373,6 +383,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       tags: tags,
       status: status,
       reason: reason,
+      findings: Keyword.get(opts, :findings, []),
       timestamp: DateTime.utc_now()
     }
 

@@ -187,6 +187,13 @@ instances under a dynamic supervisor.
      `tool_tags_any` / `after_sensitive_read` / `if_tainted`; first match wins; unknown
      predicate fails closed. Ships enabled in all envs with an `agent://ci-runner`
      egress-deny rule; "Run restricted agent" demo; Plugins panel shows the rule count.)
+   - 7e. **Byte-level taint.** ✔ (`SecretLeak` records the raw matched secret + a redacted
+     `hint` on each taint source — raw value in-memory only, never persisted / broadcast /
+     wired. `record_call` threads `params.arguments` into the `pre_call` `CallContext`.
+     `MCP.Plugins.TaintedArgGuard` (`pre_call` `policy`, no tag filter) denies a call whose
+     stringified arguments contain a tracked secret, with a `tainted_argument` critical
+     finding. "Run secret-in-arg exfil" demo. Real HMAC markers still stand-in'd by
+     substring match.)
 
 ## References
 

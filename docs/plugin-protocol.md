@@ -29,11 +29,15 @@ for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, 
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`. `MCP.Plugins.SecretLeak` is the reference
 `post_call` scanner — it redacts credentials in a tool response before the agent sees them
-and proposes an `addTaintSources` mutation. The proxy folds those into session
-`taint` provenance; `MCP.Plugins.TaintGuard` (a `pre_call` `policy`, `toolTags:
-[network_egress]`) then denies egress once the session has handled a secret — even when the
-leaking tool carried no `:sensitive_read` tag. (Taint is session-level provenance;
-byte-level HMAC markers tracking the secret into later call arguments are not built.
+and proposes `addTaintSources` mutations — one per distinct secret, carrying the raw match
+(`secret`, kept only in the proxy's in-memory session state — never broadcast, persisted, or
+sent over the sidecar wire, which sees only a redacted `hint`). The proxy folds those into
+session `taint` provenance. Two `pre_call` policies consume it: `MCP.Plugins.TaintGuard`
+(`toolTags: [network_egress]`) denies *any* egress once *any* secret has flowed — coarse,
+catches leaks the operator's `:sensitive_read` tag missed; `MCP.Plugins.TaintedArgGuard`
+(no tag filter, inspects `call.arguments`) denies the specific call whose arguments carry
+the exact secret bytes — precise, byte-for-byte. (Session/byte provenance is built; HMAC
+markers proper are not — substring match on the retained raw secret stands in.
 Scanner-proposed mutations are applied without an operator `canMutate` grant — a known
 simplification carried from the redaction path.)
 
@@ -74,13 +78,14 @@ and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the 
 `priv/plugins/prompt_injection_scanner.py` runs as a `discovery` scanner. A read-only
 **Plugins** panel on the dashboard lists every plugin and each sidecar's health.
 
-Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation;
+Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation
+(argument-inspecting logic ships as a `policy` — `TaintedArgGuard` — instead);
 `post_call` invocation of **sidecar** plugins (`call/inspectResponse` is wired in
-`Pipeline` but no sidecar declares `post_call` yet); byte-level taint markers (session
-provenance is built — `addTaintSources` + `TaintGuard` — but the secret bytes are not
-tracked into later call arguments); batched / remote audit sinks and a real `audit/record`
-notification; a dashboard UI for the plugin registry; circuit breaker and decision cache.
-On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after the fact).
+`Pipeline` but no sidecar declares `post_call` yet); real HMAC taint markers (substring
+match on the retained raw secret stands in); batched / remote audit sinks and a real
+`audit/record` notification; a dashboard UI for the plugin registry; circuit breaker and
+decision cache. On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after
+the fact).
 
 ---
 
@@ -306,8 +311,9 @@ interface CallContext {
       sources: Array<{
         originTool: string;             // tool whose response leaked a secret
         findingType: string;            // e.g. "secret_leak"
+        hint: string;                   // redacted preview, e.g. "AKIA…EY"
         at: string;                     // RFC 3339
-        // marker/originCallId (byte-level HMAC tracking) — reserved, not yet emitted
+        // the raw secret is retained proxy-side for byte matching, never sent here
       }>;
     };
     callsSoFar: number;
