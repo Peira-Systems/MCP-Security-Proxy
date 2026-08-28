@@ -14,6 +14,19 @@ Both bindings expose the **same capabilities, data model, and evaluation semanti
 plugin author picks a language and a transport; the proxy's pipeline treats every plugin
 identically.
 
+### Implementation status (roadmap step 2)
+
+Built: `CallContext`, `Decision`, `Finding`, `Manifest`; the `Policy` / `Scanner` /
+`AuditSink` behaviours; the `Plugin.Registry` (config-seeded, `enable` / `disable` /
+`reorder`); `Pipeline.run/3` for the **`pre_call` `policy` chain** — ordered, short-circuit
+on first `:deny`, granted `add_tags` applied between plugins, per-plugin `timeout_ms` +
+`fail_mode` enforced by the proxy. `ChainExfil` is the one registered plugin.
+
+Not built yet: scanner invocation and the `discovery` / `post_call` phases (steps 3–4);
+`AuditEvent` + `AuditSink` bodies + `prev_hash` (step 4); the sidecar JSON-RPC runner and
+`{:sidecar, _}` activation (step 5); circuit breaker, decision cache, `:hold` + approval UI
+(step 6); a dashboard UI for the registry. `Pipeline` currently coerces `:hold` to `:deny`.
+
 ---
 
 ## 1. Goals and non-goals
@@ -549,7 +562,15 @@ per call (default 100); excess is truncated and flagged.
 ## 13. In-process Elixir binding
 
 The wire schema maps 1:1 to behaviours. `CallContext`, `Decision`, and `Finding` are the
-same structs the pipeline uses internally.
+same structs the pipeline uses internally
+(`PhoenixElxirBeam.MCP.{CallContext,Decision,Finding}`,
+`PhoenixElxirBeam.MCP.Plugin.{Manifest,Policy,Scanner,AuditSink}`).
+
+**Tag representation.** The proxy carries tool tags as **atoms** internally
+(`:sensitive_read`, `:network_egress`) — that is what `Event`, `EventLog`, `ToolCatalog`,
+and the dashboard already speak. The in-process binding therefore uses atoms in
+`tool_tags` and in `ctx.session.seen_tags`. The sidecar binding (§5.1–5.2) stringifies at
+the wire boundary; `data_needs` paths stay strings in both.
 
 ```elixir
 defmodule PhoenixElxirBeam.MCP.Plugin.Policy do

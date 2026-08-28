@@ -133,7 +133,9 @@ instances under a dynamic supervisor.
 
 1. **This ADR.** ✔
 2. **Enabling refactor** — `CallContext` + `Pipeline`; port `ChainExfil` to a `Policy`
-   plugin; no behaviour change; existing tests green.
+   plugin; no behaviour change; existing tests green. ✔ (full skeleton: all three
+   behaviours + `Plugin.Registry` + bounded `timeout_ms`/`fail_mode`; tags kept as atoms
+   internally; circuit breaker deferred to step 5.)
 3. **Rug-pull / tool-drift scanner** — first non-trivial plugin; exercises `discovery` +
    `ServerRegistry`; stores `descriptionHash` per tool; dashboard alert on mismatch.
 4. **Extract `AuditSink`** — move `EventLog` behind the behaviour; add `prev_hash`

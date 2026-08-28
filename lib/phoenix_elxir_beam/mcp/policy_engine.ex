@@ -1,12 +1,18 @@
 defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @moduledoc """
-  Enforces the demo's tool-chaining policy and is the sole broadcaster of
-  `PhoenixElxirBeam.MCP.Event` structs on the `"mcp:events"` PubSub topic.
+  Owns canonical per-session state (the `MapSet` of tags seen per
+  `session_id`), runs the plugin pipeline for every `tools/call`, and is the
+  sole broadcaster of `PhoenixElxirBeam.MCP.Event` structs on the
+  `"mcp:events"` PubSub topic.
 
-  Keeps a `MapSet` of tags seen per `session_id`. A call tagged
-  `:network_egress` is blocked iff `:sensitive_read` is already in that
-  session's seen-set at the time of the call — order matters, so an egress
-  call before any sensitive read is allowed.
+  The actual allow/deny logic lives in `policy` plugins consulted through
+  `PhoenixElxirBeam.MCP.Pipeline` (today just
+  `PhoenixElxirBeam.MCP.Plugins.ChainExfil`: a `:network_egress` call is
+  denied iff `:sensitive_read` is already in that session's seen-set —
+  order matters, so an egress call before any sensitive read is allowed).
+  This module builds a `PhoenixElxirBeam.MCP.CallContext` from its session
+  state, maps the pipeline's `Decision` back to `{:allow | :block, Event}`,
+  accumulates tags on an allow, and receipts the result.
 
   Three properties this engine is deliberately built around, since it sits
   as a policy decision point in a live request path:
@@ -28,12 +34,12 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{Event, EventLog}
+  alias PhoenixElxirBeam.MCP.{CallContext, Event, EventLog, Pipeline}
+  alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:events"
 
-  @block_reason "network egress blocked: a sensitive read occurred earlier in this session"
   @unknown_session_reason "blocked: no session state on record for this session id"
   @missing_session_reason "blocked: no session id presented"
 
@@ -41,7 +47,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %{}, name: name)
+    registry = Keyword.get(opts, :registry, PluginRegistry)
+    GenServer.start_link(__MODULE__, %{registry: registry}, name: name)
   end
 
   @doc "Registers a new session and broadcasts `:session_start`."
@@ -75,7 +82,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   # Server callbacks
 
   @impl true
-  def init(_), do: {:ok, %{sessions: %{}}}
+  def init(%{registry: registry}), do: {:ok, %{sessions: %{}, registry: registry}}
 
   @impl true
   def handle_call({:start_session, session_id, scenario}, _from, state) do
@@ -129,8 +136,25 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         {:reply, {:block, event}, state}
 
       session ->
-        blocked? = MapSet.member?(session.tags, :sensitive_read) and :network_egress in tags
-        {status, reason} = if blocked?, do: {:blocked, @block_reason}, else: {:ok, nil}
+        ctx =
+          CallContext.new(%{
+            phase: :pre_call,
+            call: %{
+              id: generate_id(),
+              session_id: session_id,
+              server_id: server_id,
+              tool_name: tool_name,
+              tags: tags,
+              method: "tools/call"
+            },
+            session: %{seen_tags: MapSet.to_list(session.tags)}
+          })
+
+        {pipeline_verdict, decision, _findings} =
+          Pipeline.run(:pre_call, ctx, PluginRegistry.active_policies(:pre_call, state.registry))
+
+        blocked? = pipeline_verdict == :deny
+        {status, reason} = if blocked?, do: {:blocked, decision.reason}, else: {:ok, nil}
 
         state =
           if blocked? do

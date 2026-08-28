@@ -11,6 +11,13 @@ config :phoenix_elxir_beam,
   ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Plugins consulted by the MCP proxy pipeline, in evaluation order.
+# See docs/plugin-protocol.md §15 and docs/adr/0001-plugin-architecture.md.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
+  plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []}
+  ]
+
 # Configure the endpoint
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   url: [host: "localhost"],

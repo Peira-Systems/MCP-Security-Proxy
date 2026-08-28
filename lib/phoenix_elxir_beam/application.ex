@@ -13,10 +13,13 @@ defmodule PhoenixElxirBeam.Application do
       {DNSCluster,
        query: Application.get_env(:phoenix_elxir_beam, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: PhoenixElxirBeam.PubSub},
+      # PolicyEngine reads the plugin registry's ETS table and runs the
+      # pipeline on TaskSupervisor-spawned tasks, so both must precede it.
+      {Task.Supervisor, name: PhoenixElxirBeam.MCP.TaskSupervisor},
+      PhoenixElxirBeam.MCP.Plugin.Registry,
       PhoenixElxirBeam.MCP.PolicyEngine,
       {DynamicSupervisor, name: PhoenixElxirBeam.MCP.StdioServerSupervisor},
       PhoenixElxirBeam.MCP.ServerRegistry,
-      {Task.Supervisor, name: PhoenixElxirBeam.MCP.TaskSupervisor},
       # Start a worker by calling: PhoenixElxirBeam.Worker.start_link(arg)
       # {PhoenixElxirBeam.Worker, arg},
       # Start to serve requests, typically the last entry
