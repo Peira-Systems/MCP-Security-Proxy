@@ -59,6 +59,14 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     |> Enum.filter(&(&1.kind == :scanner and &1.enabled and phase in &1.phases))
   end
 
+  @doc "Enabled `audit_sink` entries, in configured order."
+  @spec active_sinks(atom()) :: [map()]
+  def active_sinks(table \\ __MODULE__) do
+    table
+    |> list()
+    |> Enum.filter(&(&1.kind == :audit_sink and &1.enabled))
+  end
+
   def enable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, true})
   def disable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, false})
 
@@ -192,9 +200,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       module: module,
       kind: :audit_sink,
       order: index,
-      # Audit sinks are not invoked by the pipeline yet (step 4); listed only.
-      enabled: false,
-      note: :not_invoked_yet
+      enabled: true
     })
   end
 

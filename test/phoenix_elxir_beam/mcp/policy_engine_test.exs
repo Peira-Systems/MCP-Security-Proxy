@@ -1,5 +1,7 @@
 defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
-  use ExUnit.Case, async: true
+  # Every verdict now fans out to the EventLogSink (SQLite insert); run
+  # serially to avoid the file-wide write-lock contention with other suites.
+  use ExUnit.Case, async: false
 
   alias PhoenixElxirBeam.MCP.{EventLog, PolicyEngine}
   alias PhoenixElxirBeam.Repo
@@ -103,6 +105,22 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
              PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
 
     assert event.status == :blocked
+  end
+
+  test "a pipeline block records which plugin decided in the durable log", %{name: name} do
+    session_id = "session-decisions"
+    :ok = PolicyEngine.start_session(session_id, :attack, name)
+
+    {:allow, _} =
+      PolicyEngine.record_call(session_id, "files", "read_secrets", [:sensitive_read], name)
+
+    {:block, event} =
+      PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+
+    assert [%{"plugin" => "chain-exfil", "verdict" => "deny"}] = row.decisions
   end
 
   test "record_blocked/5 receipts a blocked event without needing session state", %{name: name} do

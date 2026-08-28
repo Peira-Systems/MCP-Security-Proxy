@@ -24,8 +24,10 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       already tainted. A lookup miss is a block, not a skip.
     * Every verdict is receipted, allows included, not just blocks —
       otherwise "no record" and "recorded allow" are indistinguishable.
-      Receipts are durable (`PhoenixElxirBeam.MCP.EventLog`), not just
-      broadcast to whichever dashboard happens to be subscribed.
+      Receipts fan out to every registered `auditSink`
+      (`PhoenixElxirBeam.MCP.Plugin.Registry.active_sinks/1`; today just the
+      hash-chained `PhoenixElxirBeam.MCP.Plugins.EventLogSink`), not just a
+      PubSub broadcast to whichever dashboard happens to be subscribed.
     * Evidence recording (the durable receipt, the PubSub broadcast)
       happens strictly after the verdict is final and can never feed
       back into it.
@@ -34,7 +36,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{CallContext, Event, EventLog, Pipeline}
+  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, Pipeline}
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub
@@ -105,7 +107,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       timestamp: DateTime.utc_now()
     }
 
-    receipt(event)
+    receipt(event, state)
     {:reply, :ok, state}
   end
 
@@ -131,13 +133,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @impl true
   def handle_call({:record_blocked, session_id, server_id, tool_name, reason}, _from, state) do
     event = blocked_event(session_id, nil, server_id, tool_name, [], reason)
-    receipt(event)
+    receipt(event, state)
     {:reply, {:block, event}, state}
   end
 
   def handle_call({:record_call, nil, server_id, tool_name, tags}, _from, state) do
     event = blocked_event(nil, nil, server_id, tool_name, tags, @missing_session_reason)
-    receipt(event)
+    receipt(event, state)
     {:reply, {:block, event}, state}
   end
 
@@ -147,7 +149,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         event =
           blocked_event(session_id, nil, server_id, tool_name, tags, @unknown_session_reason)
 
-        receipt(event)
+        receipt(event, state)
         {:reply, {:block, event}, state}
 
       session ->
@@ -165,7 +167,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
             session: %{seen_tags: MapSet.to_list(session.tags)}
           })
 
-        {pipeline_verdict, decision, _findings} =
+        {pipeline_verdict, decision, findings} =
           Pipeline.run(:pre_call, ctx, PluginRegistry.active_policies(:pre_call, state.registry))
 
         blocked? = pipeline_verdict == :deny
@@ -193,7 +195,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         }
 
         verdict = if blocked?, do: :block, else: :allow
-        receipt(event)
+        receipt(event, state, decisions: decisions_from(decision), findings: findings)
         {:reply, {verdict, event}, state}
     end
   end
@@ -210,7 +212,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       timestamp: DateTime.utc_now()
     }
 
-    receipt(event)
+    receipt(event, state)
     {:reply, :ok, state}
   end
 
@@ -228,12 +230,20 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     }
   end
 
+  defp decisions_from(%{deciding_plugin: nil}), do: []
+
+  defp decisions_from(%{deciding_plugin: plugin, verdict: verdict, reason: reason}) do
+    [%{plugin: plugin, verdict: verdict, reason: reason}]
+  end
+
   # `event` already carries its final verdict by the time this runs. This
-  # only durably persists and broadcasts it — a failure doing either is
-  # swallowed rather than crashing the GenServer or the caller. A crash
-  # here would wipe every in-flight session's state, which is a worse
+  # only broadcasts it and fans it out to the audit sinks — a failure in any
+  # of those is swallowed rather than crashing the GenServer or the caller.
+  # A crash here would wipe every in-flight session's state, which is a worse
   # fail-open than the write failure it would be reacting to.
-  defp receipt(event) do
+  defp receipt(event, state, opts \\ []) do
+    audit_event = AuditEvent.from_event(event, opts)
+
     try do
       broadcast(event)
     rescue
@@ -243,29 +253,22 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         )
     end
 
-    try do
-      case EventLog.record(event) do
-        {:ok, _row} ->
-          :ok
+    for sink <- PluginRegistry.active_sinks(state.registry) do
+      try do
+        sink.module.record([audit_event])
+      rescue
+        # A test process that never checked out a sandboxed connection is
+        # not a persistence failure worth alarming on.
+        _error in [DBConnection.OwnershipError] ->
+          Logger.debug(
+            "PolicyEngine: audit sink #{sink.name}: no DB connection owned for event #{event.id}"
+          )
 
-        {:error, changeset} ->
+        error ->
           Logger.error(
-            "PolicyEngine: failed to persist event #{event.id}: #{inspect(changeset.errors)}"
+            "PolicyEngine: audit sink #{sink.name} failed for event #{event.id}: #{Exception.format(:error, error, __STACKTRACE__)}"
           )
       end
-    rescue
-      # A test process that never checked out a sandboxed connection is
-      # not a persistence failure worth alarming on — every other failure
-      # still gets logged at error level.
-      error in [DBConnection.OwnershipError] ->
-        Logger.debug(
-          "PolicyEngine: no DB connection owned to persist event #{event.id}: #{Exception.message(error)}"
-        )
-
-      error ->
-        Logger.error(
-          "PolicyEngine: failed to persist event #{event.id}: #{Exception.format(:error, error, __STACKTRACE__)}"
-        )
     end
 
     :ok

@@ -3,7 +3,12 @@ import Config
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   database: Path.expand("../priv/repo/test.db", __DIR__),
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+  pool_size: System.schedulers_online() * 2,
+  # SQLite serializes writers; with async tests each on its own sandbox
+  # connection, WAL + a generous busy timeout makes concurrent writes wait
+  # rather than raise "Database busy".
+  journal_mode: :wal,
+  busy_timeout: 5_000
 
 # The MCP proxy controller forwards calls to the mock server over a real
 # loopback HTTP request (via Req), so the server must actually be running

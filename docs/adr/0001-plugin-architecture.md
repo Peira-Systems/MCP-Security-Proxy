@@ -142,7 +142,11 @@ instances under a dynamic supervisor.
    `ServerRegistry.rehandshake/2` + tool quarantine, `ProxyController` `-32003`, red
    dashboard card + re-handshake / simulate-drift buttons, `MockDrift` demo switch.)
 4. **Extract `AuditSink`** — move `EventLog` behind the behaviour; add `prev_hash`
-   chaining to `PolicyEvent`.
+   chaining to `PolicyEvent`. ✔ (`MCP.AuditEvent`, `MCP.Plugins.EventLogSink`,
+   `Registry.active_sinks/1`, synchronous fan-out from `PolicyEngine`, `decisions` /
+   `findings` + `prev_hash` / `hash` columns, `EventLog.verify_chain/0`, dashboard
+   deciding-plugin pill + "verify audit chain" button. Test DB switched to WAL; the
+   write-heavy suites made `async: false`.)
 5. **Sidecar transport** — out-of-process JSON-RPC runner; ship the Python example from
    `docs/plugin-protocol.md` §17.1 running end-to-end.
 6. **`hold` verdict + approval UI** — LiveView-native; third verdict through the pipeline.

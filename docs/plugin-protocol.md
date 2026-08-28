@@ -27,11 +27,16 @@ between plugins) and `Pipeline.run_discovery/2` for the **`discovery` `scanner` 
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`.
 
-Not built yet: `pre_call` / `post_call` scanner invocation and the `post_call` phase
-(step 4); `AuditEvent` + `AuditSink` bodies + `prev_hash` (step 4); the sidecar JSON-RPC
-runner and `{:sidecar, _}` activation (step 5); circuit breaker, decision cache, `:hold` +
-approval UI (step 6); a dashboard UI for the plugin registry. `Pipeline` currently coerces
-`:hold` to `:deny`.
+Audit: `AuditEvent` + the `AuditSink` behaviour + `Plugins.EventLogSink` (synchronous
+fan-out from `PolicyEngine`), `decisions` / `findings` persisted, and a `prev_hash` / `hash`
+chain over `policy_events` with `EventLog.verify_chain/0` + a dashboard "verify audit chain"
+button.
+
+Not built yet: `pre_call` / `post_call` scanner invocation and the `post_call` phase;
+batched / remote audit sinks and a real `audit/record` notification (steps 5, 7); the
+sidecar JSON-RPC runner and `{:sidecar, _}` activation (step 5); circuit breaker, decision
+cache, `:hold` + approval UI (step 6); a dashboard UI for the plugin registry. `Pipeline`
+currently coerces `:hold` to `:deny`.
 
 ---
 
@@ -142,6 +147,13 @@ marker — for durable storage or export (SIEM, OpenTelemetry, object storage). 
 the `audit/record` **notification** (no reply, off the request path).
 
 Declares: `batch` (bool), `maxBatch` (int), `flushIntervalMs`.
+
+> **As built.** `PhoenixElxirBeam.MCP.PolicyEngine` fans out to every enabled sink
+> (`Plugin.Registry.active_sinks/1`) **synchronously**, one `AuditEvent` per call, right
+> after the PubSub broadcast — each sink call isolated so one failure can't stop the
+> others or crash the engine. `Plugins.EventLogSink` is the first sink (the hash-chained
+> local log). Batching (`batch` / `maxBatch` / `flushIntervalMs`) and a real `audit/record`
+> notification transport are deferred to the sidecar / remote-sink work (steps 5, 7).
 
 ---
 
@@ -342,6 +354,16 @@ interface AuditEvent {
   occurredAt: string;
 }
 ```
+
+> **As built.** `PhoenixElxirBeam.MCP.AuditEvent` is the in-process struct;
+> `PhoenixElxirBeam.MCP.PolicyEngine` builds it from the pipeline result (the
+> deciding `policy` plugin lands in `decisions`, scanner output in `findings`).
+> The built-in `event-log` sink (`Plugins.EventLogSink`) persists it to the
+> `policy_events` table, where `decisions` / `findings` are JSON columns and every
+> row carries `prev_hash` + `hash` (`hash = sha256(prev_hash <> canonical(row))`).
+> `EventLog.verify_chain/0` replays the chain and names the first altered / missing
+> row — the tamper-evidence property, sound because all writes are serialized
+> through the one `PolicyEngine` GenServer.
 
 ---
 

@@ -168,6 +168,19 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, refresh_history(socket)}
   end
 
+  def handle_event("verify_audit_chain", _params, socket) do
+    flash =
+      case EventLog.verify_chain() do
+        :ok ->
+          {:info, "Audit chain intact — #{socket.assigns.history_result.total_count} event(s)"}
+
+        {:error, %{event_id: event_id, occurred_at: at}} ->
+          {:error, "Audit chain BROKEN at event #{event_id} (#{format_datetime(at)})"}
+      end
+
+    {:noreply, put_flash(socket, elem(flash, 0), elem(flash, 1))}
+  end
+
   def handle_event("history_paginate", %{"page" => page}, socket) do
     page =
       case Integer.parse(page) do

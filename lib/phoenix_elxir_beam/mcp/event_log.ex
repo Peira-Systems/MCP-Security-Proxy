@@ -2,34 +2,149 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   @moduledoc """
   Durable storage and querying for `PhoenixElxirBeam.MCP.PolicyEvent`
   rows — the persisted counterpart of the live events PolicyEngine
-  broadcasts over PubSub. `record/1` is the write side, called from
-  PolicyEngine after a verdict is already final; `list/1` is the read
-  side, used by the log browser for paged, filtered queries.
+  broadcasts over PubSub, wrapped as the `event-log` `AuditSink`
+  (`PhoenixElxirBeam.MCP.Plugins.EventLogSink`). `record/1` is the write
+  side; `list/1` is the read side, used by the log browser.
+
+  Rows form a hash chain: `record/1` reads the previous row's `hash` and
+  stores `hash = sha256(prev_hash <> canonical(row))`. `verify_chain/0`
+  replays the whole log and reports the first tampered or missing row.
+  This is only sound because every write goes through the single
+  `PhoenixElxirBeam.MCP.PolicyEngine` GenServer, serially.
   """
 
   import Ecto.Query
 
-  alias PhoenixElxirBeam.MCP.{Event, PolicyEvent}
+  alias PhoenixElxirBeam.MCP.{AuditEvent, PolicyEvent}
   alias PhoenixElxirBeam.Repo
 
   @default_page_size 25
 
-  @doc "Persists a `PhoenixElxirBeam.MCP.Event` as a durable log row."
-  def record(%Event{} = event) do
+  # Fields covered by the chain hash (everything meaningful except the
+  # chain columns themselves and the row id / inserted_at).
+  @hashed_keys ~w(event_id session_id scenario server_id tool_name tags status
+                  reason occurred_at decisions findings)a
+
+  @doc "Persists an `AuditEvent` as a durable, hash-chained log row."
+  def record(%AuditEvent{} = event) do
+    attrs = base_attrs(event)
+    prev = last_hash()
+    hash = chain_hash(prev, attrs)
+
     %PolicyEvent{}
-    |> PolicyEvent.changeset(%{
-      event_id: event.id,
-      session_id: event.session_id,
-      scenario: event.scenario && to_string(event.scenario),
-      server_id: event.server_id,
-      tool_name: event.tool_name,
-      tags: Enum.map(event.tags, &to_string/1),
-      status: to_string(event.status),
-      reason: event.reason,
-      occurred_at: event.timestamp
-    })
+    |> PolicyEvent.changeset(Map.merge(attrs, %{prev_hash: prev, hash: hash}))
     |> Repo.insert()
   end
+
+  @doc "The `hash` of the most recent row, or `nil` for an empty log."
+  def last_hash do
+    PolicyEvent
+    |> order_by(desc: :id)
+    |> limit(1)
+    |> select([e], e.hash)
+    |> Repo.one()
+  end
+
+  @doc """
+  Replays the log in insert order, recomputing each row's `hash` from the
+  previous row's. Returns `:ok`, or `{:error, %{event_id:, occurred_at:}}`
+  for the first row whose stored `prev_hash` / `hash` doesn't line up — i.e.
+  a row was altered, inserted, or deleted.
+
+  Rows written before the chain migration (`hash IS NULL`) are pre-chain and
+  skipped; verification starts at the first hashed row.
+  """
+  @spec verify_chain() :: :ok | {:error, %{event_id: String.t(), occurred_at: DateTime.t()}}
+  def verify_chain do
+    PolicyEvent
+    |> order_by(asc: :id)
+    |> Repo.all()
+    |> Enum.drop_while(&is_nil(&1.hash))
+    |> Enum.reduce_while({:ok, nil}, fn row, {:ok, prev} ->
+      expected = chain_hash(prev, row_attrs(row))
+
+      if row.prev_hash == prev and row.hash == expected do
+        {:cont, {:ok, row.hash}}
+      else
+        {:halt, {:error, %{event_id: row.event_id, occurred_at: row.occurred_at}}}
+      end
+    end)
+    |> case do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  defp base_attrs(%AuditEvent{} = e) do
+    %{
+      event_id: e.event_id,
+      session_id: e.session_id,
+      scenario: e.scenario && to_string(e.scenario),
+      server_id: e.server_id,
+      tool_name: e.tool_name,
+      tags: Enum.map(e.tags, &to_string/1),
+      status: to_string(e.status),
+      reason: e.reason,
+      occurred_at: e.occurred_at,
+      decisions: Enum.map(e.decisions, &to_plain/1),
+      findings: Enum.map(e.findings, &to_plain/1)
+    }
+  end
+
+  defp row_attrs(%PolicyEvent{} = r) do
+    %{
+      event_id: r.event_id,
+      session_id: r.session_id,
+      scenario: r.scenario,
+      server_id: r.server_id,
+      tool_name: r.tool_name,
+      tags: r.tags,
+      status: r.status,
+      reason: r.reason,
+      occurred_at: r.occurred_at,
+      decisions: r.decisions,
+      findings: r.findings
+    }
+  end
+
+  defp chain_hash(prev, attrs) do
+    payload = attrs |> Map.take(@hashed_keys) |> canonical_json()
+    digest = :crypto.hash(:sha256, "#{prev}\n#{payload}")
+    "sha256:" <> Base.encode16(digest, case: :lower)
+  end
+
+  # Deterministic JSON: keys sorted recursively, atoms/DateTimes stringified.
+  defp canonical_json(term), do: term |> canonicalize() |> Jason.encode!()
+
+  defp canonicalize(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  defp canonicalize(map) when is_map(map) do
+    map
+    |> Enum.map(fn {k, v} -> {to_string(k), canonicalize(v)} end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Jason.OrderedObject.new()
+  end
+
+  defp canonicalize(list) when is_list(list), do: Enum.map(list, &canonicalize/1)
+
+  defp canonicalize(atom) when is_atom(atom) and not is_nil(atom) and not is_boolean(atom),
+    do: to_string(atom)
+
+  defp canonicalize(other), do: other
+
+  # Struct/atom-free plain data for JSON columns.
+  defp to_plain(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp to_plain(%_{} = struct), do: struct |> Map.from_struct() |> to_plain()
+
+  defp to_plain(map) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), to_plain(v)} end)
+
+  defp to_plain(list) when is_list(list), do: Enum.map(list, &to_plain/1)
+
+  defp to_plain(atom) when is_atom(atom) and not is_nil(atom) and not is_boolean(atom),
+    do: to_string(atom)
+
+  defp to_plain(other), do: other
 
   @doc """
   Pages through the log, most recent first.
