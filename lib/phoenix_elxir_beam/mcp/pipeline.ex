@@ -1,9 +1,8 @@
 defmodule PhoenixElxirBeam.MCP.Pipeline do
   @moduledoc """
-  Runs the registered plugin chain for one phase of a tool call and
-  aggregates the result into a single verdict.
+  Runs the registered plugin chain for one phase and aggregates the result.
 
-  This step implements the `pre_call` `policy` chain only:
+  `run/3` — the `pre_call` `policy` chain:
 
     * plugins run in the operator-configured order (`entry.order`);
     * each invocation is bounded by the plugin's `timeout_ms` and, on
@@ -14,14 +13,19 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     * granted `add_tags` mutations from an `:allow` / `:annotate` are applied
       to the context so later plugins in the chain observe them.
 
-  Scanners and the `post_call` phase are accepted but not yet invoked
-  (roadmap steps 3–4). `:hold` is coerced to `:deny` until the approval UI
-  exists (step 6).
+  `run_discovery/2` — the `discovery` `scanner` set (server registration /
+  re-handshake, off the request path): every enabled `:discovery` scanner is
+  invoked (same `timeout_ms` / `fail_mode` bounding), and their `Finding`s and
+  per-tool `tool_update`s are merged.
+
+  `:pre_call` / `:post_call` scanners are not invoked yet. `:hold` is coerced
+  to `:deny` until the approval UI exists (step 6).
   """
 
   require Logger
 
   alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding}
+  alias PhoenixElxirBeam.MCP.Plugin.Scanner
 
   @task_supervisor PhoenixElxirBeam.MCP.TaskSupervisor
 
@@ -56,6 +60,74 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     |> Enum.filter(&applies?(&1, phase, ctx))
     |> Enum.sort_by(& &1.order)
     |> evaluate_chain(phase, ctx, [])
+  end
+
+  @doc """
+  Runs every enabled `:discovery` scanner in `entries` over `ctx` (a
+  `phase: :discovery` context) and merges the results.
+
+  Returns `{:ok, findings, tool_updates}` where `tool_updates` are merged by
+  tool name — `quarantine` is true if any scanner asked for it, `add_tags` is
+  the union, and the first non-nil `reason` wins.
+  """
+  @spec run_discovery(CallContext.t(), [entry()]) ::
+          {:ok, [Finding.t()], [Scanner.tool_update()]}
+  def run_discovery(%CallContext{phase: :discovery} = ctx, entries) when is_list(entries) do
+    {findings, updates} =
+      entries
+      |> Enum.filter(&(&1.enabled and &1.kind == :scanner and :discovery in &1.phases))
+      |> Enum.sort_by(& &1.order)
+      |> Enum.map(&invoke_discovery(&1, ctx))
+      |> Enum.reduce({[], []}, fn {fs, us}, {facc, uacc} -> {facc ++ fs, uacc ++ us} end)
+
+    {:ok, findings, merge_tool_updates(updates)}
+  end
+
+  defp invoke_discovery(entry, ctx) do
+    task =
+      Task.Supervisor.async_nolink(@task_supervisor, fn ->
+        entry.module.scan(:discovery, ctx)
+      end)
+
+    case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, findings, updates}} when is_list(findings) and is_list(updates) ->
+        {findings, updates}
+
+      {:ok, other} ->
+        {[scanner_error_finding(entry, "returned #{inspect(other)}")], []}
+
+      {:exit, reason} ->
+        {[scanner_error_finding(entry, "crashed (#{inspect(reason)})")], []}
+
+      nil ->
+        {[scanner_error_finding(entry, "timed out after #{entry.timeout_ms}ms")], []}
+    end
+  end
+
+  # Scanners are advisory (`fail_open`): a failure is dropped, not fatal, but
+  # it is recorded as a finding so the operator sees the coverage gap.
+  defp scanner_error_finding(entry, detail) do
+    Logger.warning("Pipeline: discovery scanner #{entry.name} #{detail}; dropped")
+
+    Finding.new(%{
+      type: "plugin_error",
+      severity: :medium,
+      title: "discovery scanner #{entry.name} #{detail}",
+      plugin: %{name: entry.name, version: entry.version}
+    })
+  end
+
+  defp merge_tool_updates(updates) do
+    updates
+    |> Enum.group_by(& &1.name)
+    |> Enum.map(fn {name, group} ->
+      %{
+        name: name,
+        quarantine: Enum.any?(group, &Map.get(&1, :quarantine, false)),
+        add_tags: group |> Enum.flat_map(&Map.get(&1, :add_tags, [])) |> Enum.uniq(),
+        reason: Enum.find_value(group, &Map.get(&1, :reason))
+      }
+    end)
   end
 
   defp applies?(entry, phase, ctx) do

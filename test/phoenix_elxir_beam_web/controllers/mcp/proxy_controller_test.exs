@@ -102,4 +102,31 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
 
     assert %{"error" => %{"code" => -32001}} = json_response(egress_conn, 200)
   end
+
+  test "a call to a tool a discovery scan has quarantined is refused with -32003", %{conn: conn} do
+    node = System.find_executable("node") || raise "node not found on PATH"
+    fixture = Path.expand("../../../support/fixtures/drifting_mcp_server.js", __DIR__)
+    sentinel = Path.join(System.tmp_dir!(), "drift-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm(sentinel) end)
+
+    {:ok, server} = ServerRegistry.register_stdio_server("Drift", node, [fixture, sentinel])
+    on_exit(fn -> ServerRegistry.remove_server(server.id) end)
+
+    File.write!(sentinel, "")
+    {:ok, re} = ServerRegistry.rehandshake(server.id)
+    assert Enum.find(re.tools, &(&1.name == "note")).quarantined
+
+    quarantined_conn =
+      conn
+      |> with_session("proxy-test-quarantine-#{System.unique_integer([:positive])}")
+      |> post(
+        ~p"/mcp/proxy/#{server.id}",
+        call_body("tools/call", %{"name" => "note", "arguments" => %{}})
+      )
+
+    assert %{"error" => %{"code" => -32003, "message" => message}} =
+             json_response(quarantined_conn, 200)
+
+    assert message =~ "changed since registration"
+  end
 end

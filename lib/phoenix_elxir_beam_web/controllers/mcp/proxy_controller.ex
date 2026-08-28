@@ -20,6 +20,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   }
 
   @chain_blocked_code -32001
+  @quarantined_code -32003
 
   def handle(conn, %{"server_id" => server_id} = params) do
     id = params["id"]
@@ -39,23 +40,47 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
   defp route_tool_call(conn, server_id, session_id, id, jsonrpc_version, rpc_params) do
     tool_name = rpc_params["name"]
-    tags = tool_tags(server_id, tool_name)
 
-    # Ensures session state exists before the policy decision runs, so a
-    # lookup miss inside `record_call/5` is an anomaly PolicyEngine can
-    # fail closed on rather than the normal shape of a new session.
-    :ok = PolicyEngine.ensure_session(session_id)
+    case quarantine_reason(server_id, tool_name) do
+      {:quarantined, reason} ->
+        # A discovery scanner (e.g. rug-pull) has held this tool. Refuse
+        # before the policy pipeline, but still receipt the attempt.
+        PolicyEngine.record_blocked(session_id, server_id, tool_name, reason)
 
-    case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
-      {:allow, _event} ->
-        forward(conn, server_id, envelope(jsonrpc_version, id, "tools/call", rpc_params), id)
-
-      {:block, event} ->
         json(conn, %{
           "jsonrpc" => jsonrpc_version,
           "id" => id,
-          "error" => %{"code" => @chain_blocked_code, "message" => event.reason}
+          "error" => %{"code" => @quarantined_code, "message" => reason}
         })
+
+      :ok ->
+        tags = tool_tags(server_id, tool_name)
+
+        # Ensures session state exists before the policy decision runs, so a
+        # lookup miss inside `record_call/5` is an anomaly PolicyEngine can
+        # fail closed on rather than the normal shape of a new session.
+        :ok = PolicyEngine.ensure_session(session_id)
+
+        case PolicyEngine.record_call(session_id, server_id, tool_name, tags) do
+          {:allow, _event} ->
+            forward(conn, server_id, envelope(jsonrpc_version, id, "tools/call", rpc_params), id)
+
+          {:block, event} ->
+            json(conn, %{
+              "jsonrpc" => jsonrpc_version,
+              "id" => id,
+              "error" => %{"code" => @chain_blocked_code, "message" => event.reason}
+            })
+        end
+    end
+  end
+
+  defp quarantine_reason(server_id, tool_name) do
+    with %{tools: tools} <- ServerRegistry.get_server(server_id),
+         %{quarantined: true} = tool <- Enum.find(tools, &(&1.name == tool_name)) do
+      {:quarantined, tool.quarantine_reason || "tool quarantined by a discovery scan"}
+    else
+      _ -> :ok
     end
   end
 

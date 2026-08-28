@@ -105,6 +105,23 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     assert event.status == :blocked
   end
 
+  test "record_blocked/5 receipts a blocked event without needing session state", %{name: name} do
+    assert {:block, event} =
+             PolicyEngine.record_blocked(
+               "no-session",
+               "real-abc",
+               "note",
+               "tool definition changed since registration",
+               name
+             )
+
+    assert event.status == :blocked
+    assert event.reason =~ "changed since registration"
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    assert Enum.any?(entries, &(&1.event_id == event.id and &1.status == "blocked"))
+  end
+
   test "verdicts are durably persisted for allows as well as blocks", %{name: name} do
     session_id = "session-receipts"
     :ok = PolicyEngine.start_session(session_id, :benign, name)

@@ -51,6 +51,14 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     |> Enum.filter(&(&1.kind == :policy and &1.enabled and phase in &1.phases))
   end
 
+  @doc "Enabled `scanner` entries whose `phases` include `phase`, in configured order."
+  @spec active_scanners(atom(), atom()) :: [map()]
+  def active_scanners(phase, table \\ __MODULE__) do
+    table
+    |> list()
+    |> Enum.filter(&(&1.kind == :scanner and &1.enabled and phase in &1.phases))
+  end
+
   def enable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, true})
   def disable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, false})
 
@@ -159,15 +167,32 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     })
   end
 
-  defp capability_entry(kind, manifest, module, _grants, index)
-       when kind in [:scanner, :audit_sink] do
+  defp capability_entry(:scanner, manifest, module, _grants, index) do
+    cap = manifest.capabilities.scanner
+
     base_entry(%{
       name: manifest.plugin.name,
       version: manifest.plugin.version,
       module: module,
-      kind: kind,
+      kind: :scanner,
+      phases: cap.phases,
+      data_needs: cap.data_needs,
+      timeout_ms: cap.timeout_ms,
+      fail_mode: cap.fail_mode,
+      can_block: cap.can_block,
       order: index,
-      # Neither is invoked by the pipeline yet; registered for visibility only.
+      enabled: true
+    })
+  end
+
+  defp capability_entry(:audit_sink, manifest, module, _grants, index) do
+    base_entry(%{
+      name: manifest.plugin.name,
+      version: manifest.plugin.version,
+      module: module,
+      kind: :audit_sink,
+      order: index,
+      # Audit sinks are not invoked by the pipeline yet (step 4); listed only.
       enabled: false,
       note: :not_invoked_yet
     })
@@ -182,9 +207,11 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         kind: nil,
         phases: [],
         tool_tags: [],
+        data_needs: [],
         timeout_ms: 50,
         fail_mode: :fail_closed,
         can_mutate: [],
+        can_block: false,
         order: 0,
         enabled: false,
         note: nil

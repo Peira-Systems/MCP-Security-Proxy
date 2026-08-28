@@ -3,7 +3,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
 
   alias PhoenixElxirBeam.MCP.Decision
   alias PhoenixElxirBeam.MCP.Plugin.{Manifest, Registry}
-  alias PhoenixElxirBeam.MCP.Plugins.ChainExfil
+  alias PhoenixElxirBeam.MCP.Plugins.{ChainExfil, RugPull}
 
   defmodule AuditPolicy do
     @behaviour PhoenixElxirBeam.MCP.Plugin.Policy
@@ -81,6 +81,17 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert entry.kind == :sidecar
     refute entry.enabled
     assert entry.note == :not_implemented
+    assert [] = Registry.active_policies(:pre_call, reg)
+  end
+
+  test "seeds a scanner plugin enabled and exposes it via active_scanners/2" do
+    reg = start_registry([{RugPull, []}])
+
+    assert [%{name: "rug-pull", kind: :scanner, enabled: true, can_block: true}] =
+             Registry.list(reg)
+
+    assert [%{name: "rug-pull"}] = Registry.active_scanners(:discovery, reg)
+    assert [] = Registry.active_scanners(:pre_call, reg)
     assert [] = Registry.active_policies(:pre_call, reg)
   end
 end

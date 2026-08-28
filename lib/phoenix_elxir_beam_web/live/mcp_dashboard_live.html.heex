@@ -37,6 +37,15 @@
         >
           Run attack simulation
         </button>
+        <button
+          id="run-rug-pull-btn"
+          type="button"
+          phx-click="run_rug_pull_demo"
+          disabled={@registering}
+          class="btn btn-outline btn-sm"
+        >
+          Run rug-pull demo
+        </button>
       </div>
     </div>
 
@@ -695,25 +704,87 @@
           :if={MapSet.member?(@expanded_server_ids, server.id)}
           class="space-y-3 border-t border-base-300/60 bg-base-200/20 px-4 py-3"
         >
-          <div class="flex items-start justify-end gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              phx-click="rehandshake"
+              phx-value-server_id={server.id}
+              disabled={@registering}
+              class="btn btn-outline btn-xs"
+            >
+              Re-handshake
+            </button>
+            <button
+              :if={mock_server_id(server)}
+              type="button"
+              phx-click="simulate_drift"
+              phx-value-server_id={server.id}
+              disabled={@registering}
+              class="btn btn-ghost btn-xs text-warning"
+            >
+              ☣ Simulate drift
+            </button>
+            <span :if={server[:last_handshake_at]} class="text-xs text-base-content/40">
+              last handshake {format_time(server.last_handshake_at)}
+            </span>
             <button
               type="button"
               phx-click="remove_server"
               phx-value-server_id={server.id}
-              class="btn btn-ghost btn-xs text-error"
+              class="btn btn-ghost btn-xs text-error ml-auto"
             >
               Remove
             </button>
           </div>
 
+          <div
+            :for={finding <- Enum.filter(server[:findings] || [], &(&1.type == "rug_pull"))}
+            class="rounded-box border border-error/40 bg-error/10 px-3 py-2 text-sm"
+          >
+            <div class="flex items-center gap-2 font-semibold text-error">
+              <span>⚠</span>
+              <span>{finding.title}</span>
+            </div>
+            <p :if={finding.detail} class="mt-1 text-xs text-base-content/70">{finding.detail}</p>
+            <p
+              :if={finding.evidence}
+              class="mt-1 truncate font-mono text-xs text-base-content/50"
+              title={finding.evidence}
+            >
+              new description: {finding.evidence}
+            </p>
+          </div>
+
           <div class="space-y-2">
             <div
               :for={tool <- server.tools}
-              class="flex flex-wrap items-center gap-2 rounded-box bg-base-200/50 px-3 py-2 text-sm"
+              class={[
+                "flex flex-wrap items-center gap-2 rounded-box px-3 py-2 text-sm",
+                if(tool[:quarantined],
+                  do: "border border-error/50 bg-error/10",
+                  else: "bg-base-200/50"
+                )
+              ]}
             >
               <span class="font-mono font-medium">{tool.name}</span>
+              <span
+                :if={tool[:quarantined]}
+                class="rounded-full bg-error/20 px-2 py-0.5 text-[10px] font-semibold text-error"
+              >
+                quarantined
+              </span>
               <span class="text-xs text-base-content/60">{tool.description}</span>
               <span class="ml-auto flex items-center gap-1.5">
+                <button
+                  :if={tool[:quarantined]}
+                  type="button"
+                  phx-click="clear_tool_block"
+                  phx-value-server_id={server.id}
+                  phx-value-tool_name={tool.name}
+                  class="rounded-full bg-base-300 px-2 py-0.5 text-xs font-medium text-base-content/70 hover:bg-base-content/10"
+                >
+                  clear quarantine
+                </button>
                 <button
                   type="button"
                   phx-click="toggle_tool_tag"

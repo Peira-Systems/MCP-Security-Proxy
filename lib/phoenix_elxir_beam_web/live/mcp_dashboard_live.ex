@@ -9,15 +9,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{Demo, EventLog, ServerRegistry, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.{Demo, EventLog, MockDrift, ServerRegistry, ToolCatalog}
 
   @topic "mcp:events"
+  @servers_topic "mcp:servers"
   @history_page_size 20
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
     end
 
     graph =
@@ -84,6 +86,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   def handle_event("run_attack", _params, socket) do
     {:ok, _pid} = Demo.run_attack_simulation()
     {:noreply, assign(socket, running: true)}
+  end
+
+  def handle_event("run_rug_pull_demo", _params, socket) do
+    {:ok, _pid} = Demo.run_rug_pull_demo()
+
+    {:noreply,
+     put_flash(
+       socket,
+       :info,
+       "Rug-pull demo: registering the files server, then poisoning + re-handshaking…"
+     )}
   end
 
   def handle_event("set_console_mode", %{"mode" => mode}, socket)
@@ -235,6 +248,37 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
   end
 
+  def handle_event("rehandshake", %{"server_id" => server_id}, socket) do
+    {:noreply, start_rehandshake(socket, server_id)}
+  end
+
+  def handle_event("simulate_drift", %{"server_id" => server_id}, socket) do
+    case socket.assigns.real_servers
+         |> Enum.find(&(&1.id == server_id))
+         |> mock_server_id() do
+      nil ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "This server isn't backed by a local mock — can't simulate drift."
+         )}
+
+      mock_id ->
+        MockDrift.poison(mock_id)
+        {:noreply, start_rehandshake(socket, server_id)}
+    end
+  end
+
+  def handle_event(
+        "clear_tool_block",
+        %{"server_id" => server_id, "tool_name" => tool_name},
+        socket
+      ) do
+    {:ok, _server} = ServerRegistry.clear_tool_block(server_id, tool_name)
+    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+  end
+
   def handle_event(
         "call_tool",
         %{"server_id" => server_id, "tool_name" => tool_name, "arguments" => arguments_json},
@@ -275,6 +319,15 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, apply_event(socket, event)}
   end
 
+  # Any ServerRegistry mutation (from this or another dashboard, or a demo
+  # task) — refetch the server list.
+  def handle_info({:servers_changed}, socket) do
+    {:noreply,
+     socket
+     |> assign(:real_servers, ServerRegistry.list_servers())
+     |> assign(:server_options, EventLog.distinct_server_ids())}
+  end
+
   def handle_info({:server_registered, {:ok, server}}, socket) do
     {:noreply,
      socket
@@ -289,6 +342,31 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      socket
      |> assign(:registering, false)
      |> put_flash(:error, "Couldn't register server: #{reason}")}
+  end
+
+  def handle_info({:rehandshake_done, {:ok, server}}, socket) do
+    drift = Enum.count(server.findings, &(&1.type == "rug_pull"))
+
+    flash =
+      if drift > 0 do
+        {:error, "Re-handshake: #{drift} tool(s) changed since registration — quarantined"}
+      else
+        {:info, "Re-handshake of #{server.name}: no drift"}
+      end
+
+    {:noreply,
+     socket
+     |> assign(:registering, false)
+     |> assign(:real_servers, ServerRegistry.list_servers())
+     |> assign(:expanded_server_ids, MapSet.put(socket.assigns.expanded_server_ids, server.id))
+     |> put_flash(elem(flash, 0), elem(flash, 1))}
+  end
+
+  def handle_info({:rehandshake_done, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:registering, false)
+     |> put_flash(:error, "Re-handshake failed: #{inspect(reason)}")}
   end
 
   defp refresh_history(socket) do
@@ -307,6 +385,31 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     |> assign(:history_result, EventLog.list(filters))
     |> assign(:server_options, EventLog.distinct_server_ids())
   end
+
+  defp start_rehandshake(socket, server_id) do
+    liveview = self()
+
+    Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+      send(liveview, {:rehandshake_done, ServerRegistry.rehandshake(server_id)})
+    end)
+
+    socket |> assign(:registering, true) |> clear_flash()
+  end
+
+  # The mock `server_id` (e.g. "files") behind a registered server whose
+  # base URL points at this app's own mock endpoint, or nil if it points
+  # elsewhere. Used to gate the "simulate drift" action.
+  defp mock_server_id(nil), do: nil
+  defp mock_server_id(%{base_url: base_url}), do: mock_server_id(base_url)
+
+  defp mock_server_id(base_url) when is_binary(base_url) do
+    case URI.parse(base_url) do
+      %URI{path: "/mcp/servers/" <> id} when id != "" -> id
+      _ -> nil
+    end
+  end
+
+  defp mock_server_id(_), do: nil
 
   defp parse_date("", _edge), do: nil
 

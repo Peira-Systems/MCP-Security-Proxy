@@ -79,6 +79,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     GenServer.call(name, {:complete_session, session_id})
   end
 
+  @doc """
+  Receipts a `:blocked` event for a call the proxy refused before the
+  pipeline — e.g. a `tools/call` to a tool a discovery scanner has
+  quarantined. No session state is required or consulted.
+  """
+  def record_blocked(session_id, server_id, tool_name, reason, name \\ __MODULE__) do
+    GenServer.call(name, {:record_blocked, session_id, server_id, tool_name, reason})
+  end
+
   # Server callbacks
 
   @impl true
@@ -120,6 +129,12 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @impl true
+  def handle_call({:record_blocked, session_id, server_id, tool_name, reason}, _from, state) do
+    event = blocked_event(session_id, nil, server_id, tool_name, [], reason)
+    receipt(event)
+    {:reply, {:block, event}, state}
+  end
+
   def handle_call({:record_call, nil, server_id, tool_name, tags}, _from, state) do
     event = blocked_event(nil, nil, server_id, tool_name, tags, @missing_session_reason)
     receipt(event)

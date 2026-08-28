@@ -137,7 +137,10 @@ instances under a dynamic supervisor.
    behaviours + `Plugin.Registry` + bounded `timeout_ms`/`fail_mode`; tags kept as atoms
    internally; circuit breaker deferred to step 5.)
 3. **Rug-pull / tool-drift scanner** — first non-trivial plugin; exercises `discovery` +
-   `ServerRegistry`; stores `descriptionHash` per tool; dashboard alert on mismatch.
+   `ServerRegistry`; stores `descriptionHash` per tool; dashboard alert on mismatch. ✔
+   (`MCP.ToolHash`, `MCP.Plugins.RugPull`, `Pipeline.run_discovery/2`,
+   `ServerRegistry.rehandshake/2` + tool quarantine, `ProxyController` `-32003`, red
+   dashboard card + re-handshake / simulate-drift buttons, `MockDrift` demo switch.)
 4. **Extract `AuditSink`** — move `EventLog` behind the behaviour; add `prev_hash`
    chaining to `PolicyEvent`.
 5. **Sidecar transport** — out-of-process JSON-RPC runner; ship the Python example from

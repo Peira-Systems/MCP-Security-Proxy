@@ -20,6 +20,7 @@ defmodule PhoenixElxirBeam.Application do
       PhoenixElxirBeam.MCP.PolicyEngine,
       {DynamicSupervisor, name: PhoenixElxirBeam.MCP.StdioServerSupervisor},
       PhoenixElxirBeam.MCP.ServerRegistry,
+      PhoenixElxirBeam.MCP.MockDrift,
       # Start a worker by calling: PhoenixElxirBeam.Worker.start_link(arg)
       # {PhoenixElxirBeam.Worker, arg},
       # Start to serve requests, typically the last entry

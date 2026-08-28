@@ -6,17 +6,22 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
 
   The proxy owns canonical session state; a `CallContext` is a read-only view
   of it at one instant. Fields the current caller has no data for are left
-  `nil`. Today `PhoenixElxirBeam.MCP.PolicyEngine` populates `phase`, `call`,
-  and `session.seen_tags`; `call.arguments`, `tool`, and `response` are
-  threaded in by later roadmap steps (scanners, post_call).
+  `nil`. On a `:pre_call` / `:post_call` context `PhoenixElxirBeam.MCP.PolicyEngine`
+  populates `phase`, `call`, and `session.seen_tags`; `call.arguments`, `tool`,
+  and `response` are threaded in by later roadmap steps (scanners, post_call).
+
+  On a `:discovery` context (built by `PhoenixElxirBeam.MCP.ServerRegistry` at
+  registration / re-handshake) there is no single call: `discovery` carries the
+  server, the freshly listed `tools`, and the `previous_hashes` pinned last time.
   """
 
-  @enforce_keys [:phase, :call]
+  @enforce_keys [:phase]
   defstruct phase: nil,
             call: %{},
             tool: nil,
             session: %{seen_tags: [], taint: %{sources: []}, calls_so_far: 0, findings_so_far: []},
             response: nil,
+            discovery: nil,
             plugin_config: %{}
 
   @type phase :: :discovery | :pre_call | :post_call
@@ -27,17 +32,29 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
           tool: map() | nil,
           session: map(),
           response: map() | nil,
+          discovery:
+            %{server: map(), tools: [map()], previous_hashes: %{String.t() => String.t()}} | nil,
           plugin_config: map()
         }
 
   @default_session %{seen_tags: [], taint: %{sources: []}, calls_so_far: 0, findings_so_far: []}
 
   @doc """
-  Builds a context from a map. `:phase` and `:call` are required; `:session`
-  is merged onto sane defaults so plugins can read `ctx.session.seen_tags`
-  unconditionally.
+  Builds a context from a map. `:phase` is required. A `:discovery` context
+  requires `:discovery`; any other phase requires `:call`. `:session` is merged
+  onto sane defaults so plugins can read `ctx.session.seen_tags` unconditionally.
   """
   @spec new(map()) :: t()
+  def new(%{phase: :discovery} = attrs) do
+    %__MODULE__{
+      phase: :discovery,
+      call: Map.get(attrs, :call, %{}),
+      discovery: Map.fetch!(attrs, :discovery),
+      session: Map.merge(@default_session, Map.get(attrs, :session, %{})),
+      plugin_config: Map.get(attrs, :plugin_config, %{})
+    }
+  end
+
   def new(%{phase: phase, call: call} = attrs) do
     %__MODULE__{
       phase: phase,

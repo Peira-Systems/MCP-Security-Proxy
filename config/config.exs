@@ -15,7 +15,8 @@ config :phoenix_elxir_beam,
 # See docs/plugin-protocol.md §15 and docs/adr/0001-plugin-architecture.md.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
-    {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []}
+    {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
+    {PhoenixElxirBeam.MCP.Plugins.RugPull, []}
   ]
 
 # Configure the endpoint

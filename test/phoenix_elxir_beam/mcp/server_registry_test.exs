@@ -75,4 +75,51 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
 
     assert is_binary(reason)
   end
+
+  test "registration pins a description hash per tool and finds no drift on its own", %{
+    name: name,
+    base_url: base_url
+  } do
+    {:ok, server} = ServerRegistry.register_server("Files", base_url, name)
+
+    assert Enum.all?(server.tools, &match?("sha256:" <> _, &1.description_hash))
+    assert server.findings == []
+    assert Enum.all?(server.tools, &(&1.quarantined == false))
+  end
+
+  test "re-handshake with no change reports no drift", %{name: name, base_url: base_url} do
+    {:ok, server} = ServerRegistry.register_server("Files", base_url, name)
+    {:ok, re} = ServerRegistry.rehandshake(server.id, name)
+
+    assert re.findings == []
+    assert Enum.map(re.tools, & &1.name) == Enum.map(server.tools, & &1.name)
+  end
+
+  test "re-handshake after a tool definition drifts quarantines it and keeps operator tags", %{
+    name: name
+  } do
+    node = System.find_executable("node") || raise "node not found on PATH"
+    fixture = Path.expand("../../support/fixtures/drifting_mcp_server.js", __DIR__)
+    sentinel = Path.join(System.tmp_dir!(), "drift-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm(sentinel) end)
+
+    {:ok, server} =
+      ServerRegistry.register_stdio_server("Drift", node, [fixture, sentinel], name)
+
+    {:ok, _} = ServerRegistry.set_tool_tags(server.id, "note", [:sensitive_read], name)
+
+    # Make the server's tools/list drift, then re-handshake.
+    File.write!(sentinel, "")
+    {:ok, re} = ServerRegistry.rehandshake(server.id, name)
+
+    assert [%{type: "rug_pull"}] = re.findings
+    note = Enum.find(re.tools, &(&1.name == "note"))
+    assert note.quarantined
+    assert :sensitive_read in note.tags
+
+    {:ok, cleared} = ServerRegistry.clear_tool_block(server.id, "note", name)
+    assert Enum.find(cleared.tools, &(&1.name == "note")).quarantined == false
+
+    ServerRegistry.remove_server(server.id, name)
+  end
 end
