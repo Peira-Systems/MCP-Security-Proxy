@@ -11,7 +11,13 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
   use PhoenixElxirBeamWeb, :controller
 
-  alias PhoenixElxirBeam.MCP.{PolicyEngine, ServerRegistry, StdioServer, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.{
+    HttpTransport,
+    PolicyEngine,
+    ServerRegistry,
+    StdioServer,
+    ToolCatalog
+  }
 
   @chain_blocked_code -32001
 
@@ -100,9 +106,11 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   end
 
   defp forward_to_real(conn, %{transport: :http} = server, body, id) do
-    headers = if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
+    session_headers = if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
+    {url, transport_headers} = HttpTransport.prepare(server.base_url)
+    headers = transport_headers ++ session_headers
 
-    case Req.post(server.base_url, json: body, headers: headers, receive_timeout: 15_000) do
+    case Req.post(url, json: body, headers: headers, receive_timeout: 15_000) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
         json(conn, resp_body)
 

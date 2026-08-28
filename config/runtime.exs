@@ -23,6 +23,19 @@ end
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# When the proxy runs in a container it can't reach an MCP server on the
+# *host's* loopback via `127.0.0.1`. Setting this (the compose file sets it to
+# `host.docker.internal`) lets a registered `localhost` / `127.0.0.1` URL be
+# dialed through that alias instead. Unset outside a container — loopback URLs
+# are then used as-is. See `PhoenixElxirBeam.MCP.HttpTransport`.
+case System.get_env("MCP_HOST_LOOPBACK_ALIAS") do
+  alias when is_binary(alias) and alias != "" ->
+    config :phoenix_elxir_beam, :host_loopback_alias, alias
+
+  _ ->
+    :ok
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
@@ -30,12 +43,12 @@ if config_env() == :dev do
       web_console_logger: true,
       patterns: [
         # Static assets, except user uploads
-        ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,
+        ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$",
         # Gettext translations
-        ~r"priv/gettext/.*\.po$"E,
+        ~r"priv/gettext/.*\.po$",
         # Router, Controllers, LiveViews and LiveComponents
-        ~r"lib/phoenix_elxir_beam_web/router\.ex$"E,
-        ~r"lib/phoenix_elxir_beam_web/(controllers|live|components)/.*\.(ex|heex)$"E
+        ~r"lib/phoenix_elxir_beam_web/router\.ex$",
+        ~r"lib/phoenix_elxir_beam_web/(controllers|live|components)/.*\.(ex|heex)$"
       ]
     ]
 end
@@ -54,15 +67,28 @@ if config_env() == :prod do
   # to check this value into version control, so we use an environment
   # variable instead.
   secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      You can generate one by calling: mix phx.gen.secret
-      """
+    case System.get_env("SECRET_KEY_BASE") do
+      value when is_binary(value) and byte_size(value) >= 64 ->
+        value
+
+      _ ->
+        raise """
+        environment variable SECRET_KEY_BASE is missing or too short (must be
+        at least 64 bytes).
+        You can generate one by calling: mix phx.gen.secret
+        """
+    end
 
   host = System.get_env("PHX_HOST") || "example.com"
 
-  config :phoenix_elxir_beam, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  dns_cluster_query =
+    case System.get_env("DNS_CLUSTER_QUERY") do
+      nil -> nil
+      "" -> nil
+      value -> value
+    end
+
+  config :phoenix_elxir_beam, :dns_cluster_query, dns_cluster_query
 
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],

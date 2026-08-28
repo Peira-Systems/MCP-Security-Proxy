@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-security-proxy:latest
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-4000}
+      DATABASE_PATH: /data/phoenix_elxir_beam.db
+      # Lets a registered `localhost` / `127.0.0.1` MCP server URL (e.g. the
+      # JetBrains IDE plugin on the host) be reached from inside the container.
+      MCP_HOST_LOOPBACK_ALIAS: host.docker.internal
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    # Makes `host.docker.internal` resolve to the host. Automatic on Docker
+    # Desktop; declared here so it also works on plain Docker Engine / Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - mcp_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-4000}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  mcp_data:

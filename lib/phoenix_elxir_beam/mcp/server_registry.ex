@@ -17,7 +17,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
 
   use GenServer
 
-  alias PhoenixElxirBeam.MCP.StdioServer
+  alias PhoenixElxirBeam.MCP.{HttpTransport, StdioServer}
 
   # Client API
 
@@ -238,7 +238,10 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   end
 
   defp post_rpc(base_url, body, headers) do
-    case Req.post(base_url, json: body, headers: headers, receive_timeout: 10_000) do
+    {url, transport_headers} = HttpTransport.prepare(base_url)
+    headers = transport_headers ++ headers
+
+    case Req.post(url, json: body, headers: headers, receive_timeout: 10_000) do
       {:ok, %Req.Response{status: status, body: %{"result" => result}} = resp}
       when status in 200..299 ->
         {:ok, result, resp}

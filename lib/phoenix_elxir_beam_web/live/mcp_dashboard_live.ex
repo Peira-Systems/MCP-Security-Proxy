@@ -343,37 +343,128 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   # Fixed commands, not user-supplied — the dashboard form only ever passes a
   # preset key, never a raw command string, so there's no arbitrary-command
   # injection surface here.
+  #
+  # Each preset can be overridden with an env var holding the full command line
+  # (`MCP_FILESYSTEM_CMD` / `MCP_FETCH_CMD`), which is how a containerized
+  # deployment points at servers baked into its own image. Without an override
+  # we fall back to the local-dev layout (a project-root `.venv` / a
+  # `priv/mcp_servers` npm install), probing both the POSIX (`bin/`) and
+  # Windows (`Scripts/`) venv layouts.
   defp stdio_preset("filesystem") do
-    node = System.find_executable("node")
+    sandbox = sandbox_dir()
 
-    entry =
-      Path.expand(
-        "priv/mcp_servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
-        File.cwd!()
-      )
+    case env_cmd("MCP_FILESYSTEM_CMD") do
+      {:ok, cmd, args} ->
+        {:ok, "real-filesystem (stdio)", cmd, args ++ [sandbox]}
 
-    cond do
-      is_nil(node) ->
-        {:error, "node not found on PATH — install Node.js to run the real filesystem server"}
+      :none ->
+        node = System.find_executable("node")
 
-      not File.exists?(entry) ->
-        {:error,
-         "#{entry} not found — run: npm install --prefix priv/mcp_servers @modelcontextprotocol/server-filesystem"}
+        entry =
+          Path.expand(
+            "priv/mcp_servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+            File.cwd!()
+          )
 
-      true ->
-        sandbox = Path.expand("priv/mcp_sandbox", File.cwd!())
-        {:ok, "real-filesystem (stdio)", node, [entry, sandbox]}
+        cond do
+          is_nil(node) ->
+            {:error, preset_unavailable("filesystem", "node not found on PATH")}
+
+          not File.exists?(entry) ->
+            {:error,
+             preset_unavailable(
+               "filesystem",
+               "#{entry} not found — run: npm install --prefix priv/mcp_servers @modelcontextprotocol/server-filesystem"
+             )}
+
+          true ->
+            {:ok, "real-filesystem (stdio)", node, [entry, sandbox]}
+        end
     end
   end
 
   defp stdio_preset("fetch") do
-    python = Path.expand(".venv/Scripts/python.exe", File.cwd!())
+    case env_cmd("MCP_FETCH_CMD") do
+      {:ok, cmd, args} ->
+        {:ok, "real-fetch (stdio)", cmd, args}
 
-    if File.exists?(python) do
-      {:ok, "real-fetch (stdio)", python, ["-m", "mcp_server_fetch"]}
+      :none ->
+        case venv_python() do
+          {:ok, python} ->
+            {:ok, "real-fetch (stdio)", python, ["-m", "mcp_server_fetch"]}
+
+          :none ->
+            {:error,
+             preset_unavailable(
+               "fetch",
+               "no .venv found — run: python -m venv .venv && .venv/bin/python -m pip install mcp-server-fetch " <>
+                 "(.venv\\Scripts\\python on Windows)"
+             )}
+        end
+    end
+  end
+
+  # Splits an env-var command line on whitespace: `"python -m mcp_server_fetch"`
+  # -> `{:ok, "/usr/bin/python", ["-m", "mcp_server_fetch"]}`. Good enough for
+  # the fixed commands we expect here — no shell quoting is supported. The
+  # executable is resolved to an absolute path because `StdioServer` spawns it
+  # via `:spawn_executable`, which does not search `PATH`.
+  defp env_cmd(var) do
+    case System.get_env(var) do
+      value when is_binary(value) and value != "" ->
+        case String.split(value, ~r/\s+/, trim: true) do
+          [cmd | args] -> {:ok, resolve_executable(cmd), args}
+          [] -> :none
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp resolve_executable(cmd) do
+    expanded = Path.expand(cmd, File.cwd!())
+
+    cond do
+      Path.type(cmd) == :absolute -> cmd
+      File.regular?(expanded) -> expanded
+      true -> System.find_executable(cmd) || cmd
+    end
+  end
+
+  # The filesystem server's one allowed directory. In a release `priv` is under
+  # the versioned app dir (not the cwd), so resolve it through `app_dir/2` and
+  # only fall back to a cwd-relative path for `mix phx.server` dev.
+  defp sandbox_dir do
+    release_path = Application.app_dir(:phoenix_elxir_beam, "priv/mcp_sandbox")
+
+    if File.dir?(release_path) do
+      release_path
     else
-      {:error,
-       "#{python} not found — run: python -m venv .venv && .venv/Scripts/python -m pip install mcp-server-fetch"}
+      Path.expand("priv/mcp_sandbox", File.cwd!())
+    end
+  end
+
+  defp venv_python do
+    candidates =
+      [".venv/bin/python", ".venv/bin/python3", ".venv/Scripts/python.exe"]
+      |> Enum.map(&Path.expand(&1, File.cwd!()))
+
+    case Enum.find(candidates, &File.exists?/1) do
+      nil -> :none
+      python -> {:ok, python}
+    end
+  end
+
+  # In a packaged release (e.g. the Docker image) the local-dev toolchains
+  # aren't present; tell the operator to set the override rather than showing a
+  # path that only makes sense on a dev machine.
+  defp preset_unavailable(preset, detail) do
+    if System.get_env("RELEASE_NAME") do
+      "the '#{preset}' demo server isn't available in this deployment — " <>
+        "set MCP_#{String.upcase(preset)}_CMD to a command that launches it (#{detail})"
+    else
+      detail
     end
   end
 
