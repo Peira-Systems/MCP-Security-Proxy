@@ -47,6 +47,12 @@ defmodule PhoenixElxirBeam.MCP.PipelineTest do
     end
   end
 
+  defmodule Holder do
+    def evaluate(_phase, _ctx) do
+      Decision.hold("needs sign-off", %{prompt: "ok?", timeout_ms: 1000, on_timeout: :deny})
+    end
+  end
+
   defp entry(module, opts \\ []) do
     %{
       name: Keyword.get(opts, :name, inspect(module)),
@@ -160,5 +166,20 @@ defmodule PhoenixElxirBeam.MCP.PipelineTest do
     ]
 
     assert {:allow, _, _} = Pipeline.run(:pre_call, ctx(seen_tags: []), entries)
+  end
+
+  test "a :hold verdict is returned, not coerced to :deny" do
+    assert {:hold, decision, _} =
+             Pipeline.run(:pre_call, ctx(), [entry(Holder, name: "holder")])
+
+    assert decision.verdict == :hold
+    assert decision.deciding_plugin == "holder"
+    assert decision.hold.prompt == "ok?"
+  end
+
+  test "a :hold short-circuits: later plugins are not invoked" do
+    entries = [entry(Holder, order: 0), entry(Recorder, order: 1)]
+    assert {:hold, _, _} = Pipeline.run(:pre_call, ctx(), entries)
+    refute_receive {:invoked, Recorder}
   end
 end

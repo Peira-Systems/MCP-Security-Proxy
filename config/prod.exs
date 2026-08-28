@@ -29,10 +29,14 @@ config :swoosh, local: false
 # Do not print debug messages in production
 config :logger, level: :info
 
-# Reference out-of-process plugin. The Docker image installs python3 and
-# bakes in priv/plugins/. Skipped with a logged warning if python is absent.
+# The MCP proxy plugin pipeline for prod. `ApprovalGate` holds egress for
+# operator sign-off. The sidecar (Docker installs python3 + bakes priv/plugins)
+# is skipped with a logged warning if python is absent.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, []},
+    {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
+    {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},
     {:sidecar,
      name: "prompt-injection-scanner",
      transport: :stdio,

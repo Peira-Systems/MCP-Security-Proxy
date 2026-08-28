@@ -22,10 +22,22 @@ Built: `CallContext`, `Decision`, `Finding`, `Manifest`; the `Policy` / `Scanner
 `policy` chain** (ordered, short-circuit on first `:deny`, granted `add_tags` applied
 between plugins) and `Pipeline.run_discovery/2` for the **`discovery` `scanner` set**
 (findings + per-tool `quarantine` / `add_tags` merged); per-plugin `timeout_ms` +
-`fail_mode` enforced by the proxy. Registered plugins: `ChainExfil` (policy), `RugPull`
-(discovery scanner — tool-drift detection). `ServerRegistry.rehandshake/2` re-runs the
+`fail_mode` enforced by the proxy. `ServerRegistry.rehandshake/2` re-runs the
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`.
+
+Hold (§7.2 / §9.4 / §16.3): a `policy` plugin's `verdict: :hold` parks the `tools/call`
+in `MCP.HoldRegistry` (the HTTP request stays open) and the dashboard shows an
+Approve / Deny card; `HoldRegistry.await/3` unblocks the controller, which drives
+`PolicyEngine.finalize_hold/6` — approve forwards, deny (or the spec's `on_timeout`)
+returns `-32001`. **Approve = allow**: the remaining plugin chain is *not* re-run
+(deviation from §9.4). `MCP.Plugins.ApprovalGate` is the reference hold plugin;
+`ChainExfil` (hard block) and `ApprovalGate` (hold) are alternatives — test env runs
+`ChainExfil`, dev/prod run `ApprovalGate`.
+
+Plugin lists are configured per-env (`config/{test,dev,prod}.exs`), each setting the full
+`plugins:` list once (`Config` merges keyword-shaped lists by key, so there is no base
+list to override).
 
 Audit: `AuditEvent` + the `AuditSink` behaviour + `Plugins.EventLogSink` (synchronous
 fan-out from `PolicyEngine`), `decisions` / `findings` persisted, and a `prev_hash` / `hash`

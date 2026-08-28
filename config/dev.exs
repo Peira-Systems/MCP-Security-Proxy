@@ -7,10 +7,14 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
-# Reference out-of-process plugin (merged onto config.exs's in-process list).
-# Skipped with a logged warning if `python` isn't on PATH.
+# The MCP proxy plugin pipeline for dev. `ApprovalGate` (holds egress for
+# operator sign-off) stands in for `ChainExfil` (hard block). The sidecar is
+# skipped with a logged warning if `python` isn't on PATH.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
+    {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
+    {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},
     {:sidecar,
      name: "prompt-injection-scanner",
      transport: :stdio,

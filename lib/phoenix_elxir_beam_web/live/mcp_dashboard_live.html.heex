@@ -49,6 +49,46 @@
       </div>
     </div>
 
+    <div
+      :for={hold <- @pending_holds}
+      id={"hold-" <> hold.id}
+      class="flex flex-wrap items-center gap-3 rounded-box border border-warning/50 bg-warning/10 px-4 py-3"
+    >
+      <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-warning/25 text-warning">
+        ⏸
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-warning">Approval required</div>
+        <div class="text-sm text-base-content/80">{hold.prompt}</div>
+        <div class="text-xs text-base-content/40">
+          {hold.reason} · held {held_ago(hold.created_at)} · auto-denies in {div(
+            hold.timeout_ms,
+            1000
+          )}s
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          phx-click="resolve_hold"
+          phx-value-hold_id={hold.id}
+          phx-value-decision="approve"
+          class="btn btn-sm btn-success"
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          phx-click="resolve_hold"
+          phx-value-hold_id={hold.id}
+          phx-value-decision="deny"
+          class="btn btn-sm btn-error btn-outline"
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+
     <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
       <div
         id="mcp-tool-graph"
@@ -935,7 +975,7 @@
           el.classList.remove("stroke-primary", "stroke-error", "[stroke-width:3px]", "[stroke-dasharray:6_4]")
         })
         this.el.querySelectorAll(".mcp-node-shape").forEach((el) => {
-          el.classList.remove("stroke-primary", "stroke-error", "fill-error/20", "[stroke-width:3px]")
+          el.classList.remove("stroke-primary", "stroke-error", "stroke-warning", "fill-error/20", "fill-warning/20", "[stroke-width:3px]")
         })
         const dot = this.el.querySelector("#graph-pulse-dot")
         if (dot) dot.classList.add("opacity-0")
@@ -955,10 +995,28 @@
         const serverKey = `server-${server_id}`
         const toolKey = `tool-${tool_name}`
         const blocked = status === "blocked"
+        const held = status === "held"
 
         await this.travel("agent", "gate", false, 1, token)
         if (token !== this.pulseToken) return
         this.flashNode("gate", false)
+
+        // A held call reaches the policy gate and stops there — awaiting an
+        // operator. The gate glows amber; the next event (ok/blocked) resumes.
+        if (held) {
+          const gate = this.el.querySelector('#node-gate .mcp-node-shape')
+          if (gate) gate.classList.add("stroke-warning", "fill-warning/20", "[stroke-width:3px]")
+          const label = this.el.querySelector("#graph-reason-label")
+          if (label) {
+            label.textContent = "awaiting approval"
+            label.classList.remove("opacity-0", "fill-error")
+            label.classList.add("fill-warning")
+          }
+          return
+        }
+
+        const gate = this.el.querySelector('#node-gate .mcp-node-shape')
+        if (gate) gate.classList.remove("stroke-warning", "fill-warning/20", "[stroke-width:3px]")
 
         await this.travel("gate", serverKey, false, 1, token)
         if (token !== this.pulseToken) return

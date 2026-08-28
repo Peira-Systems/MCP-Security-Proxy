@@ -12,6 +12,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   use PhoenixElxirBeamWeb, :controller
 
   alias PhoenixElxirBeam.MCP.{
+    HoldRegistry,
     HttpTransport,
     PolicyEngine,
     ServerRegistry,
@@ -71,7 +72,40 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               "id" => id,
               "error" => %{"code" => @chain_blocked_code, "message" => event.reason}
             })
+
+          {:hold, hold_id, timeout_ms, _event} ->
+            # Park the request until an operator approves/denies on the
+            # dashboard (or the hold's own timeout fires).
+            resolve_hold(conn, hold_id, timeout_ms, %{
+              server_id: server_id,
+              session_id: session_id,
+              tool_name: tool_name,
+              tags: tags,
+              id: id,
+              jsonrpc: jsonrpc_version,
+              rpc_params: rpc_params
+            })
         end
+    end
+  end
+
+  defp resolve_hold(conn, hold_id, timeout_ms, c) do
+    case HoldRegistry.await(hold_id, timeout_ms + 5_000) do
+      {:ok, :approved} ->
+        {:allow, _event} =
+          PolicyEngine.finalize_hold(c.session_id, c.server_id, c.tool_name, c.tags, :approved)
+
+        forward(conn, c.server_id, envelope(c.jsonrpc, c.id, "tools/call", c.rpc_params), c.id)
+
+      {:ok, :denied} ->
+        {:block, event} =
+          PolicyEngine.finalize_hold(c.session_id, c.server_id, c.tool_name, c.tags, :denied)
+
+        json(conn, %{
+          "jsonrpc" => c.jsonrpc,
+          "id" => c.id,
+          "error" => %{"code" => @chain_blocked_code, "message" => event.reason}
+        })
     end
   end
 

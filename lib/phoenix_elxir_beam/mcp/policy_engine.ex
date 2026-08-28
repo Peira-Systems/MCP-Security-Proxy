@@ -5,14 +5,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   sole broadcaster of `PhoenixElxirBeam.MCP.Event` structs on the
   `"mcp:events"` PubSub topic.
 
-  The actual allow/deny logic lives in `policy` plugins consulted through
-  `PhoenixElxirBeam.MCP.Pipeline` (today just
-  `PhoenixElxirBeam.MCP.Plugins.ChainExfil`: a `:network_egress` call is
-  denied iff `:sensitive_read` is already in that session's seen-set —
-  order matters, so an egress call before any sensitive read is allowed).
-  This module builds a `PhoenixElxirBeam.MCP.CallContext` from its session
-  state, maps the pipeline's `Decision` back to `{:allow | :block, Event}`,
-  accumulates tags on an allow, and receipts the result.
+  The actual verdict logic lives in `policy` plugins consulted through
+  `PhoenixElxirBeam.MCP.Pipeline`. This module builds a
+  `PhoenixElxirBeam.MCP.CallContext` from its session state, maps the
+  pipeline's `Decision` back to `{:allow | :block | :hold, …}`, accumulates
+  tags on an allow, and receipts the result. On `:hold` it parks the call in
+  `PhoenixElxirBeam.MCP.HoldRegistry` and replies `{:hold, hold_id, …}`; the
+  controller later drives `finalize_hold/6` from the operator's decision.
 
   Three properties this engine is deliberately built around, since it sits
   as a policy decision point in a live request path:
@@ -36,7 +35,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, Pipeline}
+  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, HoldRegistry, Pipeline}
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub
@@ -49,8 +48,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
-    registry = Keyword.get(opts, :registry, PluginRegistry)
-    GenServer.start_link(__MODULE__, %{registry: registry}, name: name)
+
+    init_arg = %{
+      registry: Keyword.get(opts, :registry, PluginRegistry),
+      hold_registry: Keyword.get(opts, :hold_registry, HoldRegistry)
+    }
+
+    GenServer.start_link(__MODULE__, init_arg, name: name)
   end
 
   @doc "Registers a new session and broadcasts `:session_start`."
@@ -82,6 +86,16 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @doc """
+  Resolves a previously `:hold`-ed call once the operator (or the timeout)
+  has decided. `:approved` accumulates the call's tags and receipts an `:ok`
+  event; `:denied` receipts a `:blocked` event.
+  """
+  def finalize_hold(session_id, server_id, tool_name, tags, outcome, name \\ __MODULE__)
+      when outcome in [:approved, :denied] do
+    GenServer.call(name, {:finalize_hold, session_id, server_id, tool_name, tags, outcome})
+  end
+
+  @doc """
   Receipts a `:blocked` event for a call the proxy refused before the
   pipeline — e.g. a `tools/call` to a tool a discovery scanner has
   quarantined. No session state is required or consulted.
@@ -93,7 +107,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   # Server callbacks
 
   @impl true
-  def init(%{registry: registry}), do: {:ok, %{sessions: %{}, registry: registry}}
+  def init(%{registry: registry, hold_registry: hold_registry}) do
+    {:ok, %{sessions: %{}, registry: registry, hold_registry: hold_registry}}
+  end
 
   @impl true
   def handle_call({:start_session, session_id, scenario}, _from, state) do
@@ -170,33 +186,14 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         {pipeline_verdict, decision, findings} =
           Pipeline.run(:pre_call, ctx, PluginRegistry.active_policies(:pre_call, state.registry))
 
-        blocked? = pipeline_verdict == :deny
-        {status, reason} = if blocked?, do: {:blocked, decision.reason}, else: {:ok, nil}
+        opts = [decisions: decisions_from(decision), findings: findings]
+        meta = {session, session_id, server_id, tool_name, tags}
 
-        state =
-          if blocked? do
-            state
-          else
-            update_in(state.sessions[session_id], fn existing ->
-              %{existing | tags: MapSet.union(existing.tags, MapSet.new(tags))}
-            end)
-          end
-
-        event = %Event{
-          id: generate_id(),
-          session_id: session_id,
-          scenario: session.scenario,
-          server_id: server_id,
-          tool_name: tool_name,
-          tags: tags,
-          status: status,
-          reason: reason,
-          timestamp: DateTime.utc_now()
-        }
-
-        verdict = if blocked?, do: :block, else: :allow
-        receipt(event, state, decisions: decisions_from(decision), findings: findings)
-        {:reply, {verdict, event}, state}
+        case pipeline_verdict do
+          :hold -> reply_hold(meta, decision, opts, state)
+          :deny -> reply_verdict(meta, :blocked, decision.reason, opts, state)
+          :allow -> reply_verdict(meta, :ok, nil, opts, accumulate_tags(state, session_id, tags))
+        end
     end
   end
 
@@ -214,6 +211,103 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
     receipt(event, state)
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:finalize_hold, session_id, server_id, tool_name, tags, outcome}, _from, state) do
+    scenario = get_in(state.sessions, [session_id, :scenario])
+
+    {reply_verdict, status, reason, state} =
+      case outcome do
+        :approved ->
+          state =
+            if Map.has_key?(state.sessions, session_id),
+              do: accumulate_tags(state, session_id, tags),
+              else: state
+
+          {:allow, :ok, nil, state}
+
+        :denied ->
+          {:block, :blocked, "network egress denied by operator", state}
+      end
+
+    event = %Event{
+      id: generate_id(),
+      session_id: session_id,
+      scenario: scenario,
+      server_id: server_id,
+      tool_name: tool_name,
+      tags: tags,
+      status: status,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    }
+
+    receipt(event, state)
+    {:reply, {reply_verdict, event}, state}
+  end
+
+  defp accumulate_tags(state, session_id, tags) do
+    update_in(state.sessions[session_id], fn existing ->
+      %{existing | tags: MapSet.union(existing.tags, MapSet.new(tags))}
+    end)
+  end
+
+  defp reply_verdict(
+         {session, session_id, server_id, tool_name, tags},
+         status,
+         reason,
+         opts,
+         state
+       ) do
+    event = %Event{
+      id: generate_id(),
+      session_id: session_id,
+      scenario: session.scenario,
+      server_id: server_id,
+      tool_name: tool_name,
+      tags: tags,
+      status: status,
+      reason: reason,
+      timestamp: DateTime.utc_now()
+    }
+
+    receipt(event, state, opts)
+    {:reply, {if(status == :ok, do: :allow, else: :block), event}, state}
+  end
+
+  defp reply_hold({session, session_id, server_id, tool_name, tags}, decision, opts, state) do
+    hold = decision.hold || %{prompt: decision.reason, timeout_ms: 120_000, on_timeout: :deny}
+
+    hold_id =
+      HoldRegistry.park(
+        %{
+          prompt: hold.prompt,
+          reason: decision.reason,
+          session_id: session_id,
+          server_id: server_id,
+          tool_name: tool_name,
+          tags: tags,
+          timeout_ms: hold.timeout_ms,
+          on_timeout: hold.on_timeout
+        },
+        state.hold_registry
+      )
+
+    event = %Event{
+      id: generate_id(),
+      session_id: session_id,
+      scenario: session.scenario,
+      server_id: server_id,
+      tool_name: tool_name,
+      tags: tags,
+      status: :held,
+      reason: decision.reason,
+      timestamp: DateTime.utc_now()
+    }
+
+    receipt(event, state, opts)
+    {:reply, {:hold, hold_id, hold.timeout_ms, event}, state}
   end
 
   defp blocked_event(session_id, scenario, server_id, tool_name, tags, reason) do

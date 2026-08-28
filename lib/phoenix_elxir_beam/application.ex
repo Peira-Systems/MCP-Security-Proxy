@@ -22,6 +22,7 @@ defmodule PhoenixElxirBeam.Application do
       {DynamicSupervisor,
        name: PhoenixElxirBeam.MCP.SidecarSupervisor, max_restarts: 10, max_seconds: 60},
       PhoenixElxirBeam.MCP.Plugin.Registry,
+      PhoenixElxirBeam.MCP.HoldRegistry,
       PhoenixElxirBeam.MCP.PolicyEngine,
       {DynamicSupervisor, name: PhoenixElxirBeam.MCP.StdioServerSupervisor},
       PhoenixElxirBeam.MCP.ServerRegistry,

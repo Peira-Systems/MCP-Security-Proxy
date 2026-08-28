@@ -62,4 +62,13 @@ defmodule PhoenixElxirBeam.MCP.Decision do
   def annotate(attrs) do
     struct!(%__MODULE__{verdict: :annotate}, attrs)
   end
+
+  @doc """
+  Park the call for operator sign-off. `hold_spec` is
+  `%{prompt: String.t(), timeout_ms: pos_integer(), on_timeout: :deny | :allow}`.
+  """
+  @spec hold(String.t(), map()) :: t()
+  def hold(reason, hold_spec) when is_binary(reason) and is_map(hold_spec) do
+    %__MODULE__{verdict: :hold, severity: :high, reason: reason, hold: hold_spec}
+  end
 end

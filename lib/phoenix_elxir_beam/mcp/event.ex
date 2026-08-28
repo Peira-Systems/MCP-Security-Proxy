@@ -17,7 +17,7 @@ defmodule PhoenixElxirBeam.MCP.Event do
     status: :ok
   ]
 
-  @type status :: :session_start | :ok | :blocked | :session_complete
+  @type status :: :session_start | :ok | :blocked | :held | :session_complete
 
   @type t :: %__MODULE__{
           id: String.t(),

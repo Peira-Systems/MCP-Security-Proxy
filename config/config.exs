@@ -11,19 +11,10 @@ config :phoenix_elxir_beam,
   ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
-# Plugins consulted by the MCP proxy pipeline, in evaluation order.
-# See docs/plugin-protocol.md §15 and docs/adr/0001-plugin-architecture.md.
-config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
-  plugins: [
-    {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
-    {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
-    {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
-  ]
-
-# The reference out-of-process (sidecar) plugin is added per-env in
-# `config/dev.exs` / `config/prod.exs` — not here, so the test env stays
-# in-process-only. (`Config` merges the `plugins:` list by key, so a plain
-# override in `test.exs` would not remove an entry added here.)
+# The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
+# per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
+# once. It is NOT set here: `Config` merges the keyword-shaped list by key, so
+# a base entry here could not be removed by an env override.
 
 # Configure the endpoint
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,

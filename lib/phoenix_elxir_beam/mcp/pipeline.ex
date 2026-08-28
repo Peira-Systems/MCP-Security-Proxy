@@ -51,13 +51,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
   Returns `{verdict, decision, findings}`:
 
-    * `verdict` — `:allow` or `:deny`;
-    * `decision` — on `:deny`, carries `reason`, `severity`, and
-      `deciding_plugin`; on `:allow`, a merged `:allow` decision;
+    * `verdict` — `:allow`, `:deny`, or `:hold`;
+    * `decision` — on `:deny` / `:hold`, carries `reason`, `severity`,
+      `deciding_plugin` (and `hold` for `:hold`); on `:allow`, a merged decision;
     * `findings` — every finding collected along the chain.
   """
   @spec run(CallContext.phase(), CallContext.t(), [entry()]) ::
-          {:allow | :deny, Decision.t(), [Finding.t()]}
+          {:allow | :deny | :hold, Decision.t(), [Finding.t()]}
   def run(phase, %CallContext{} = ctx, entries) when is_list(entries) do
     entries
     |> Enum.filter(&applies?(&1, phase, ctx))
@@ -104,7 +104,9 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     end
   end
 
-  defp discovery_scan(%{impl: {:module, mod}}, ctx), do: mod.scan(:discovery, ctx)
+  defp discovery_scan(%{impl: {:module, mod}} = entry, ctx) do
+    mod.scan(:discovery, %{ctx | plugin_config: entry.config})
+  end
 
   defp discovery_scan(%{impl: {:sidecar, name}} = entry, ctx) do
     case SidecarRunner.request(
@@ -171,26 +173,16 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     decision = invoke(entry, phase, ctx)
     findings = findings ++ decision.findings
 
-    case coerce_verdict(decision.verdict, entry) do
+    case decision.verdict do
       :deny ->
-        decided = %{decision | verdict: :deny, deciding_plugin: entry.name, findings: findings}
-        {:deny, decided, findings}
+        {:deny, %{decision | deciding_plugin: entry.name, findings: findings}, findings}
 
-      :allow ->
+      :hold ->
+        {:hold, %{decision | deciding_plugin: entry.name, findings: findings}, findings}
+
+      verdict when verdict in [:allow, :annotate] ->
         evaluate_chain(rest, phase, apply_mutations(ctx, entry, decision), findings)
     end
-  end
-
-  defp coerce_verdict(:deny, _entry), do: :deny
-  defp coerce_verdict(:allow, _entry), do: :allow
-  defp coerce_verdict(:annotate, _entry), do: :allow
-
-  defp coerce_verdict(:hold, entry) do
-    Logger.warning(
-      "Pipeline: #{entry.name} returned :hold; treating as :deny (approval UI not built)"
-    )
-
-    :deny
   end
 
   defp invoke(entry, phase, ctx) do
@@ -205,7 +197,9 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     end
   end
 
-  defp policy_evaluate(%{impl: {:module, mod}}, phase, ctx), do: mod.evaluate(phase, ctx)
+  defp policy_evaluate(%{impl: {:module, mod}} = entry, phase, ctx) do
+    mod.evaluate(phase, %{ctx | phase: phase, plugin_config: entry.config})
+  end
 
   defp policy_evaluate(%{impl: {:sidecar, name}} = entry, phase, ctx) do
     ctx = %{ctx | phase: phase}

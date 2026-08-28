@@ -89,7 +89,10 @@ defmodule PhoenixElxirBeam.MCP.Demo do
 
     Req.post("http://127.0.0.1:#{port}/mcp/proxy/#{server_id}",
       json: body,
-      headers: [{"mcp-session-id", session_id}]
+      headers: [{"mcp-session-id", session_id}],
+      # A call parked for operator approval keeps the HTTP request open —
+      # outlast the ApprovalGate hold timeout.
+      receive_timeout: 130_000
     )
   end
 

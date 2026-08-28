@@ -1,7 +1,14 @@
 import Config
 
-# The test env inherits `config.exs`'s in-process-only plugin list. Sidecar
-# behaviour is exercised via the Node fixture + `Registry`'s `:plugins` opt.
+# In-process, deterministic plugin set for tests. `ChainExfil` (hard block),
+# not `ApprovalGate` (hold) — the hold flow is covered by its own suites.
+# Sidecar behaviour is exercised via the Node fixture + `Registry`'s `:plugins`.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
+  plugins: [
+    {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
+    {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
+    {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
+  ]
 
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   database: Path.expand("../priv/repo/test.db", __DIR__),

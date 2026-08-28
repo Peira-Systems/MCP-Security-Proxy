@@ -9,11 +9,20 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{Demo, EventLog, MockDrift, ServerRegistry, ToolCatalog}
+  alias PhoenixElxirBeam.MCP.{
+    Demo,
+    EventLog,
+    HoldRegistry,
+    MockDrift,
+    ServerRegistry,
+    ToolCatalog
+  }
+
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
   @servers_topic "mcp:servers"
+  @holds_topic "mcp:holds"
   @history_page_size 20
 
   @impl true
@@ -21,6 +30,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
       # Sidecar plugins register a beat after boot and their health drifts;
       # a light poll keeps the Plugins panel current.
       :timer.send_interval(5_000, :refresh_plugins)
@@ -51,6 +61,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
+      |> assign(:pending_holds, safe_pending_holds())
       |> stream(:events, [])
 
     {:ok, refresh_history(socket)}
@@ -332,6 +343,12 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      |> push_event("mcp_graph_reset", %{})}
   end
 
+  def handle_event("resolve_hold", %{"hold_id" => hold_id, "decision" => decision}, socket)
+      when decision in ["approve", "deny"] do
+    HoldRegistry.resolve(hold_id, String.to_existing_atom(decision))
+    {:noreply, update(socket, :pending_holds, &Enum.reject(&1, fn h -> h.id == hold_id end))}
+  end
+
   @impl true
   def handle_info({:mcp_event, event}, socket) do
     {:noreply, apply_event(socket, event)}
@@ -348,6 +365,29 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   def handle_info(:refresh_plugins, socket) do
     {:noreply, assign(socket, :plugins, plugin_rows())}
+  end
+
+  def handle_info({:hold_pending, hold}, socket) do
+    socket =
+      update(socket, :pending_holds, &[hold | Enum.reject(&1, fn h -> h.id == hold.id end)])
+
+    socket =
+      if hold.server_id in ToolCatalog.servers() do
+        push_event(socket, "mcp_graph_event", %{
+          server_id: hold.server_id,
+          tool_name: hold.tool_name,
+          status: "held",
+          reason: hold.prompt
+        })
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:hold_resolved, hold_id, _outcome}, socket) do
+    {:noreply, update(socket, :pending_holds, &Enum.reject(&1, fn h -> h.id == hold_id end))}
   end
 
   def handle_info({:server_registered, {:ok, server}}, socket) do
@@ -416,6 +456,22 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end)
 
     socket |> assign(:registering, true) |> clear_flash()
+  end
+
+  defp safe_pending_holds do
+    HoldRegistry.pending()
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp held_ago(%DateTime{} = ts) do
+    case DateTime.diff(DateTime.utc_now(), ts) do
+      s when s < 1 -> "just now"
+      1 -> "1s ago"
+      s -> "#{s}s ago"
+    end
   end
 
   # Rows for the read-only Plugins panel: name, kind, source, enabled, and
@@ -643,6 +699,12 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end
   end
 
+  defp apply_event(socket, %{status: :held} = event) do
+    # The graph "held" pulse is driven by the {:hold_pending, _} message; here
+    # we just add the row to the feed.
+    stream_insert(socket, :events, event, at: 0)
+  end
+
   defp apply_event(socket, %{status: :session_complete} = event) do
     socket
     |> stream_insert(:events, event, at: 0)
@@ -660,15 +722,18 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   defp status_label(:session_start), do: "started"
   defp status_label(:ok), do: "allowed"
   defp status_label(:blocked), do: "blocked"
+  defp status_label(:held), do: "held"
   defp status_label(:session_complete), do: "complete"
   defp status_label("ok"), do: "allowed"
   defp status_label("blocked"), do: "blocked"
+  defp status_label("held"), do: "held"
   defp status_label("session_start"), do: "started"
   defp status_label("session_complete"), do: "complete"
   defp status_label(other), do: other
 
   defp console_status_class(status) when status in [:ok, "ok"], do: "text-success"
   defp console_status_class(status) when status in [:blocked, "blocked"], do: "text-error"
+  defp console_status_class(status) when status in [:held, "held"], do: "text-warning"
 
   defp console_status_class(status) when status in [:session_start, "session_start"],
     do: "text-info"

@@ -82,7 +82,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
       reason: map["reason"],
       severity: decode_severity(map["severity"]),
       findings: Enum.map(map["findings"] || [], &decode_finding/1),
-      mutations: decode_mutations(map["mutations"])
+      mutations: decode_mutations(map["mutations"]),
+      hold: decode_hold(map["hold"])
     }
   end
 
@@ -185,6 +186,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
   defp decode_verdict("hold"), do: :hold
   defp decode_verdict("annotate"), do: :annotate
   defp decode_verdict(_), do: :allow
+
+  defp decode_hold(%{"prompt" => prompt} = h) do
+    %{
+      prompt: prompt,
+      timeout_ms: h["timeoutMs"] || 120_000,
+      on_timeout: if(h["onTimeout"] == "allow", do: :allow, else: :deny)
+    }
+  end
+
+  defp decode_hold(_), do: nil
 
   defp decode_severity(s) when s in ~w(info low medium high critical),
     do: String.to_existing_atom(s)

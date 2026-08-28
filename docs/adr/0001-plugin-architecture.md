@@ -154,6 +154,10 @@ instances under a dynamic supervisor.
    registered in dev/prod; circuit breaker in the runner; read-only dashboard Plugins panel.
    HTTP transport deferred.)
 6. **`hold` verdict + approval UI** — LiveView-native; third verdict through the pipeline.
+   ✔ (`MCP.HoldRegistry` parks the request; `MCP.Plugins.ApprovalGate` replaces `ChainExfil`
+   in dev/prod; `ProxyController` blocks on `HoldRegistry.await/3` then
+   `PolicyEngine.finalize_hold/6`; dashboard amber Approve/Deny banner + graph pause at the
+   gate; `:held` event status. Approve = allow, chain not resumed — §9.4 deviation noted.)
 7. Incremental, no new infrastructure: taint tracking, prompt-injection scanner,
    declarative policy, agent identity, behavioural baselining, OTel/SIEM sinks.
 

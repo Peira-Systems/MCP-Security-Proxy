@@ -13,7 +13,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEvent do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses ~w(session_start ok blocked session_complete)
+  @statuses ~w(session_start ok blocked held session_complete)
 
   schema "policy_events" do
     field(:event_id, :string)
