@@ -42,9 +42,8 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   journal_mode: :wal,
   busy_timeout: 5_000
 
-# The MCP proxy controller forwards calls to the mock server over a real
-# loopback HTTP request (via Req), so the server must actually be running
-# during tests for that hop to succeed.
+# The proxy controller tests drive real HTTP requests against the endpoint
+# (via Phoenix.ConnTest / Req), so the server must actually be running.
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "zeTuYfL8VcWlAQ7T/K6kG14U6cayBKJVm9zDPnfI2OKZoFE5GTH3vaZZjHAszdEi",

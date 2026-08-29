@@ -325,8 +325,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
 
   # Renders each part of the spawn command relative to the app's working
   # directory (or just its basename outside that tree) so the UI shows
-  # "priv/mcp_servers/.../index.js" instead of the full local filesystem
-  # path — the project directory and username don't belong on screen.
+  # a short "bin/mcp-server" instead of the full local filesystem path —
+  # the project directory and username don't belong on screen.
   defp command_label(cmd, args) do
     [cmd | args] |> Enum.map(&relative_path_label/1) |> Enum.join(" ")
   end

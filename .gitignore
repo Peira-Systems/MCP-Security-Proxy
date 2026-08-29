@@ -53,10 +53,6 @@ npm-debug.log
 /priv/repo/*.db-shm
 /priv/repo/*.db-wal
 
-# Python venv for the real "mcp-server-fetch" stdio demo server.
+# Local Python venv (e.g. for the prompt-injection sidecar plugin's deps).
 /.venv/
-
-# Local npm install of the real "@modelcontextprotocol/server-filesystem"
-# stdio demo server.
-/priv/mcp_servers/node_modules/
 
