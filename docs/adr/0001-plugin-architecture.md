@@ -206,6 +206,20 @@ instances under a dynamic supervisor.
      `withheld` reason string so the audit row / feed carry the real reason. New
      `files/export_all` mock tool (~6 KB) + "Run bulk exfil" demo.)
 
+The plugin architecture is functionally complete at 7g. Remaining items are optional and
+each needs a decision before starting:
+
+  1. **`post_call` sidecar invocation** — dispatch is wired (`Pipeline.post_call_eval/2`),
+     but no sidecar declares the phase; would extend the Python scanner + a test fixture.
+  2. **Behavioural baselining** — a `pre_call` policy over per-agent/session call rates;
+     needs new counters in PolicyEngine session state → `CallContext.session`.
+  3. **Real HMAC taint markers** — 7e retains the raw secret and substring-matches; the
+     proper form HMACs it and matches tokenised arguments.
+  4. **Real OTLP exporter** — `StructuredLogSink` (7f) covers the SIEM story via log lines;
+     a genuine OpenTelemetry exporter is a real dependency + collector.
+  5. **Streaming `chunk` phase** (§18) — not modelled anywhere; real infrastructure, not a
+     plugin. Largest item.
+
 ## References
 
 - `docs/plugin-protocol.md` — the contract this ADR points to.
