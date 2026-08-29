@@ -5,6 +5,14 @@ defmodule PhoenixElxirBeam.MCP.ToolCatalog do
   read or a real network call — every response is a hardcoded string.
   """
 
+  # ~6 KB of simulated rows — deliberately over `ResponseSizeGuard`'s default
+  # 4 KB budget so a `tools/call` to `export_all` is withheld as `-32002`.
+  @export_all_response 1..120
+                       |> Enum.map_join("\n", fn i ->
+                         "user_#{i},user#{i}@example.test,role=member,created=2026-0#{rem(i, 8) + 1}-#{rem(i, 27) + 1}"
+                       end)
+                       |> Kernel.<>("\n(simulated full export)")
+
   @tools %{
     "files" => [
       %{
@@ -32,6 +40,13 @@ defmodule PhoenixElxirBeam.MCP.ToolCatalog do
         input_schema: %{"type" => "object", "properties" => %{}},
         response:
           "region=us-east-1\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE (simulated, not a real secret)"
+      },
+      %{
+        name: "export_all",
+        description: "Export every user record",
+        tags: [],
+        input_schema: %{"type" => "object", "properties" => %{}},
+        response: @export_all_response
       }
     ],
     "net" => [

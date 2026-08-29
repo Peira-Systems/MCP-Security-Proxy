@@ -199,6 +199,12 @@ instances under a dynamic supervisor.
      log shipper to forward to a SIEM / the OTel Collector. Runs alongside `EventLogSink`;
      proves the fan-out is genuinely multi-sink with zero core change — two `plugins:`
      entries. Verdict metadata only, no raw evidence.)
+   - 7g. **Withholding `post_call` policy.** ✔ (`MCP.Plugins.ResponseSizeGuard` — a
+     `post_call` `policy` that denies a response whose text exceeds a byte budget
+     (`plugin_config["max_bytes"]`, default 4 KB), the first shipped plugin to exercise the
+     `post_call` deny → `-32002` path. `record_response_scan`'s `withheld?` boolean became a
+     `withheld` reason string so the audit row / feed carry the real reason. New
+     `files/export_all` mock tool (~6 KB) + "Run bulk exfil" demo.)
 
 ## References
 

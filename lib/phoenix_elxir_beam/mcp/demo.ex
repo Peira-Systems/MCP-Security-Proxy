@@ -40,6 +40,18 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   end
 
   @doc """
+  Bulk exfil: call a tool that returns far more than a normal response
+  (a full user export). `ResponseSizeGuard` withholds the whole payload —
+  the agent gets a `-32002`, not the data.
+  """
+  def run_bulk_exfil do
+    start_task(:bulk_exfil, [
+      {"files", jsonrpc("initialize", %{})},
+      {"files", jsonrpc("tools/call", %{"name" => "export_all", "arguments" => %{}})}
+    ])
+  end
+
+  @doc """
   Byte-level exfil: read the secrets file, then try to post the *exact
   secret string* as a webhook argument. `TaintedArgGuard` recognises the
   bytes and blocks the call before it leaves — precise, not tag-based.

@@ -186,7 +186,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               server_id,
               tool_name,
               findings,
-              true,
+              reason || "response withheld by policy",
               taint_sources
             )
 
@@ -202,7 +202,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               server_id,
               tool_name,
               findings,
-              false,
+              nil,
               taint_sources
             )
 

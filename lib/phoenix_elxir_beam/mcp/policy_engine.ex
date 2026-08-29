@@ -116,35 +116,34 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @doc """
   Receipts the result of a `post_call` response scan and folds any
   `taint_sources` the scan produced into the session's taint provenance.
-  Skipped entirely when the scan was clean (no findings, not withheld, no
-  taint). `withheld?` true → a `:blocked` event (the whole response was
-  discarded); otherwise an `:ok` event carrying the `findings`.
+  Skipped entirely when the scan was clean (no findings, no taint, not
+  withheld). `withheld` is `nil` for a delivered response, or the reason
+  string when the whole response was discarded → a `:blocked` event.
   """
   def record_response_scan(
         session_id,
         server_id,
         tool_name,
         findings,
-        withheld?,
+        withheld,
         taint_sources \\ [],
         name \\ __MODULE__
       )
 
-  def record_response_scan(_s, _sv, _t, [], false, [], _name), do: :ok
+  def record_response_scan(_s, _sv, _t, [], nil, [], _name), do: :ok
 
   def record_response_scan(
         session_id,
         server_id,
         tool_name,
         findings,
-        withheld?,
+        withheld,
         taint_sources,
         name
       ) do
     GenServer.call(
       name,
-      {:record_response_scan, session_id, server_id, tool_name, findings, withheld?,
-       taint_sources}
+      {:record_response_scan, session_id, server_id, tool_name, findings, withheld, taint_sources}
     )
   end
 
@@ -214,7 +213,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   def handle_call(
-        {:record_response_scan, session_id, server_id, tool_name, findings, withheld?,
+        {:record_response_scan, session_id, server_id, tool_name, findings, withheld,
          taint_sources},
         _from,
         state
@@ -223,7 +222,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     state = accumulate_taint(state, session_id, taint_sources)
 
     {status, reason} =
-      if withheld?, do: {:blocked, "response withheld by policy"}, else: {:ok, nil}
+      if withheld, do: {:blocked, withheld}, else: {:ok, nil}
 
     event = %Event{
       id: generate_id(),

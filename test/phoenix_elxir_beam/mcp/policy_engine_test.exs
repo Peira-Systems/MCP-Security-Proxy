@@ -177,7 +177,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
         "files",
         "read_config",
         [],
-        false,
+        nil,
         [source],
         name
       )
@@ -202,7 +202,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
                "files",
                "read_config",
                [],
-               false,
+               nil,
                [source],
                name
              )
@@ -214,7 +214,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
                "files",
                "read_config",
                [],
-               false,
+               nil,
                [source],
                name
              )
@@ -226,7 +226,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
                "files",
                "list_files",
                [],
-               false,
+               nil,
                [],
                name
              )
@@ -268,7 +268,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
         "files",
         "read_secrets",
         [],
-        false,
+        nil,
         [source],
         name
       )

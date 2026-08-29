@@ -14,7 +14,12 @@ defmodule PhoenixElxirBeamWeb.MCP.MockServerControllerTest do
       assert %{"jsonrpc" => "2.0", "id" => 1, "result" => %{"tools" => tools}} =
                json_response(conn, 200)
 
-      assert Enum.map(tools, & &1["name"]) == ["list_files", "read_secrets", "read_config"]
+      assert Enum.map(tools, & &1["name"]) == [
+               "list_files",
+               "read_secrets",
+               "read_config",
+               "export_all"
+             ]
     end
 
     test "returns the net server's tools", %{conn: conn} do

@@ -24,7 +24,9 @@ for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, 
 `scanner` set** (findings + per-tool `quarantine` / `add_tags` merged), and
 `Pipeline.run_post_call/2` for the **`post_call` `scanner` + `policy` set** (concurrent;
 `redactResponse` mutations merged and applied by `MCP.Redaction`; a `policy` `:deny` or a
-`canBlock` `scanner` `:deny` withholds the response as `-32002`). Per-plugin `timeout_ms` +
+`canBlock` `scanner` `:deny` withholds the response as `-32002` — `MCP.Plugins.ResponseSizeGuard`
+is the reference: it withholds any response over a byte budget as a bulk-exfil guard).
+Per-plugin `timeout_ms` +
 `fail_mode` enforced by the proxy. `ServerRegistry.rehandshake/2` re-runs the
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`. `MCP.Plugins.SecretLeak` is the reference

@@ -64,6 +64,22 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert text =~ "(simulated content, not a real secret)"
   end
 
+  test "an oversized tool response is withheld with -32002", %{conn: conn} do
+    session_id = "proxy-test-bulk-#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/files",
+        call_body("tools/call", %{"name" => "export_all", "arguments" => %{}})
+      )
+
+    assert %{"error" => %{"code" => -32002, "message" => message}} = json_response(conn, 200)
+    assert message =~ "bulk exfiltration"
+    refute match?(%{"result" => _}, json_response(conn, 200))
+  end
+
   test "a response with no secret is forwarded unchanged", %{conn: conn} do
     session_id = "proxy-test-clean-#{System.unique_integer([:positive])}"
 
