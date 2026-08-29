@@ -163,6 +163,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       {:error, message} ->
         upstream_error(conn, id, message)
 
+      {:ok, %{"result" => %{"chunks" => chunks}} = resp_body} when is_list(chunks) ->
+        stream_and_scan(conn, server_id, session_id, tool_name, resp_body, chunks)
+
       {:ok, %{"result" => %{"content" => content}} = resp_body} when is_list(content) ->
         ctx =
           CallContext.new(%{
@@ -214,6 +217,75 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         # Error result or an unexpected shape — nothing to scan.
         json(conn, resp_body)
     end
+  end
+
+  # A streamed `tools/call` result: fold over the chunks, running the `chunk`
+  # pipeline phase over each one as it "arrives". A `chunk`-phase deny cuts the
+  # stream — chunks already delivered are kept, nothing further is sent, and a
+  # termination notice is appended. The assembled `content` is returned in one
+  # JSON-RPC reply (the demo does not model a real streaming transport).
+  defp stream_and_scan(conn, server_id, session_id, tool_name, resp_body, chunks) do
+    entries = PluginRegistry.active_chunk()
+    total = length(chunks)
+
+    {delivered, findings, terminated} =
+      chunks
+      |> Enum.with_index()
+      |> Enum.reduce_while({[], [], nil}, fn {chunk, index}, {acc, facc, _} ->
+        ctx =
+          CallContext.new(%{
+            phase: :chunk,
+            call: %{
+              session_id: session_id,
+              server_id: server_id,
+              tool_name: tool_name,
+              method: "tools/call"
+            },
+            response: %{stream: true, chunk: chunk, chunk_index: index, delivered: acc}
+          })
+
+        {verdict, chunk_findings, redactions, reason} = Pipeline.run_chunk(ctx, entries)
+        facc = facc ++ chunk_findings
+
+        case verdict do
+          :deny ->
+            {:halt, {acc, facc, reason || "stream terminated by policy"}}
+
+          :allow ->
+            kept = if redactions == [], do: chunk, else: hd(Redaction.apply([chunk], redactions))
+            {:cont, {acc ++ [kept], facc, nil}}
+        end
+      end)
+
+    withheld =
+      terminated &&
+        "stream terminated after #{length(delivered)}/#{total} chunks: #{terminated}"
+
+    PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, withheld, [])
+
+    content =
+      if terminated,
+        do: delivered ++ [stream_notice(terminated, length(delivered), total)],
+        else: delivered
+
+    result =
+      resp_body["result"]
+      |> Map.delete("chunks")
+      |> Map.delete("stream")
+      |> Map.put("content", content)
+      |> maybe_flag_terminated(terminated)
+
+    json(conn, Map.put(resp_body, "result", result))
+  end
+
+  defp maybe_flag_terminated(result, nil), do: result
+  defp maybe_flag_terminated(result, _reason), do: Map.put(result, "streamTerminated", true)
+
+  defp stream_notice(reason, delivered, total) do
+    %{
+      "type" => "text",
+      "text" => "‹stream terminated by policy after #{delivered}/#{total} chunks: #{reason}›"
+    }
   end
 
   defp fetch(server_id, body) do

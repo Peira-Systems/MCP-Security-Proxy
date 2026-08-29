@@ -120,8 +120,43 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     end
   end
 
-  defp invoke_post_call(entry, ctx) do
-    task = Task.Supervisor.async_nolink(@task_supervisor, fn -> post_call_eval(entry, ctx) end)
+  @doc """
+  Runs every enabled `:chunk` `scanner` / `policy` in `entries` over `ctx`
+  (a `phase: :chunk` context whose `response` carries the current stream
+  chunk plus what has been delivered so far), concurrently — invoked once
+  per chunk of a streamed tool response.
+
+  Returns `{verdict, findings, redactions, reason}`:
+
+    * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied,
+      which tells the proxy to **cut the stream** (deliver nothing further);
+    * `redactions` — `redact_response` mutations for the current chunk.
+  """
+  @spec run_chunk(CallContext.t(), [entry()]) ::
+          {:allow | :deny, [Finding.t()], [map()], String.t() | nil}
+  def run_chunk(%CallContext{phase: :chunk} = ctx, entries) when is_list(entries) do
+    results =
+      entries
+      |> Enum.filter(&(&1.enabled and &1.kind in [:policy, :scanner] and :chunk in &1.phases))
+      |> Enum.sort_by(& &1.order)
+      |> Enum.map(&invoke_post_call(&1, ctx, :chunk, "call/inspectChunk"))
+
+    findings = Enum.flat_map(results, & &1.findings)
+    redactions = Enum.flat_map(results, & &1.redactions)
+    denial = Enum.find(results, &(&1.verdict == :deny))
+
+    if denial do
+      {:deny, findings, redactions, denial.reason || "stream terminated by policy"}
+    else
+      {:allow, findings, redactions, nil}
+    end
+  end
+
+  defp invoke_post_call(entry, ctx, phase \\ :post_call, method \\ "call/inspectResponse") do
+    task =
+      Task.Supervisor.async_nolink(@task_supervisor, fn ->
+        post_call_eval(entry, ctx, phase, method)
+      end)
 
     case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, findings}} when is_list(findings) ->
@@ -156,23 +191,23 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     end
   end
 
-  defp post_call_eval(%{impl: {:module, mod}, kind: :scanner} = entry, ctx) do
-    mod.scan(:post_call, %{ctx | plugin_config: entry.config})
+  defp post_call_eval(%{impl: {:module, mod}, kind: :scanner} = entry, ctx, phase, _method) do
+    mod.scan(phase, %{ctx | phase: phase, plugin_config: entry.config})
   end
 
-  defp post_call_eval(%{impl: {:module, mod}, kind: :policy} = entry, ctx) do
-    mod.evaluate(:post_call, %{ctx | phase: :post_call, plugin_config: entry.config})
+  defp post_call_eval(%{impl: {:module, mod}, kind: :policy} = entry, ctx, phase, _method) do
+    mod.evaluate(phase, %{ctx | phase: phase, plugin_config: entry.config})
   end
 
-  defp post_call_eval(%{impl: {:sidecar, name}} = entry, ctx) do
+  defp post_call_eval(%{impl: {:sidecar, name}} = entry, ctx, phase, method) do
     case SidecarRunner.request(
            name,
-           "call/inspectResponse",
-           %{"context" => Wire.encode_context(ctx, entry)},
+           method,
+           %{"context" => Wire.encode_context(%{ctx | phase: phase}, entry)},
            entry.timeout_ms
          ) do
       {:ok, result} -> Wire.decode_decision(result)
-      {:error, reason} -> raise "sidecar call/inspectResponse failed: #{inspect(reason)}"
+      {:error, reason} -> raise "sidecar #{method} failed: #{inspect(reason)}"
     end
   end
 

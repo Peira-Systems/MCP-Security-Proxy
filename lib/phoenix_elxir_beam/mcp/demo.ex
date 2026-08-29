@@ -165,6 +165,21 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   end
 
   @doc """
+  Streamed-exfil simulation: call a tool whose response streams back in
+  ~24 chunks. The proxy runs the `chunk` pipeline phase over each chunk as
+  it arrives; `MCP.Plugins.StreamGuard` cuts the stream once the running
+  byte count passes its budget, so the agent gets only the first ~10 chunks
+  plus a termination notice — containment mid-stream, which `post_call`
+  (whole-response) can't do.
+  """
+  def run_stream_exfil do
+    start_task(:stream_exfil, [
+      {"files", jsonrpc("initialize", %{})},
+      {"files", jsonrpc("tools/call", %{"name" => "stream_export", "arguments" => %{}})}
+    ])
+  end
+
+  @doc """
   Rug-pull demo: register the `files` mock as an external server (a clean
   handshake), then poison its `tools/list` and re-handshake. The re-handshake
   trips `PhoenixElxirBeam.MCP.Plugins.RugPull`, quarantining `read_secrets`.

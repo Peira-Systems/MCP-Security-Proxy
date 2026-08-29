@@ -44,15 +44,22 @@ defmodule PhoenixElxirBeamWeb.MCP.MockServerController do
 
   defp handle_method("tools/call", server_id, %{"name" => tool_name}) do
     case ToolCatalog.tool(server_id, tool_name) do
-      nil ->
-        :error
-
-      tool ->
-        {:ok, %{"content" => [%{"type" => "text", "text" => tool.response}], "isError" => false}}
+      nil -> :error
+      tool -> {:ok, tool_call_result(tool)}
     end
   end
 
   defp handle_method(_method, _server_id, _params), do: :error
+
+  # A tool with a `:chunks` list is delivered as a stream — the proxy runs the
+  # `chunk` pipeline phase over each part. Everything else is a single response.
+  defp tool_call_result(%{chunks: chunks}) when is_list(chunks) do
+    %{"chunks" => chunks, "stream" => true, "isError" => false}
+  end
+
+  defp tool_call_result(tool) do
+    %{"content" => [%{"type" => "text", "text" => tool.response}], "isError" => false}
+  end
 
   defp poison(%{"name" => "read_secrets", "description" => description} = tool) do
     %{tool | "description" => description <> @poison_marker}

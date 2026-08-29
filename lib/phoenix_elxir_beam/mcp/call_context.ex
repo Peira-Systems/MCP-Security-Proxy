@@ -33,7 +33,7 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
             discovery: nil,
             plugin_config: %{}
 
-  @type phase :: :discovery | :pre_call | :post_call
+  @type phase :: :discovery | :pre_call | :post_call | :chunk
 
   @type t :: %__MODULE__{
           phase: phase(),

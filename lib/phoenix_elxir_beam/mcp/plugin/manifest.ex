@@ -21,7 +21,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Manifest do
               can_mutate: []
 
     @type t :: %__MODULE__{
-            phases: [:pre_call | :post_call],
+            phases: [:pre_call | :post_call | :chunk],
             tool_tags: [atom()],
             servers: [String.t() | :*],
             data_needs: [String.t()],
@@ -40,7 +40,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Manifest do
               can_block: false
 
     @type t :: %__MODULE__{
-            phases: [:discovery | :pre_call | :post_call],
+            phases: [:discovery | :pre_call | :post_call | :chunk],
             data_needs: [String.t()],
             timeout_ms: pos_integer(),
             fail_mode: :fail_open | :fail_closed,

@@ -80,6 +80,14 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     |> Enum.filter(&(&1.kind in [:policy, :scanner] and &1.enabled and :post_call in &1.phases))
   end
 
+  @doc "Enabled `policy` + `scanner` entries with the `:chunk` phase, in configured order."
+  @spec active_chunk(atom()) :: [map()]
+  def active_chunk(table \\ __MODULE__) do
+    table
+    |> list()
+    |> Enum.filter(&(&1.kind in [:policy, :scanner] and &1.enabled and :chunk in &1.phases))
+  end
+
   @doc "Blocks until sidecar startup (`handle_continue/2`) has finished. Mainly for tests."
   def await(server \\ __MODULE__), do: GenServer.call(server, :await)
 

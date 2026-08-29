@@ -92,6 +92,15 @@
           Run rapid probing
         </button>
         <button
+          id="run-stream-exfil-btn"
+          type="button"
+          phx-click="run_stream_exfil"
+          disabled={@running}
+          class="btn btn-outline btn-sm"
+        >
+          Run stream exfil
+        </button>
+        <button
           id="run-rug-pull-btn"
           type="button"
           phx-click="run_rug_pull_demo"

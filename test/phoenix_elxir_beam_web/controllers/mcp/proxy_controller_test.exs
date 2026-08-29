@@ -80,6 +80,27 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     refute match?(%{"result" => _}, json_response(conn, 200))
   end
 
+  test "a streamed response is cut mid-stream once it passes the byte budget", %{conn: conn} do
+    session_id = "proxy-test-stream-#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> with_session(session_id)
+      |> post(
+        ~p"/mcp/proxy/files",
+        call_body("tools/call", %{"name" => "stream_export", "arguments" => %{}})
+      )
+
+    assert %{"result" => result} = json_response(conn, 200)
+    assert result["streamTerminated"] == true
+
+    content = result["content"]
+    # fewer than the 24 chunks the mock would have sent, plus a termination notice
+    assert length(content) < 24
+    assert List.last(content)["text"] =~ "stream terminated by policy"
+    refute Map.has_key?(result, "chunks")
+  end
+
   test "a response with no secret is forwarded unchanged", %{conn: conn} do
     session_id = "proxy-test-clean-#{System.unique_integer([:positive])}"
 

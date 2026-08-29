@@ -13,6 +13,20 @@ defmodule PhoenixElxirBeam.MCP.ToolCatalog do
                        end)
                        |> Kernel.<>("\n(simulated full export)")
 
+  # A streamed export: ~24 incremental content parts, ~2.6 KB total. The proxy
+  # runs the `chunk` pipeline phase over each part as it "arrives" so
+  # `MCP.Plugins.StreamGuard` can cut the stream mid-flight once the running
+  # byte count passes its budget — containment *before* the whole payload
+  # lands, which the `post_call` phase (whole-response) can't do.
+  @stream_export_chunks (for i <- 1..24 do
+                           %{
+                             "type" => "text",
+                             "text" =>
+                               "row #{i}: user_#{i},user#{i}@example.test,role=member," <>
+                                 "last_login=2026-08-#{rem(i, 27) + 1}T09:#{10 + rem(i, 48)}:00Z,region=us-east-1\n"
+                           }
+                         end)
+
   @tools %{
     "files" => [
       %{
@@ -47,6 +61,14 @@ defmodule PhoenixElxirBeam.MCP.ToolCatalog do
         tags: [],
         input_schema: %{"type" => "object", "properties" => %{}},
         response: @export_all_response
+      },
+      %{
+        name: "stream_export",
+        description: "Stream every user record as incremental chunks",
+        tags: [],
+        input_schema: %{"type" => "object", "properties" => %{}},
+        response: "(streamed — see chunks)",
+        chunks: @stream_export_chunks
       }
     ],
     "net" => [

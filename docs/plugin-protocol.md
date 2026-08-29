@@ -18,7 +18,7 @@ identically.
 
 Built: `CallContext`, `Decision`, `Finding`, `Manifest`; the `Policy` / `Scanner` /
 `AuditSink` behaviours; the `Plugin.Registry` (config-seeded, `enable` / `disable` /
-`reorder`, `active_policies` / `active_scanners` / `active_post_call`); `Pipeline.run/3`
+`reorder`, `active_policies` / `active_scanners` / `active_post_call` / `active_chunk`); `Pipeline.run/3`
 for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, granted
 `add_tags` applied between plugins), `Pipeline.run_discovery/2` for the **`discovery`
 `scanner` set** (findings + per-tool `quarantine` / `add_tags` merged), and
@@ -26,7 +26,14 @@ for the **`pre_call` `policy` chain** (ordered, short-circuit on first `:deny`, 
 `redactResponse` mutations merged and applied by `MCP.Redaction`; a `policy` `:deny` or a
 `canBlock` `scanner` `:deny` withholds the response as `-32002` — `MCP.Plugins.ResponseSizeGuard`
 is the reference: it withholds any response over a byte budget as a bulk-exfil guard).
-Per-plugin `timeout_ms` +
+`Pipeline.run_chunk/2` runs the **`chunk` `scanner` + `policy` set** once per chunk of a
+**streamed** tool response (a demo shape — the mock returns `result.chunks: [...]` and the
+proxy folds over them; there is no real streaming transport). A `chunk` `:deny` **cuts the
+stream**: chunks already delivered are kept, nothing further is sent, and a termination
+notice is appended (`result.streamTerminated: true`). `MCP.Plugins.StreamGuard` is the
+reference — the streaming analogue of `ResponseSizeGuard`, it cuts once the running byte
+count passes a budget, i.e. after a couple of KB rather than after the whole payload has
+crossed the proxy. Per-plugin `timeout_ms` +
 `fail_mode` enforced by the proxy. `ServerRegistry.rehandshake/2` re-runs the
 handshake and drives the discovery scan; a quarantined tool is refused by
 `ProxyController` with JSON-RPC `-32003`. `MCP.Plugins.SecretLeak` is the reference
@@ -88,7 +95,8 @@ codec, camelCase + string tags + `dataNeeds` filtering), `Manifest.from_wire/1`.
 `Plugin.Registry` starts one runner per `{:sidecar, _}` config entry in `handle_continue/2`
 and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the same
 `timeout_ms` / `fail_mode` path as an in-process plugin — for `discovery/inspect`,
-`call/evaluate` (`pre_call`), and `call/inspectResponse` (`post_call`). The reference
+`call/evaluate` (`pre_call`), `call/inspectResponse` (`post_call`), and `call/inspectChunk`
+(`chunk` — wired, no sidecar declares it yet). The reference
 `priv/plugins/prompt_injection_scanner.py` runs in **both** `discovery` (scan tool
 descriptions, quarantine) and `post_call` (scan tool responses, strip a hidden-instruction
 block via a `redactResponse` mutation before the agent sees it — the "the web page told the
@@ -97,6 +105,9 @@ agent to exfiltrate" attack; `Demo.run_response_injection/0` drives it). A read-
 
 Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation
 (argument-inspecting logic ships as a `policy` — `TaintedArgGuard` — instead);
+a **real streaming transport** (the `chunk` phase runs over a demo `result.chunks` shape,
+not SSE/chunked-transfer, and re-assembles into one JSON-RPC reply); `chunk` invocation of
+**sidecar** plugins (`call/inspectChunk` is wired but no sidecar declares `chunk`);
 real HMAC taint markers (substring
 match on the retained raw secret stands in); batched / remote audit sinks and a real
 `audit/record` notification; a dashboard UI for the plugin registry; circuit breaker and
@@ -297,7 +308,7 @@ All ids are opaque strings. Unknown fields MUST be ignored by receivers (forward
 ```ts
 interface CallContext {
   protocolVersion: string;              // "0.1"
-  phase: "discovery" | "pre_call" | "post_call";
+  phase: "discovery" | "pre_call" | "post_call" | "chunk";
 
   call: {
     id: string;                         // proxy correlation id for THIS tool call
@@ -340,10 +351,16 @@ interface CallContext {
     findingsSoFar: Finding[];
   };
 
-  response?: {                          // post_call only, gated by dataNeeds
-    isError: boolean;
+  response?: {                          // post_call: the whole response; chunk: the current chunk
+    isError: boolean;                   //   (post_call, gated by dataNeeds)
     content: Array<{ type: string; text?: string; [k: string]: unknown }>;
     raw?: Record<string, unknown>;
+
+    // chunk phase only:
+    stream?: true;
+    chunkIndex?: number;
+    chunk?: { type: string; text?: string; [k: string]: unknown };  // the chunk under inspection
+    delivered?: Array<{ type: string; text?: string; [k: string]: unknown }>;  // chunks already sent
   };
 
   pluginConfig: Record<string, unknown>; // this plugin's config block (see §15)
@@ -967,8 +984,11 @@ for line in sys.stdin:
 
 - **Batch `call/evaluate`.** Worth letting the proxy send several queued calls in one
   request to a slow sidecar? Probably yes for HTTP, via JSON-RPC batch.
-- **Streaming responses.** MCP is moving toward streamed tool results; `post_call`
-  currently assumes a whole response. A `chunk` phase may be needed.
+- **Streaming responses.** A `chunk` phase is built (`Pipeline.run_chunk/2`,
+  `MCP.Plugins.StreamGuard`) over a demo `result.chunks` shape — it lets a plugin cut a
+  stream mid-flight, which whole-response `post_call` can't. Still open: a real streaming
+  transport (SSE / chunked transfer, backpressure), and whether `chunk` findings should
+  accumulate into session taint.
 - **Plugin → plugin ordering across capabilities.** Today only the pre_call `policy` chain
   is ordered. Is a global priority number cleaner?
 - **Taint marker scheme.** HMAC-of-normalized-value is proposed; needs a spec of its own

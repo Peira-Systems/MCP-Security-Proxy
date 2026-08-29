@@ -3,7 +3,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
 
   alias PhoenixElxirBeam.MCP.Decision
   alias PhoenixElxirBeam.MCP.Plugin.{Manifest, Registry}
-  alias PhoenixElxirBeam.MCP.Plugins.{ChainExfil, EventLogSink, RugPull, SecretLeak}
+  alias PhoenixElxirBeam.MCP.Plugins.{ChainExfil, EventLogSink, RugPull, SecretLeak, StreamGuard}
 
   defmodule AuditPolicy do
     @behaviour PhoenixElxirBeam.MCP.Plugin.Policy
@@ -148,6 +148,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
 
     :ok = Registry.disable("secret-leak", reg)
     assert [] = Registry.active_post_call(reg)
+  end
+
+  test "active_chunk/1 lists a :chunk policy and excludes others" do
+    reg = start_registry([{ChainExfil, []}, {StreamGuard, config: %{"max_bytes" => 100}}])
+
+    assert [%{name: "stream-guard", kind: :policy}] = Registry.active_chunk(reg)
+    assert [] = Registry.active_post_call(reg)
+
+    :ok = Registry.disable("stream-guard", reg)
+    assert [] = Registry.active_chunk(reg)
   end
 
   test "seeds an audit_sink plugin enabled and exposes it via active_sinks/1" do

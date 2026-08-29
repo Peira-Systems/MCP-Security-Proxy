@@ -18,7 +18,8 @@ defmodule PhoenixElxirBeamWeb.MCP.MockServerControllerTest do
                "list_files",
                "read_secrets",
                "read_config",
-               "export_all"
+               "export_all",
+               "stream_export"
              ]
     end
 
@@ -49,6 +50,20 @@ defmodule PhoenixElxirBeamWeb.MCP.MockServerControllerTest do
       assert %{"jsonrpc" => "2.0", "id" => 2, "result" => result} = json_response(conn, 200)
       assert %{"isError" => false, "content" => [%{"type" => "text", "text" => text}]} = result
       assert text =~ "simulated"
+    end
+
+    test "a tool with chunks is delivered as a stream shape", %{conn: conn} do
+      conn =
+        post(conn, ~p"/mcp/servers/files", %{
+          "jsonrpc" => "2.0",
+          "id" => 9,
+          "method" => "tools/call",
+          "params" => %{"name" => "stream_export", "arguments" => %{}}
+        })
+
+      assert %{"result" => %{"stream" => true, "chunks" => chunks}} = json_response(conn, 200)
+      assert length(chunks) > 10
+      assert Enum.all?(chunks, &match?(%{"type" => "text", "text" => _}, &1))
     end
 
     test "returns a JSON-RPC error for an unknown tool", %{conn: conn} do

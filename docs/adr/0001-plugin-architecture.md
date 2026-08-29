@@ -126,7 +126,8 @@ instances under a dynamic supervisor.
 
 **Neutral**
 
-- Streaming tool responses, taint-marker normalization, and manifest signing are
+- Streaming tool responses have a `chunk` phase over a simulated transport (step 7j); a
+  real streaming transport, taint-marker normalization, and manifest signing remain
   deliberately unresolved (see `docs/plugin-protocol.md` §18).
 
 ## Roadmap (implementation order)
@@ -223,16 +224,27 @@ instances under a dynamic supervisor.
      calls exceeds the baseline. Keys off the rate of a *sequence*, unlike every other
      guard. `Wire` sends `session.callsSoFar` always, `session.recentCalls` gated. New
      `Demo.run_rapid_probing/0` (8 rapid `read_secrets`) + "Run rapid probing" button.)
+   - 7j. **Streaming `chunk` phase.** ✔ (a **new pipeline phase** that runs once per chunk of
+     a streamed tool response. Scope: simulated transport — the mock returns
+     `result.chunks: [...]`, `ProxyController.stream_and_scan/6` folds over them running
+     `Pipeline.run_chunk/2` (concurrent `policy` + `scanner` with `:chunk` phase) per chunk,
+     and re-assembles into one JSON-RPC reply; no SSE / backpressure. A `chunk` `:deny`
+     **cuts the stream** — delivered chunks kept, a termination notice appended,
+     `result.streamTerminated: true`, a `:blocked` audit row. `MCP.Plugins.StreamGuard` —
+     `chunk` `policy`, `fail_open` — is the streaming analogue of `ResponseSizeGuard`: cuts
+     once the running byte count passes a budget (after ~1–2 KB, not the whole payload).
+     New `files/stream_export` mock tool (24 chunks) + `Demo.run_stream_exfil/0` + "Run
+     stream exfil" button. `Registry.active_chunk/1`; `Pipeline` sidecar dispatch generalised
+     to `call/inspectChunk` (wired, unused). Still deferred: a real streaming transport,
+     `chunk` → session-taint accumulation.)
 
-The plugin architecture is functionally complete at 7i. Remaining items are optional and
-each needs a decision before starting:
+The plugin architecture is functionally complete at 7j. Remaining items are optional, low
+value for a visualization demo, and each needs a decision before starting:
 
   1. **Real HMAC taint markers** — 7e retains the raw secret and substring-matches; the
      proper form HMACs it and matches tokenised arguments.
   2. **Real OTLP exporter** — `StructuredLogSink` (7f) covers the SIEM story via log lines;
      a genuine OpenTelemetry exporter is a real dependency + collector.
-  3. **Streaming `chunk` phase** (§18) — not modelled anywhere; real infrastructure, not a
-     plugin. Largest item.
 
 ## References
 
