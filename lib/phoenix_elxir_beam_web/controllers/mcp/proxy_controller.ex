@@ -1,11 +1,20 @@
 defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   @moduledoc """
-  Policy-enforcing proxy sitting between the MCP client and a real server
-  registered via `PhoenixElxirBeam.MCP.ServerRegistry`. Every `tools/call`
-  is checked against `PhoenixElxirBeam.MCP.PolicyEngine` before being
-  forwarded; a blocked call never reaches the target server. `initialize`
-  and `tools/list` are forwarded untouched and never consulted against the
-  policy engine.
+  Policy-enforcing proxy between an MCP client and a registered upstream
+  server (`PhoenixElxirBeam.MCP.ServerRegistry`).
+
+  The proxy **terminates the MCP session**: it answers `initialize` itself
+  (from the tools it discovered at registration), mints its own
+  `mcp-session-id`, and hands it back in the response header. Every later
+  request must carry that id — a client-chosen id the proxy did not mint is
+  refused, and so is any non-handshake method before
+  `notifications/initialized` completes the handshake
+  (`PhoenixElxirBeam.MCP.SessionStore`).
+
+  Once a session is established, every `tools/call` is checked against
+  `PhoenixElxirBeam.MCP.PolicyEngine` before being forwarded; a blocked call
+  never reaches the upstream. `tools/list` and other reads are forwarded
+  untouched (full method coverage is productionization milestone M1.2).
   """
 
   use PhoenixElxirBeamWeb, :controller
@@ -18,33 +27,153 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     PolicyEngine,
     Redaction,
     ServerRegistry,
+    Session,
+    SessionStore,
     StdioServer
   }
 
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
+  @no_server_code -32001
+  @no_session_code -32001
   @chain_blocked_code -32001
   @response_withheld_code -32002
   @quarantined_code -32003
 
+  # Newest first — `initialize` echoes the client's version if supported,
+  # else offers the newest.
+  @supported_protocol_versions ~w(2025-06-18 2025-03-26 2024-11-05)
+  @default_protocol_version "2025-06-18"
+
   def handle(conn, %{"server_id" => server_id} = params) do
-    id = params["id"]
     method = params["method"]
-    jsonrpc_version = params["jsonrpc"] || "2.0"
+    jsonrpc = params["jsonrpc"] || "2.0"
+    id = params["id"]
     rpc_params = params["params"] || %{}
-    session_id = conn |> get_req_header("mcp-session-id") |> List.first()
-    agent_id = conn |> get_req_header("mcp-agent-id") |> List.first()
 
-    case method do
-      "tools/call" ->
-        route_tool_call(conn, server_id, session_id, agent_id, id, jsonrpc_version, rpc_params)
+    cond do
+      method == "initialize" ->
+        handle_initialize(conn, server_id, id, jsonrpc, rpc_params)
 
-      _ ->
-        forward(conn, server_id, envelope(jsonrpc_version, id, method, rpc_params), id)
+      method == "notifications/initialized" ->
+        handle_initialized(conn)
+
+      String.starts_with?(to_string(method), "notifications/") ->
+        # Other client notifications: acknowledge, keep the session warm.
+        # Per-notification routing is M1.2.
+        touch_session(conn)
+        send_resp(conn, 202, "")
+
+      method == "ping" ->
+        json(conn, %{"jsonrpc" => jsonrpc, "id" => id, "result" => %{}})
+
+      true ->
+        with_session(conn, server_id, id, jsonrpc, fn session ->
+          dispatch(conn, session, method, id, jsonrpc, rpc_params)
+        end)
     end
   end
 
-  defp route_tool_call(conn, server_id, session_id, agent_id, id, jsonrpc_version, rpc_params) do
+  # DELETE /mcp/proxy/:server_id — explicit session teardown.
+  def delete(conn, _params) do
+    conn |> session_id_header() |> maybe_close_session()
+    send_resp(conn, 204, "")
+  end
+
+  defp maybe_close_session(nil), do: :ok
+  defp maybe_close_session(session_id), do: SessionStore.close(session_id)
+
+  # -- handshake ----------------------------------------------------------
+
+  defp handle_initialize(conn, server_id, id, jsonrpc, rpc_params) do
+    case ServerRegistry.get_server(server_id) do
+      nil ->
+        json(conn, error(jsonrpc, id, @no_server_code, no_server_message(server_id)))
+
+      server ->
+        agent_id = conn |> get_req_header("mcp-agent-id") |> List.first()
+        protocol = negotiate_protocol(rpc_params["protocolVersion"])
+
+        {:ok, session} =
+          SessionStore.open(server_id,
+            client_info: rpc_params["clientInfo"],
+            protocol_version: protocol,
+            agent_id: agent_id
+          )
+
+        :ok = PolicyEngine.ensure_session(session.id, agent_id)
+
+        result = %{
+          "protocolVersion" => protocol,
+          "capabilities" => %{"tools" => %{"listChanged" => false}},
+          "serverInfo" => %{
+            "name" => "mcp-security-proxy",
+            "version" => proxy_version(),
+            "upstream" => server.name
+          }
+        }
+
+        conn
+        |> put_resp_header("mcp-session-id", session.id)
+        |> json(%{"jsonrpc" => jsonrpc, "id" => id, "result" => result})
+    end
+  end
+
+  defp handle_initialized(conn) do
+    conn |> session_id_header() |> mark_session_ready()
+    send_resp(conn, 202, "")
+  end
+
+  defp mark_session_ready(nil), do: :ok
+  defp mark_session_ready(session_id), do: SessionStore.mark_ready(session_id)
+
+  defp touch_session(conn) do
+    conn |> session_id_header() |> then(&(&1 && SessionStore.fetch(&1)))
+    :ok
+  end
+
+  # Resolves the `mcp-session-id` header to a live, ready session bound to
+  # this server, or short-circuits with a JSON-RPC error.
+  defp with_session(conn, server_id, id, jsonrpc, fun) do
+    case SessionStore.fetch(session_id_header(conn)) do
+      :error ->
+        json(
+          conn,
+          error(jsonrpc, id, @no_session_code, "no active MCP session; send initialize first")
+        )
+
+      {:ok, %Session{state: :initializing}} ->
+        json(
+          conn,
+          error(
+            jsonrpc,
+            id,
+            @no_session_code,
+            "session handshake incomplete; send notifications/initialized"
+          )
+        )
+
+      {:ok, %Session{server_id: bound}} when bound != server_id ->
+        json(conn, error(jsonrpc, id, @no_session_code, "session is bound to a different server"))
+
+      {:ok, %Session{} = session} ->
+        fun.(session)
+    end
+  end
+
+  defp dispatch(conn, %Session{} = session, "tools/call", id, jsonrpc, rpc_params) do
+    route_tool_call(conn, session, id, jsonrpc, rpc_params)
+  end
+
+  defp dispatch(conn, %Session{server_id: server_id}, method, id, jsonrpc, rpc_params) do
+    forward(conn, server_id, envelope(jsonrpc, id, method, rpc_params), id)
+  end
+
+  # -- tools/call --------------------------------------------------------
+
+  defp route_tool_call(conn, %Session{} = session, id, jsonrpc_version, rpc_params) do
+    server_id = session.server_id
+    session_id = session.id
     tool_name = rpc_params["name"]
 
     case quarantine_reason(server_id, tool_name) do
@@ -62,11 +191,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       :ok ->
         tags = tool_tags(server_id, tool_name)
 
-        # Ensures session state exists before the policy decision runs, so a
-        # lookup miss inside `record_call/5` is an anomaly PolicyEngine can
-        # fail closed on rather than the normal shape of a new session. Also
-        # the point where a session's agent identity is first recorded.
-        :ok = PolicyEngine.ensure_session(session_id, agent_id)
+        # Idempotent — the session's policy state was created at initialize;
+        # this only guards against a race with a mid-flight teardown.
+        :ok = PolicyEngine.ensure_session(session_id, session.agent_id)
 
         args = rpc_params["arguments"] || %{}
 
@@ -143,9 +270,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # Non-`tools/call` methods (initialize / tools/list): forward verbatim, no scan.
+  # Non-`tools/call` methods (tools/list, resources/*, …): forward verbatim, no scan.
   defp forward(conn, server_id, body, id) do
-    case fetch(server_id, body) do
+    case upstream_request(server_id, body) do
       {:ok, resp_body} -> json(conn, resp_body)
       {:error, message} -> upstream_error(conn, id, message)
     end
@@ -154,7 +281,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   # `tools/call`: forward, then run the `post_call` pipeline over the response
   # and apply any redactions (or withhold the whole response) before replying.
   defp call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc, rpc_params) do
-    case fetch(server_id, envelope(jsonrpc, id, "tools/call", rpc_params)) do
+    case upstream_request(server_id, envelope(jsonrpc, id, "tools/call", rpc_params)) do
       {:error, message} ->
         upstream_error(conn, id, message)
 
@@ -211,21 +338,21 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  defp fetch(server_id, body) do
+  defp upstream_request(server_id, body) do
     case ServerRegistry.get_server(server_id) do
-      nil -> {:error, "no MCP server registered for '#{server_id}'"}
-      server -> fetch_from_real(server, body)
+      nil -> {:error, no_server_message(server_id)}
+      server -> forward_to_upstream(server, body)
     end
   end
 
-  defp fetch_from_real(%{transport: :stdio, pid: pid}, body) do
+  defp forward_to_upstream(%{transport: :stdio, pid: pid}, body) do
     case StdioServer.request(pid, body) do
       {:ok, resp_body} -> {:ok, resp_body}
       {:error, _reason} -> {:error, "upstream real server error"}
     end
   end
 
-  defp fetch_from_real(%{transport: :http} = server, body) do
+  defp forward_to_upstream(%{transport: :http} = server, body) do
     session_headers = if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
     {url, transport_headers} = HttpTransport.prepare(server.base_url)
     headers = transport_headers ++ session_headers
@@ -234,6 +361,25 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
       _ -> {:error, "upstream real server error"}
     end
+  end
+
+  # -- helpers ----------------------------------------------------------
+
+  defp session_id_header(conn) do
+    conn |> get_req_header("mcp-session-id") |> List.first()
+  end
+
+  defp negotiate_protocol(requested) when requested in @supported_protocol_versions, do: requested
+  defp negotiate_protocol(_requested), do: @default_protocol_version
+
+  defp proxy_version do
+    :phoenix_elxir_beam |> Application.spec(:vsn) |> to_string()
+  end
+
+  defp no_server_message(server_id), do: "no MCP server registered for '#{server_id}'"
+
+  defp error(jsonrpc, id, code, message) do
+    %{"jsonrpc" => jsonrpc, "id" => id, "error" => %{"code" => code, "message" => message}}
   end
 
   defp upstream_error(conn, id, message) do

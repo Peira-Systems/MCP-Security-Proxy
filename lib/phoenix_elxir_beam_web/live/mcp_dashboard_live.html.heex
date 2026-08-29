@@ -9,7 +9,7 @@
       </div>
 
       <span class="text-sm text-base-content/50">
-        {length(@real_servers)} server(s) · {length(@plugins)} plugin(s)
+        {length(@real_servers)} server(s) · {@session_count} session(s) · {length(@plugins)} plugin(s)
       </span>
     </div>
 
@@ -749,12 +749,6 @@
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
           {if @registering, do: "Registering…", else: "Register"}
         </button>
-        <span class="ml-auto flex items-center gap-1.5 text-xs text-base-content/40">
-          session <span class="font-mono">{@manual_session_id}</span>
-          <button type="button" phx-click="new_manual_session" class="btn btn-ghost btn-xs">
-            new
-          </button>
-        </span>
       </.form>
 
       <div

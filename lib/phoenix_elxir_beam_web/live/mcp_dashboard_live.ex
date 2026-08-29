@@ -8,7 +8,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{EventLog, HoldRegistry, ServerRegistry}
+  alias PhoenixElxirBeam.MCP.{EventLog, HoldRegistry, ServerRegistry, SessionStore}
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
@@ -22,8 +22,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
-      # Sidecar plugins register a beat after boot and their health drifts;
-      # a light poll keeps the Plugins panel current.
+      # Sidecar plugin health drifts and MCP sessions come and go with no
+      # broadcast; a light poll keeps the Plugins panel + session count current.
       :timer.send_interval(5_000, :refresh_plugins)
     end
 
@@ -36,7 +36,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:positions, layout_positions(graph))
       |> assign(:real_servers, ServerRegistry.list_servers())
       |> assign(:registering, false)
-      |> assign(:manual_session_id, generate_manual_session_id())
       |> assign(:expanded_server_ids, MapSet.new())
       |> assign(:console_mode, "live")
       |> assign(:history_status, "all")
@@ -48,6 +47,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
+      |> assign(:session_count, safe_session_count())
       |> assign(:pending_holds, safe_pending_holds())
       |> stream(:events, [])
 
@@ -257,17 +257,11 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         _ -> %{}
       end
 
-    session_id = socket.assigns.manual_session_id
-
     Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-      call_real_tool(server_id, tool_name, arguments, session_id)
+      call_real_tool(server_id, tool_name, arguments)
     end)
 
     {:noreply, socket}
-  end
-
-  def handle_event("new_manual_session", _params, socket) do
-    {:noreply, assign(socket, :manual_session_id, generate_manual_session_id())}
   end
 
   def handle_event("clear_feed", _params, socket) do
@@ -302,7 +296,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   def handle_info(:refresh_plugins, socket) do
-    {:noreply, assign(socket, :plugins, plugin_rows())}
+    {:noreply,
+     socket
+     |> assign(:plugins, plugin_rows())
+     |> assign(:session_count, safe_session_count())}
   end
 
   def handle_info({:hold_pending, hold}, socket) do
@@ -404,6 +401,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     :exit, _ -> []
   end
 
+  defp safe_session_count do
+    length(SessionStore.list())
+  rescue
+    _ -> 0
+  catch
+    :exit, _ -> 0
+  end
+
   defp held_ago(%DateTime{} = ts) do
     case DateTime.diff(DateTime.utc_now(), ts) do
       s when s < 1 -> "just now"
@@ -456,28 +461,51 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end
   end
 
-  defp call_real_tool(server_id, tool_name, arguments, session_id) do
+  # Runs a full one-shot MCP session against the proxy — handshake, the tool
+  # call, teardown — exactly as an external client would. The proxy mints the
+  # session id; we read it back off the initialize response.
+  defp call_real_tool(server_id, tool_name, arguments) do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
+    base = "http://127.0.0.1:#{port}/mcp/proxy/#{server_id}"
 
-    body = %{
-      "jsonrpc" => "2.0",
-      "id" => System.unique_integer([:positive]),
-      "method" => "tools/call",
-      "params" => %{"name" => tool_name, "arguments" => arguments}
-    }
+    init =
+      Req.post(base,
+        json: %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{
+            "protocolVersion" => "2025-06-18",
+            "clientInfo" => %{"name" => "dashboard", "version" => "1"}
+          }
+        }
+      )
 
-    Req.post("http://127.0.0.1:#{port}/mcp/proxy/#{server_id}",
-      json: body,
-      headers: [{"mcp-session-id", session_id}]
-    )
+    with {:ok, resp} <- init,
+         [session_id | _] <- Req.Response.get_header(resp, "mcp-session-id") do
+      headers = [{"mcp-session-id", session_id}]
+
+      Req.post(base,
+        json: %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+        headers: headers
+      )
+
+      Req.post(base,
+        json: %{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{"name" => tool_name, "arguments" => arguments}
+        },
+        headers: headers
+      )
+
+      Req.delete(base, headers: headers)
+    end
   end
 
   defp tag_atom("sensitive_read"), do: :sensitive_read
   defp tag_atom("network_egress"), do: :network_egress
-
-  defp generate_manual_session_id do
-    "manual-" <> (:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower))
-  end
 
   defp apply_event(socket, %{status: status} = event) when status in [:ok, :blocked] do
     socket = stream_insert(socket, :events, event, at: 0)

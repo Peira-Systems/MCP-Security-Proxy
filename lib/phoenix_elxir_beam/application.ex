@@ -24,6 +24,9 @@ defmodule PhoenixElxirBeam.Application do
       PhoenixElxirBeam.MCP.Plugin.Registry,
       PhoenixElxirBeam.MCP.HoldRegistry,
       PhoenixElxirBeam.MCP.PolicyEngine,
+      # Owns the table of live downstream MCP sessions; teardown notifies
+      # PolicyEngine, so it starts after it.
+      PhoenixElxirBeam.MCP.SessionStore,
       {DynamicSupervisor, name: PhoenixElxirBeam.MCP.StdioServerSupervisor},
       PhoenixElxirBeam.MCP.ServerRegistry,
       # Start a worker by calling: PhoenixElxirBeam.Worker.start_link(arg)

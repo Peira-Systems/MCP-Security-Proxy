@@ -102,6 +102,17 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @doc """
+  Discards all per-session state (tags, taint provenance, call log) for
+  `session_id`. Called by `PhoenixElxirBeam.MCP.SessionStore` on session
+  teardown so policy state does not outlive the MCP session that created it.
+  A later `record_call/5` for the same id then fails closed as an unknown
+  session, which is the intended posture.
+  """
+  def drop_session(session_id, name \\ __MODULE__) do
+    GenServer.call(name, {:drop_session, session_id})
+  end
+
+  @doc """
   Resolves a previously `:hold`-ed call once the operator (or the timeout)
   has decided. `:approved` accumulates the call's tags and receipts an `:ok`
   event; `:denied` receipts a `:blocked` event.
@@ -309,6 +320,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
           :allow -> reply_verdict(meta, :ok, nil, opts, accumulate_tags(state, session_id, tags))
         end
     end
+  end
+
+  @impl true
+  def handle_call({:drop_session, session_id}, _from, state) do
+    {:reply, :ok, %{state | sessions: Map.delete(state.sessions, session_id)}}
   end
 
   @impl true
