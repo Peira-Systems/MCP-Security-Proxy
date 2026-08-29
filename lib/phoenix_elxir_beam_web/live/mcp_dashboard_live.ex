@@ -129,6 +129,11 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, running: true)}
   end
 
+  def handle_event("run_rapid_probing", _params, socket) do
+    {:ok, _pid} = Demo.run_rapid_probing()
+    {:noreply, assign(socket, running: true)}
+  end
+
   def handle_event("run_rug_pull_demo", _params, socket) do
     {:ok, _pid} = Demo.run_rug_pull_demo()
 

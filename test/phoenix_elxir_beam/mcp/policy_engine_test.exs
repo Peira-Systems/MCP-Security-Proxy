@@ -330,4 +330,46 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     row = Enum.find(entries, &(&1.event_id == event.id))
     assert row.agent_id == "agent://first"
   end
+
+  test "a rapid burst of watched calls trips the behavioural baseline", %{name: name} do
+    session_id = "session-rapid-probe"
+    :ok = PolicyEngine.start_session(session_id, :rapid_probing, "agent://demo", name)
+
+    # test.exs configures BaselineGuard with max_calls: 3 for :sensitive_read.
+    for _ <- 1..3 do
+      assert {:allow, _} =
+               PolicyEngine.record_call(
+                 session_id,
+                 "files",
+                 "read_secrets",
+                 [:sensitive_read],
+                 name
+               )
+    end
+
+    assert {:block, event} =
+             PolicyEngine.record_call(
+               session_id,
+               "files",
+               "read_secrets",
+               [:sensitive_read],
+               name
+             )
+
+    assert event.status == :blocked
+    assert event.reason =~ "baseline exceeded"
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+    assert [%{"plugin" => "baseline-guard", "verdict" => "deny"}] = row.decisions
+  end
+
+  test "untagged calls do not count toward the baseline", %{name: name} do
+    session_id = "session-untagged-burst"
+    :ok = PolicyEngine.start_session(session_id, :benign, "agent://demo", name)
+
+    for _ <- 1..6 do
+      assert {:allow, _} = PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+    end
+  end
 end

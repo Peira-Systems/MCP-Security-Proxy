@@ -8,6 +8,7 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   alias PhoenixElxirBeam.MCP.{MockDrift, PolicyEngine, ServerRegistry}
 
   @step_delay_ms 600
+  @default_agent "agent://demo-client"
 
   @doc """
   Benign session: list files, then check an external service's status.
@@ -115,6 +116,37 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   end
 
   @doc """
+  Rapid-probing simulation: the agent fires eight `read_secrets` calls
+  back-to-back, without waiting for each response — what an actual probing
+  script does. Each single read looks fine to the tag / taint / argument
+  guards, but `MCP.Plugins.BaselineGuard` tracks the *rate* and denies once
+  the session exceeds its baseline (dev/prod: >5 `sensitive_read` calls
+  inside the window), so the tail of the burst is blocked.
+  """
+  def run_rapid_probing do
+    Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+      session_id = generate_session_id()
+      PolicyEngine.start_session(session_id, :rapid_probing, @default_agent)
+      post("files", session_id, @default_agent, jsonrpc("initialize", %{}))
+
+      1..8
+      |> Enum.map(fn _ ->
+        Task.Supervisor.async_nolink(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+          post(
+            "files",
+            session_id,
+            @default_agent,
+            jsonrpc("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
+          )
+        end)
+      end)
+      |> Task.await_many(30_000)
+
+      PolicyEngine.complete_session(session_id)
+    end)
+  end
+
+  @doc """
   Response-injection simulation: fetch an external web page whose text
   carries a hidden instruction block telling the agent to read secrets and
   exfiltrate them. The out-of-process `prompt-injection-scanner` sidecar
@@ -163,8 +195,6 @@ defmodule PhoenixElxirBeam.MCP.Demo do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
     "http://127.0.0.1:#{port}/mcp/servers/#{server_id}"
   end
-
-  @default_agent "agent://demo-client"
 
   defp start_task(scenario, steps, agent \\ @default_agent) do
     Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->

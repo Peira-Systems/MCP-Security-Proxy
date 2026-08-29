@@ -53,6 +53,15 @@ registration `config:` (`match` predicates on `agent` / `agent_prefix` / `tool` 
 first match wins, no match → allow). It ships enabled in every env with an
 `agent://ci-runner` egress-deny rule.
 
+Behavioural baselining: the proxy keeps a bounded per-session recent-call log (`%{tags, at}`,
+last 50 within 60s) and threads it into every `pre_call` `CallContext` as
+`session.recentCalls` (plus `session.callsSoFar`, the session-lifetime count).
+`MCP.Plugins.BaselineGuard` is a `pre_call` `policy` (no tag filter — it sees every call,
+`fail_open`) that applies its own operator-configured `window_ms` / `max_calls` / `watch_tags`
+and denies once the session exceeds that rate ("6 `sensitive_read` calls in 10s, limit 5").
+Keys off the *rate of a sequence* rather than any single call. `Demo.run_rapid_probing/0`
+drives it.
+
 Hold (§7.2 / §9.4 / §16.3): a `policy` plugin's `verdict: :hold` parks the `tools/call`
 in `MCP.HoldRegistry` (the HTTP request stays open) and the dashboard shows an
 Approve / Deny card; `HoldRegistry.await/3` unblocks the controller, which drives
@@ -312,9 +321,10 @@ interface CallContext {
     descriptionHash: string;            // "sha256:…" over {name,description,inputSchema}
   };
 
-  session?: {                           // gated by dataNeeds ("session.taint")
-    seenTags: string[];                 // tags accumulated earlier in this session
-    taint: {
+  session?: {
+    seenTags: string[];                 // always sent — tags accumulated earlier in this session
+    callsSoFar: number;                  // always sent — calls this session has made
+    taint: {                            // gated by dataNeeds ("session.taint")
       sources: Array<{
         originTool: string;             // tool whose response leaked a secret
         findingType: string;            // e.g. "secret_leak"
@@ -323,7 +333,10 @@ interface CallContext {
         // the raw secret is retained proxy-side for byte matching, never sent here
       }>;
     };
-    callsSoFar: number;
+    recentCalls: Array<{                 // gated by dataNeeds ("session.recentCalls")
+      tags: string[];
+      at: string;                       // RFC 3339
+    }>;                                  // bounded recent window, for behavioural baselining
     findingsSoFar: Finding[];
   };
 

@@ -9,8 +9,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
       tags as `"network_egress"` strings (internally they are atoms).
     * **data minimization** (§6) — `encode_context/2` only includes the
       `call.arguments` / `tool.*` / `response.*` fields the plugin's manifest
-      `dataNeeds` actually asks for. Routing metadata and `session.seenTags`
-      are always sent.
+      `dataNeeds` actually asks for. Routing metadata, `session.seenTags`, and
+      `session.callsSoFar` are always sent; `session.taint` /
+      `session.recentCalls` are `dataNeeds`-gated.
   """
 
   require Logger
@@ -40,12 +41,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
         "method" => call[:method] || "tools/call",
         "tags" => encode_tags(call[:tags] || [])
       },
-      "session" => %{"seenTags" => encode_tags(get_in(ctx.session, [:seen_tags]) || [])}
+      "session" => %{
+        "seenTags" => encode_tags(get_in(ctx.session, [:seen_tags]) || []),
+        "callsSoFar" => Map.get(ctx.session, :calls_so_far, 0)
+      }
     }
 
     base
     |> maybe_put("call", "arguments", needs, "call.arguments", fn -> call[:arguments] end)
     |> maybe_put_session_taint(ctx.session, needs)
+    |> maybe_put_session_recent_calls(ctx.session, needs)
     |> maybe_put_tool(ctx.tool, needs)
     |> maybe_put_response(ctx.response, needs)
   end
@@ -150,6 +155,24 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
         end)
 
       put_in(acc, ["session", "taint"], %{"sources" => sources})
+    else
+      acc
+    end
+  end
+
+  defp maybe_put_session_recent_calls(acc, session, needs) do
+    if "session.recentCalls" in needs do
+      calls =
+        session
+        |> Map.get(:recent_calls, [])
+        |> Enum.map(fn c ->
+          %{
+            "tags" => encode_tags(Map.get(c, :tags, [])),
+            "at" => encode_time(Map.get(c, :at))
+          }
+        end)
+
+      put_in(acc, ["session", "recentCalls"], calls)
     else
       acc
     end

@@ -7,8 +7,11 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
   The proxy owns canonical session state; a `CallContext` is a read-only view
   of it at one instant. Fields the current caller has no data for are left
   `nil`. On a `:pre_call` / `:post_call` context `PhoenixElxirBeam.MCP.PolicyEngine`
-  populates `phase`, `call`, and `session.seen_tags`; `call.arguments`, `tool`,
-  and `response` are threaded in by later roadmap steps (scanners, post_call).
+  populates `phase`, `call`, `session.seen_tags`, `session.taint`,
+  `session.calls_so_far` (session-lifetime count), and `session.recent_calls`
+  (a bounded recent window of `%{tags, at}`, for behavioural baselining);
+  `call.arguments`, `tool`, and `response` are threaded in by later roadmap
+  steps (scanners, post_call).
 
   On a `:discovery` context (built by `PhoenixElxirBeam.MCP.ServerRegistry` at
   registration / re-handshake) there is no single call: `discovery` carries the
@@ -19,7 +22,13 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
   defstruct phase: nil,
             call: %{},
             tool: nil,
-            session: %{seen_tags: [], taint: %{sources: []}, calls_so_far: 0, findings_so_far: []},
+            session: %{
+              seen_tags: [],
+              taint: %{sources: []},
+              calls_so_far: 0,
+              recent_calls: [],
+              findings_so_far: []
+            },
             response: nil,
             discovery: nil,
             plugin_config: %{}
@@ -37,7 +46,13 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
           plugin_config: map()
         }
 
-  @default_session %{seen_tags: [], taint: %{sources: []}, calls_so_far: 0, findings_so_far: []}
+  @default_session %{
+    seen_tags: [],
+    taint: %{sources: []},
+    calls_so_far: 0,
+    recent_calls: [],
+    findings_so_far: []
+  }
 
   @doc """
   Builds a context from a map. `:phase` is required. A `:discovery` context

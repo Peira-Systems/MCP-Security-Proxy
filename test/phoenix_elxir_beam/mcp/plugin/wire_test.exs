@@ -46,6 +46,25 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WireTest do
     refute Map.has_key?(with_needs["tool"], "inputSchema")
   end
 
+  test "encode_context sends session.recentCalls only when dataNeeds asks" do
+    at = ~U[2026-08-29 12:00:00Z]
+
+    ctx =
+      CallContext.new(%{
+        phase: :pre_call,
+        call: %{id: "c", session_id: "s", server_id: "files", tool_name: "read_secrets"},
+        session: %{seen_tags: [], recent_calls: [%{tags: [:sensitive_read], at: at}]}
+      })
+
+    refute Map.has_key?(Wire.encode_context(ctx, entry([]))["session"], "recentCalls")
+
+    wire = Wire.encode_context(ctx, entry(["session.recentCalls"]))
+
+    assert wire["session"]["recentCalls"] == [
+             %{"tags" => ["sensitive_read"], "at" => "2026-08-29T12:00:00Z"}
+           ]
+  end
+
   test "encode_discovery matches the §9.1 params shape" do
     ctx =
       CallContext.new(%{

@@ -214,17 +214,24 @@ instances under a dynamic supervisor.
      `net/fetch_page` mock tool (page text carrying an injection) + `Demo.run_response_injection/0`
      + "Run response injection" demo button. Node fixture `sidecar_scanner.js` gained the
      same `post_call` handler for hermetic tests.)
+   - 7i. **Behavioural baselining.** ✔ (PolicyEngine keeps a bounded per-session recent-call
+     log — `%{tags, at}`, last 50 within 60s — and threads it into every `pre_call`
+     `CallContext` as `session.recent_calls`, plus `session.calls_so_far` (session-lifetime
+     count). `MCP.Plugins.BaselineGuard` — `pre_call` `policy`, no tag filter, `fail_open`,
+     `data_needs: ["session.recentCalls"]` — applies its own operator-configured
+     `window_ms` / `max_calls` / `watch_tags` and denies once the session's rate of watched
+     calls exceeds the baseline. Keys off the rate of a *sequence*, unlike every other
+     guard. `Wire` sends `session.callsSoFar` always, `session.recentCalls` gated. New
+     `Demo.run_rapid_probing/0` (8 rapid `read_secrets`) + "Run rapid probing" button.)
 
-The plugin architecture is functionally complete at 7h. Remaining items are optional and
+The plugin architecture is functionally complete at 7i. Remaining items are optional and
 each needs a decision before starting:
 
-  1. **Behavioural baselining** — a `pre_call` policy over per-agent/session call rates;
-     needs new counters in PolicyEngine session state → `CallContext.session`.
-  2. **Real HMAC taint markers** — 7e retains the raw secret and substring-matches; the
+  1. **Real HMAC taint markers** — 7e retains the raw secret and substring-matches; the
      proper form HMACs it and matches tokenised arguments.
-  3. **Real OTLP exporter** — `StructuredLogSink` (7f) covers the SIEM story via log lines;
+  2. **Real OTLP exporter** — `StructuredLogSink` (7f) covers the SIEM story via log lines;
      a genuine OpenTelemetry exporter is a real dependency + collector.
-  4. **Streaming `chunk` phase** (§18) — not modelled anywhere; real infrastructure, not a
+  3. **Streaming `chunk` phase** (§18) — not modelled anywhere; real infrastructure, not a
      plugin. Largest item.
 
 ## References

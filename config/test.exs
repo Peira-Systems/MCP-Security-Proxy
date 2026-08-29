@@ -17,6 +17,12 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        ]
      }},
     {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
+    {PhoenixElxirBeam.MCP.Plugins.BaselineGuard,
+     config: %{
+       "window_ms" => 10_000,
+       "max_calls" => 3,
+       "watch_tags" => ["sensitive_read"]
+     }},
     {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},

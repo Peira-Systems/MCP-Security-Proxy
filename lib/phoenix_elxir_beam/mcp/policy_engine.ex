@@ -44,6 +44,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @unknown_session_reason "blocked: no session state on record for this session id"
   @missing_session_reason "blocked: no session id presented"
 
+  # Bounds on the per-session recent-call log threaded into the pre_call
+  # `CallContext` for behavioural baselining (`Plugins.BaselineGuard`). The
+  # proxy only caps memory here; a baselining plugin applies its own, shorter
+  # window on top.
+  @call_log_window_ms 60_000
+  @call_log_max 50
+
   # Client API
 
   def start_link(opts) do
@@ -161,7 +168,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         scenario: scenario,
         tags: MapSet.new(),
         taint: [],
-        agent_id: agent_id
+        agent_id: agent_id,
+        call_log: [],
+        call_count: 0
       })
 
     event = %Event{
@@ -192,7 +201,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
             scenario: nil,
             tags: MapSet.new(),
             taint: [],
-            agent_id: agent_id
+            agent_id: agent_id,
+            call_log: [],
+            call_count: 0
           })
 
         %{agent_id: nil} = existing when not is_nil(agent_id) ->
@@ -256,6 +267,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         {:reply, {:block, event}, state}
 
       session ->
+        now = DateTime.utc_now()
+        call_log = prune_call_log([%{tags: tags, at: now} | session.call_log], now)
+        call_count = session.call_count + 1
+
+        state =
+          update_in(state.sessions[session_id], fn s ->
+            %{s | call_log: call_log, call_count: call_count}
+          end)
+
         ctx =
           CallContext.new(%{
             phase: :pre_call,
@@ -271,7 +291,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
             },
             session: %{
               seen_tags: MapSet.to_list(session.tags),
-              taint: %{sources: session.taint}
+              taint: %{sources: session.taint},
+              calls_so_far: call_count,
+              recent_calls: call_log
             }
           })
 
@@ -337,6 +359,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
     receipt(event, state)
     {:reply, {reply_verdict, event}, state}
+  end
+
+  # Newest-first, dropped once outside the retention window or over the cap.
+  defp prune_call_log(log, now) do
+    log
+    |> Enum.filter(fn %{at: at} ->
+      DateTime.diff(now, at, :millisecond) <= @call_log_window_ms
+    end)
+    |> Enum.take(@call_log_max)
   end
 
   defp accumulate_tags(state, session_id, tags) do
