@@ -43,7 +43,7 @@ defmodule PhoenixElxirBeam.MixProject do
       {:phoenix, "~> 1.8.9"},
       {:phoenix_html, "~> 4.1"},
       {:ecto_sql, "~> 3.13"},
-      {:ecto_sqlite3, "~> 0.19"},
+      {:postgrex, "~> 0.19"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
       {:lazy_html, ">= 0.1.0", only: :test},

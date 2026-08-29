@@ -33,14 +33,13 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
   ]
 
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
-  database: Path.expand("../priv/repo/test.db", __DIR__),
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: "phoenix_elxir_beam_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2,
-  # SQLite serializes writers; with async tests each on its own sandbox
-  # connection, WAL + a generous busy timeout makes concurrent writes wait
-  # rather than raise "Database busy".
-  journal_mode: :wal,
-  busy_timeout: 5_000
+  pool_size: System.schedulers_online() * 2
 
 # The proxy controller tests drive real HTTP requests against the endpoint
 # (via Phoenix.ConnTest / Req), so the server must actually be running.

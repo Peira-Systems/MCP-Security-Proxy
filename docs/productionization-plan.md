@@ -216,19 +216,22 @@ M1–M4 are written against the real shape once, not adapted twice.
 
 ## M2 — Survivable
 
-### M2.1 — SQLite → Postgres
-- Add a `postgres` service to `docker-compose.yml` (named volume, healthcheck, pinned
-  major version). `app` waits on `postgres` healthy.
-- Migrate `Repo` to `Ecto.Adapters.Postgres`; port every migration; `DATABASE_URL` in
-  `runtime.exs`; pool size, `queue_target` / `queue_interval`, statement timeout.
-- Revisit the `async: false` test suites forced by SQLite's single writer — most can go
-  back to `async: true` under the SQL sandbox.
-- Deploy migration strategy: `bin/phoenix_elxir_beam eval "Release.migrate()"` runs in the
-  entrypoint before the app boots (already partly present in `docker-entrypoint.sh` — point
-  it at Postgres).
-- **Acceptance:** `mix test` green with Postgres, most suites `async: true`;
-  `docker compose up` brings up Postgres then app then passes healthcheck; a migration runs
-  automatically on deploy.
+### M2.1 — SQLite → Postgres — **done**
+- `docker-compose.yml`: `postgres:17-alpine` service with `pg_data` named volume,
+  `pg_isready` healthcheck; `app` has `depends_on: {postgres: {condition: service_healthy}}`
+  and gets a `DATABASE_URL` built from `POSTGRES_*`.
+- `{:ecto_sqlite3}` → `{:postgrex}`; `Repo` adapter → `Ecto.Adapters.Postgres`. All four
+  migrations ran clean on PG unchanged (`{:array, :string}` / `{:array, :map}` / `:binary` /
+  `:text` map natively). `runtime.exs`: `url: DATABASE_URL` (required in prod) + `pool_size`,
+  `queue_target` / `queue_interval`, `statement_timeout` parameter, optional `:inet6`.
+  dev/test read discrete `PG*` env with `postgres:postgres@localhost:5432` defaults.
+- `event_log_test` + `event_log_sink_test` back to `async: true` (the SQLite single-writer
+  serialisation is gone). The proxy endpoint suites stay `async: false` — unrelated: the
+  Bandit request process needs the shared sandbox connection to read `api_keys`.
+- `Dockerfile`: dropped `build-essential` (postgrex is pure Elixir), the `/data` volume, and
+  `DATABASE_PATH`. `docker-entrypoint.sh` already runs `Release.migrate()` before `start`.
+- **Verified:** `PGPORT=5433 mix test` green (248) against a real Postgres 17; migrations
+  create + apply clean.
 
 ### M2.2 — Durable session / taint / baseline / registry state
 - Move `PolicyEngine` per-session state (`tags`, `taint` provenance, `call_log`,

@@ -10,10 +10,10 @@ ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
 FROM ${BUILDER_IMAGE} AS builder
 
-# git is required to fetch the heroicons/daisyui github deps declared in
-# mix.exs; build-essential + curl are needed to compile exqlite (sqlite)
-# and to let the tailwind/esbuild mix tasks download their binaries.
-RUN apt-get update -y && apt-get install -y build-essential git curl ca-certificates \
+# git fetches the heroicons/daisyui github deps declared in mix.exs; curl
+# lets the tailwind/esbuild mix tasks download their binaries. (postgrex is
+# pure Elixir — no build toolchain needed for the DB driver.)
+RUN apt-get update -y && apt-get install -y git curl ca-certificates \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 WORKDIR /app
@@ -70,7 +70,7 @@ ENV PHX_SERVER=true
 WORKDIR /app
 
 RUN groupadd --system app && useradd --system --gid app --home /app app && \
-    mkdir -p /data && chown app:app /data /app
+    chown app:app /app
 
 COPY --from=builder --chown=app:app /app/_build/${MIX_ENV}/rel/phoenix_elxir_beam ./
 COPY --chown=app:app docker-entrypoint.sh /app/docker-entrypoint.sh
@@ -78,7 +78,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 
 USER app
 
-VOLUME ["/data"]
 EXPOSE 4000
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
