@@ -134,23 +134,31 @@ M1–M4 are written against the real shape once, not adapted twice.
   redacted in place (keeping `uri`/`mimeType`/`role`), and the session tainted; unknown and
   server→client methods refused; no method reaches an upstream without an explicit decision.
 
-### M1.3 — Real streaming transport
-- Replace the removed simulation with Streamable-HTTP / SSE passthrough: stream upstream →
-  `Pipeline.run_chunk/2` per real SSE event → stream downstream. Bandit supports chunked
-  responses; use `Plug.Conn.chunk/2` or a `Stream` sink.
-- Backpressure: bounded buffered bytes per stream; the request deadline applies across the
-  whole stream, not per chunk; handle upstream disconnect mid-stream (flush what's
-  delivered, audit, close).
-- A `chunk`-phase `deny` closes the downstream connection cleanly + writes a `:blocked`
-  audit row — not an appended text notice.
-- `chunk` → session-taint accumulation (was deferred; wire it here).
-- **Files:** new `MCP.StreamProxy`, `ProxyController` streaming branch, `HttpTransport`
-  gains an SSE-aware request mode, `PolicyEngine.accumulate_taint/3` called from the chunk
-  fold.
-- **Acceptance:** a real streaming tool response passes through chunk-by-chunk with
-  measured added latency < budget; `StreamGuard` cuts a 1 MB response after ~2 KB and the
-  client sees a closed connection; killing the upstream mid-stream produces a clean
-  downstream close + audit row.
+### M1.3 — Real streaming transport — **done** (`MCP.StreamProxy`)
+- Scanned methods (`tools/call`, `resources/read`, `prompts/get`) against a `:http` upstream
+  read the response body **incrementally** through `MCP.StreamProxy` and run
+  `Pipeline.run_chunk/2` over each real socket slice (JSON body or SSE frames — content-type
+  detected). A `chunk`-phase `deny` stops the read (`{:halt}` from the `Req` `into`
+  collector), the rest of the payload never crosses, the client gets `-32002`, and a
+  `:blocked` audit row is written with the byte count.
+- Backpressure: a per-stream **buffer ceiling** (`max_buffer_bytes`, default 8 MB) and a
+  **stream deadline** (`deadline_ms`, default 30 s), both enforced in `StreamProxy.feed/2`
+  independent of any plugin.
+- `chunk` → session-taint: `Pipeline.run_chunk/2` now returns `taint_sources`; `StreamProxy`
+  accumulates them and the controller folds them into the session via
+  `record_response_scan`.
+- **Files:** `MCP.StreamProxy`, `ProxyController.forward_and_scan` / `fetch_streamed`,
+  `Pipeline.run_chunk` return shape (+ `pipeline_chunk_test`), `MCPHTTPTestServer` gained a
+  chunked large-response tool.
+- **Not done (deferred):** downstream SSE passthrough and progress-notification relay — the
+  client still gets one JSON response (or one error), never a partial. Real MCP `tools/call`
+  results are not chunked at the content level, so incremental *inspection* + early cut is
+  the security-relevant part; downstream streaming + the standalone GET SSE endpoint are a
+  separate surface (revisit if a real client needs server→client messaging).
+- **Acceptance:** `stream_proxy_test` + `proxy_streaming_test` — a small response reassembles
+  and still runs `post_call`; `StreamGuard` (500-byte test budget) cuts a ~20 KB chunked
+  response to `-32002` mid-transfer; the buffer ceiling stops a flood before any verdict;
+  the tool-chaining policy still fires across streamed calls.
 
 ### M1.4 — Authentication & authorization
 - **Downstream client auth: signed API keys** (decided 2026-08-28). Ed25519 or HMAC-SHA256,

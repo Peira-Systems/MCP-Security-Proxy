@@ -2,12 +2,13 @@
 
 **Status:** Accepted (design) · **Date:** 2026-08-27 · **Supersedes:** —
 
-> **Note (productionization M0):** this ADR was written in the context of a
+> **Note (productionization M0–M1.3):** this ADR was written in the context of a
 > self-contained demo. The plugin architecture below is unchanged and carries
 > forward, but the demo scaffolding it references (mock servers, scenario
 > harness, `MockDrift`, simulated `result.chunks` streaming) has been removed —
 > see [`docs/productionization-plan.md`](../productionization-plan.md). The
-> `chunk` phase contract stays; a real streaming transport lands in M1.3.
+> `chunk` phase now runs over a **real** incremental read of the upstream
+> response (`MCP.StreamProxy`), not a simulated `result.chunks` list.
 
 ## Context
 

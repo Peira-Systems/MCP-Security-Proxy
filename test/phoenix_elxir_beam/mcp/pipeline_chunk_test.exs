@@ -63,36 +63,36 @@ defmodule PhoenixElxirBeam.MCP.PipelineChunkTest do
   end
 
   test "allows a chunk when no policy objects" do
-    assert {:allow, [], [], nil} = Pipeline.run_chunk(ctx(), [entry(PassPolicy)])
+    assert {:allow, [], [], [], nil} = Pipeline.run_chunk(ctx(), [entry(PassPolicy)])
   end
 
   test "a policy :deny cuts the stream" do
-    assert {:deny, _findings, _redactions, "over budget"} =
+    assert {:deny, _findings, _redactions, _taint, "over budget"} =
              Pipeline.run_chunk(ctx(), [entry(CutPolicy)])
   end
 
   test "collects findings and redactions from a chunk scanner" do
-    assert {:allow, [%{type: "secret_leak"}], [redaction], nil} =
+    assert {:allow, [%{type: "secret_leak"}], [redaction], [], nil} =
              Pipeline.run_chunk(ctx(), [entry(RedactScanner, kind: :scanner)])
 
     assert redaction.path == "content[0].text"
   end
 
   test "an entry without the :chunk phase is skipped" do
-    assert {:allow, [], [], nil} =
+    assert {:allow, [], [], [], nil} =
              Pipeline.run_chunk(ctx(), [entry(CutPolicy, phases: [:post_call])])
   end
 
   test "a raising chunk policy with fail_open does not cut the stream" do
     capture_log(fn ->
-      assert {:allow, [%{type: "plugin_error"}], [], nil} =
+      assert {:allow, [%{type: "plugin_error"}], [], [], nil} =
                Pipeline.run_chunk(ctx(), [entry(BoomPolicy, name: "boom")])
     end)
   end
 
   test "a raising chunk policy with fail_closed cuts the stream" do
     capture_log(fn ->
-      assert {:deny, [%{type: "plugin_error"}], [], _reason} =
+      assert {:deny, [%{type: "plugin_error"}], [], [], _reason} =
                Pipeline.run_chunk(ctx(), [
                  entry(BoomPolicy, name: "boom", fail_mode: :fail_closed)
                ])

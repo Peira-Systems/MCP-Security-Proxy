@@ -17,6 +17,13 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   content is scanned and redacted, metadata reads pass through, and every
   unknown or unmediated method is refused. No method reaches the upstream
   without an explicit decision.
+
+  Scanned methods against a `:http` upstream stream through
+  `PhoenixElxirBeam.MCP.StreamProxy`: the response body is read
+  incrementally and the `chunk` phase runs over each slice, so a
+  `chunk`-phase deny (`StreamGuard`) cuts a large exfiltration mid-transfer
+  rather than after the whole payload has crossed. `:stdio` upstreams use
+  the buffered path.
   """
 
   use PhoenixElxirBeamWeb, :controller
@@ -33,7 +40,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     ServerRegistry,
     Session,
     SessionStore,
-    StdioServer
+    StdioServer,
+    StreamProxy
   }
 
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
@@ -330,16 +338,36 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # Forward `method`, then run the `post_call` content scan over the reply and
-  # apply redactions (or withhold the whole response) before replying.
-  # `scan_label` is what the audit row records the scan against — the tool
-  # name for `tools/call`, the method itself for `resources/read` etc.
+  # Forward `method`, reading the reply incrementally so the `chunk` phase can
+  # cut a large response mid-stream, then run the `post_call` content scan
+  # over the reassembled result and apply redactions (or withhold the whole
+  # response) before replying. `scan_label` is what the audit row records the
+  # scan against — the tool name for `tools/call`, the method itself for
+  # `resources/read` etc.
   defp forward_and_scan(conn, server_id, session_id, method, scan_label, id, jsonrpc, rpc_params) do
-    case upstream_request(server_id, envelope(jsonrpc, id, method, rpc_params)) do
+    meta = %{session_id: session_id, server_id: server_id, tool_name: scan_label, method: method}
+
+    case fetch_streamed(server_id, envelope(jsonrpc, id, method, rpc_params), meta) do
       {:error, message} ->
         upstream_error(conn, id, message)
 
-      {:ok, %{"result" => result} = resp_body} when is_map(result) ->
+      {:cut, reason, findings, taint_sources, bytes} ->
+        PolicyEngine.record_response_scan(
+          session_id,
+          server_id,
+          scan_label,
+          findings,
+          "stream cut after #{bytes} bytes: #{reason}",
+          taint_sources
+        )
+
+        json(conn, %{
+          "jsonrpc" => jsonrpc,
+          "id" => id,
+          "error" => %{"code" => @response_withheld_code, "message" => reason}
+        })
+
+      {:ok, %{"result" => result} = resp_body, chunk_findings, chunk_taint} when is_map(result) ->
         scan_response(
           conn,
           server_id,
@@ -349,12 +377,42 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           id,
           jsonrpc,
           resp_body,
-          result
+          result,
+          chunk_findings,
+          chunk_taint
         )
 
-      {:ok, resp_body} ->
-        # Error result or an unexpected shape — nothing to scan.
+      {:ok, resp_body, chunk_findings, chunk_taint} ->
+        # Error result or an unexpected shape — nothing to scan, but still
+        # receipt anything the chunk phase collected on the way.
+        PolicyEngine.record_response_scan(
+          session_id,
+          server_id,
+          scan_label,
+          chunk_findings,
+          nil,
+          chunk_taint
+        )
+
         json(conn, resp_body)
+    end
+  end
+
+  # `:http` upstreams stream through `StreamProxy` (incremental read + chunk
+  # phase); `:stdio` is line-delimited request/response with no streaming.
+  defp fetch_streamed(server_id, body, meta) do
+    case ServerRegistry.get_server(server_id) do
+      nil ->
+        {:error, no_server_message(server_id)}
+
+      %{transport: :http} = server ->
+        StreamProxy.run(server, body, meta)
+
+      %{transport: :stdio, pid: pid} ->
+        case StdioServer.request(pid, body) do
+          {:ok, resp_body} -> {:ok, resp_body, [], []}
+          {:error, _reason} -> {:error, "upstream real server error"}
+        end
     end
   end
 
@@ -367,10 +425,21 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
          id,
          jsonrpc,
          resp_body,
-         result
+         result,
+         chunk_findings,
+         chunk_taint
        ) do
     case ResponseContent.extract(method, result) do
       :skip ->
+        PolicyEngine.record_response_scan(
+          session_id,
+          server_id,
+          scan_label,
+          chunk_findings,
+          nil,
+          chunk_taint
+        )
+
         json(conn, resp_body)
 
       {content, reinject} ->
@@ -389,15 +458,18 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         {verdict, findings, redactions, taint_sources, reason} =
           Pipeline.run_post_call(ctx, PluginRegistry.active_post_call())
 
+        all_findings = chunk_findings ++ findings
+        all_taint = chunk_taint ++ taint_sources
+
         case verdict do
           :deny ->
             PolicyEngine.record_response_scan(
               session_id,
               server_id,
               scan_label,
-              findings,
+              all_findings,
               reason || "response withheld by policy",
-              taint_sources
+              all_taint
             )
 
             json(conn, %{
@@ -411,9 +483,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               session_id,
               server_id,
               scan_label,
-              findings,
+              all_findings,
               nil,
-              taint_sources
+              all_taint
             )
 
             redacted = Redaction.apply(content, redactions)

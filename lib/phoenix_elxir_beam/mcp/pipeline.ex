@@ -126,14 +126,16 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   chunk plus what has been delivered so far), concurrently — invoked once
   per chunk of a streamed tool response.
 
-  Returns `{verdict, findings, redactions, reason}`:
+  Returns `{verdict, findings, redactions, taint_sources, reason}`:
 
     * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied,
       which tells the proxy to **cut the stream** (deliver nothing further);
-    * `redactions` — `redact_response` mutations for the current chunk.
+    * `redactions` — `redact_response` mutations for the current chunk;
+    * `taint_sources` — `add_taint_sources` mutations, folded into the
+      session's taint provenance as the stream flows.
   """
   @spec run_chunk(CallContext.t(), [entry()]) ::
-          {:allow | :deny, [Finding.t()], [map()], String.t() | nil}
+          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
   def run_chunk(%CallContext{phase: :chunk} = ctx, entries) when is_list(entries) do
     results =
       entries
@@ -143,12 +145,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
     findings = Enum.flat_map(results, & &1.findings)
     redactions = Enum.flat_map(results, & &1.redactions)
+    taint_sources = Enum.flat_map(results, & &1.taint_sources)
     denial = Enum.find(results, &(&1.verdict == :deny))
 
     if denial do
-      {:deny, findings, redactions, denial.reason || "stream terminated by policy"}
+      {:deny, findings, redactions, taint_sources, denial.reason || "stream terminated by policy"}
     else
-      {:allow, findings, redactions, nil}
+      {:allow, findings, redactions, taint_sources, nil}
     end
   end
 
