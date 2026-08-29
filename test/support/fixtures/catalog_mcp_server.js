@@ -15,6 +15,31 @@ const bigExport =
       `user_${i + 1},user${i + 1}@example.test,role=member,created=2026-0${(i % 8) + 1}-${(i % 27) + 1}`
   ).join("\n") + "\n(simulated full export)"
 
+const RESOURCES = [
+  {
+    uri: "file:///readme.md",
+    name: "readme",
+    mimeType: "text/markdown",
+    text: "# Demo workspace\n\nNothing sensitive here."
+  },
+  {
+    uri: "config://app",
+    name: "app-config",
+    mimeType: "text/plain",
+    // carries a fake credential — SecretLeak redacts it and taints the session
+    text: "region=us-east-1\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE (simulated)"
+  }
+]
+
+const PROMPTS = [
+  {
+    name: "greeting",
+    description: "A friendly greeting",
+    // message text carries a fake credential too
+    messageText: "Say hello. Context: API_KEY=sk-demo-FAKE1234 (simulated, not a real secret)"
+  }
+]
+
 const TOOLS = [
   {
     name: "list_files",
@@ -74,7 +99,7 @@ function handle(msg) {
     case "initialize":
       respond(msg.id, {
         protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: "catalog", version: "0.0.1" }
       })
       break
@@ -95,6 +120,41 @@ function handle(msg) {
         respond(msg.id, {
           content: [{ type: "text", text: tool.response }],
           isError: false
+        })
+      }
+      break
+    }
+    case "resources/list":
+      respond(msg.id, {
+        resources: RESOURCES.map(({ uri, name, mimeType }) => ({ uri, name, mimeType }))
+      })
+      break
+    case "resources/read": {
+      const res = RESOURCES.find((r) => r.uri === (msg.params && msg.params.uri))
+      if (!res) {
+        fail(msg.id, "unknown resource")
+      } else {
+        respond(msg.id, {
+          contents: [{ uri: res.uri, mimeType: res.mimeType, text: res.text }]
+        })
+      }
+      break
+    }
+    case "prompts/list":
+      respond(msg.id, {
+        prompts: PROMPTS.map(({ name, description }) => ({ name, description }))
+      })
+      break
+    case "prompts/get": {
+      const prompt = PROMPTS.find((p) => p.name === (msg.params && msg.params.name))
+      if (!prompt) {
+        fail(msg.id, "unknown prompt")
+      } else {
+        respond(msg.id, {
+          description: prompt.description,
+          messages: [
+            { role: "user", content: { type: "text", text: prompt.messageText } }
+          ]
         })
       }
       break

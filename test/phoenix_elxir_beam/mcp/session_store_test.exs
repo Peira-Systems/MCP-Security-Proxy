@@ -76,12 +76,13 @@ defmodule PhoenixElxirBeam.MCP.SessionStoreTest do
     assert {:ok, _} = SessionStore.fetch(c.id, store)
   end
 
-  test "list returns live sessions newest first" do
+  test "list returns live sessions most-recently-active first" do
     store = start_store()
-    _a = open(store)
-    b = open(store)
+    a = open(store)
+    _b = open(store)
+    {:ok, _} = SessionStore.fetch(a.id, store)
 
     assert [first | _] = SessionStore.list(store)
-    assert first.id == b.id
+    assert first.id == a.id
   end
 end

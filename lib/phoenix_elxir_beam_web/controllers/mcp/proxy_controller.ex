@@ -11,10 +11,12 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   `notifications/initialized` completes the handshake
   (`PhoenixElxirBeam.MCP.SessionStore`).
 
-  Once a session is established, every `tools/call` is checked against
-  `PhoenixElxirBeam.MCP.PolicyEngine` before being forwarded; a blocked call
-  never reaches the upstream. `tools/list` and other reads are forwarded
-  untouched (full method coverage is productionization milestone M1.2).
+  Once a session is established, each method's disposition comes from
+  `PhoenixElxirBeam.MCP.MethodPolicy` — `tools/call` runs the full policy
+  pipeline, `resources/read` / `prompts/get` are forwarded then their
+  content is scanned and redacted, metadata reads pass through, and every
+  unknown or unmediated method is refused. No method reaches the upstream
+  without an explicit decision.
   """
 
   use PhoenixElxirBeamWeb, :controller
@@ -23,9 +25,11 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     CallContext,
     HoldRegistry,
     HttpTransport,
+    MethodPolicy,
     Pipeline,
     PolicyEngine,
     Redaction,
+    ResponseContent,
     ServerRegistry,
     Session,
     SessionStore,
@@ -39,6 +43,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   @chain_blocked_code -32001
   @response_withheld_code -32002
   @quarantined_code -32003
+  @method_refused_code -32601
 
   # Newest first — `initialize` echoes the client's version if supported,
   # else offers the newest.
@@ -59,8 +64,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         handle_initialized(conn)
 
       String.starts_with?(to_string(method), "notifications/") ->
-        # Other client notifications: acknowledge, keep the session warm.
-        # Per-notification routing is M1.2.
+        # Client notifications are fire-and-forget: acknowledge (202), keep
+        # the session warm, never error. Per-notification routing (forwarding
+        # `notifications/cancelled` upstream, etc.) is a later milestone.
         touch_session(conn)
         send_resp(conn, 202, "")
 
@@ -161,12 +167,40 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  defp dispatch(conn, %Session{} = session, "tools/call", id, jsonrpc, rpc_params) do
-    route_tool_call(conn, session, id, jsonrpc, rpc_params)
-  end
+  defp dispatch(conn, %Session{} = session, method, id, jsonrpc, rpc_params) do
+    case MethodPolicy.disposition(method) do
+      :police ->
+        route_tool_call(conn, session, id, jsonrpc, rpc_params)
 
-  defp dispatch(conn, %Session{server_id: server_id}, method, id, jsonrpc, rpc_params) do
-    forward(conn, server_id, envelope(jsonrpc, id, method, rpc_params), id)
+      :scan_response ->
+        forward_and_scan(
+          conn,
+          session.server_id,
+          session.id,
+          method,
+          method,
+          id,
+          jsonrpc,
+          rpc_params
+        )
+
+      :forward ->
+        forward(conn, session.server_id, envelope(jsonrpc, id, method, rpc_params), id)
+
+      :ack ->
+        send_resp(conn, 202, "")
+
+      :refuse ->
+        json(
+          conn,
+          error(
+            jsonrpc,
+            id,
+            @method_refused_code,
+            "method '#{method}' is not permitted through this proxy"
+          )
+        )
+    end
   end
 
   # -- tools/call --------------------------------------------------------
@@ -199,7 +233,16 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
         case PolicyEngine.record_call(session_id, server_id, tool_name, tags, PolicyEngine, args) do
           {:allow, _event} ->
-            call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc_version, rpc_params)
+            forward_and_scan(
+              conn,
+              server_id,
+              session_id,
+              "tools/call",
+              tool_name,
+              id,
+              jsonrpc_version,
+              rpc_params
+            )
 
           {:block, event} ->
             json(conn, %{
@@ -230,7 +273,16 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         {:allow, _event} =
           PolicyEngine.finalize_hold(c.session_id, c.server_id, c.tool_name, c.tags, :approved)
 
-        call_and_scan(conn, c.server_id, c.session_id, c.tool_name, c.id, c.jsonrpc, c.rpc_params)
+        forward_and_scan(
+          conn,
+          c.server_id,
+          c.session_id,
+          "tools/call",
+          c.tool_name,
+          c.id,
+          c.jsonrpc,
+          c.rpc_params
+        )
 
       {:ok, :denied} ->
         {:block, event} =
@@ -270,7 +322,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # Non-`tools/call` methods (tools/list, resources/*, …): forward verbatim, no scan.
+  # Metadata reads (tools/list, resources/list, …): forward verbatim, no scan.
   defp forward(conn, server_id, body, id) do
     case upstream_request(server_id, body) do
       {:ok, resp_body} -> json(conn, resp_body)
@@ -278,22 +330,58 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # `tools/call`: forward, then run the `post_call` pipeline over the response
-  # and apply any redactions (or withhold the whole response) before replying.
-  defp call_and_scan(conn, server_id, session_id, tool_name, id, jsonrpc, rpc_params) do
-    case upstream_request(server_id, envelope(jsonrpc, id, "tools/call", rpc_params)) do
+  # Forward `method`, then run the `post_call` content scan over the reply and
+  # apply redactions (or withhold the whole response) before replying.
+  # `scan_label` is what the audit row records the scan against — the tool
+  # name for `tools/call`, the method itself for `resources/read` etc.
+  defp forward_and_scan(conn, server_id, session_id, method, scan_label, id, jsonrpc, rpc_params) do
+    case upstream_request(server_id, envelope(jsonrpc, id, method, rpc_params)) do
       {:error, message} ->
         upstream_error(conn, id, message)
 
-      {:ok, %{"result" => %{"content" => content}} = resp_body} when is_list(content) ->
+      {:ok, %{"result" => result} = resp_body} when is_map(result) ->
+        scan_response(
+          conn,
+          server_id,
+          session_id,
+          method,
+          scan_label,
+          id,
+          jsonrpc,
+          resp_body,
+          result
+        )
+
+      {:ok, resp_body} ->
+        # Error result or an unexpected shape — nothing to scan.
+        json(conn, resp_body)
+    end
+  end
+
+  defp scan_response(
+         conn,
+         server_id,
+         session_id,
+         method,
+         scan_label,
+         id,
+         jsonrpc,
+         resp_body,
+         result
+       ) do
+    case ResponseContent.extract(method, result) do
+      :skip ->
+        json(conn, resp_body)
+
+      {content, reinject} ->
         ctx =
           CallContext.new(%{
             phase: :post_call,
             call: %{
               session_id: session_id,
               server_id: server_id,
-              tool_name: tool_name,
-              method: "tools/call"
+              tool_name: scan_label,
+              method: method
             },
             response: %{is_error: false, content: content}
           })
@@ -306,7 +394,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             PolicyEngine.record_response_scan(
               session_id,
               server_id,
-              tool_name,
+              scan_label,
               findings,
               reason || "response withheld by policy",
               taint_sources
@@ -322,19 +410,15 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             PolicyEngine.record_response_scan(
               session_id,
               server_id,
-              tool_name,
+              scan_label,
               findings,
               nil,
               taint_sources
             )
 
-            content = Redaction.apply(content, redactions)
-            json(conn, put_in(resp_body, ["result", "content"], content))
+            redacted = Redaction.apply(content, redactions)
+            json(conn, Map.put(resp_body, "result", reinject.(redacted)))
         end
-
-      {:ok, resp_body} ->
-        # Error result or an unexpected shape — nothing to scan.
-        json(conn, resp_body)
     end
   end
 

@@ -114,19 +114,25 @@ M1–M4 are written against the real shape once, not adapted twice.
   upstreams share their one process regardless. The downstream session abstraction is in
   place; only the upstream leg is shared.
 
-### M1.2 — Full method coverage
-- `resources/list`, `resources/read`, `resources/subscribe`: route through `discovery`
-  (list-drift) and a `post_call`-equivalent content scan — resource content is a taint
-  source and an injection surface.
-- `prompts/list`, `prompts/get`: same treatment.
-- `completion/complete`, `logging/setLevel`, `roots/*`, `notifications/*`,
-  `sampling/createMessage`: one documented decision per method — forward / police / refuse
-  — in a single `method_policy/1` table, not scattered `case` fallthrough.
-- **Files:** `ProxyController` method dispatch → `MCP.MethodPolicy`; `Pipeline` phases
-  generalised so `post_call` scanning is not `tools/call`-only.
-- **Acceptance:** a table test enumerating every MCP method asserts the routed behaviour;
-  `resources/read` of a doc containing a hidden-instruction block is scanned and the block
-  redacted; no method reaches an upstream without an explicit decision.
+### M1.2 — Full method coverage — **done** (`MCP.MethodPolicy`, `MCP.ResponseContent`)
+- `resources/read`, `prompts/get`: forwarded, then their content is normalised and run
+  through the `post_call` scan (redaction + taint accumulation) — resource / prompt content
+  is a taint source and an injection surface. `resources/list` / `prompts/list` forward.
+- `completion/complete`, `logging/setLevel`, `tools/list`, `resources/*` (list/templates/
+  subscribe/unsubscribe) forward. `sampling/createMessage`, `roots/list`,
+  `elicitation/create` and every unknown method are **refused** (`-32601`, default-deny).
+  `notifications/*` acked (202). `initialize` / `notifications/initialized` / `ping` handled
+  directly by the controller.
+- **Files:** `MCP.MethodPolicy` (the disposition table), `MCP.ResponseContent` (normalise
+  the 3 result shapes ↔ scannable content list), `ProxyController` dispatch generalised
+  (`forward_and_scan` replaces the `tools/call`-only `call_and_scan`).
+- **Deferred:** routing `resources/list` / `prompts/list` through `discovery` for list-drift
+  detection (needs `ServerRegistry` to track+hash resources/prompts like it does tools) —
+  folded into M4.1 / a later pass.
+- **Acceptance:** `method_policy_test` enumerates every method's disposition;
+  `resources/read` / `prompts/get` of content carrying a credential is scanned, the secret
+  redacted in place (keeping `uri`/`mimeType`/`role`), and the session tainted; unknown and
+  server→client methods refused; no method reaches an upstream without an explicit decision.
 
 ### M1.3 — Real streaming transport
 - Replace the removed simulation with Streamable-HTTP / SSE passthrough: stream upstream →

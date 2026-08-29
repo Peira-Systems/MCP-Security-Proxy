@@ -63,7 +63,7 @@ defmodule PhoenixElxirBeam.MCP.SessionStore do
     GenServer.call(store, {:close, id})
   end
 
-  @doc "Every live session, newest first (dashboard)."
+  @doc "Every live session, most-recently-active first (dashboard)."
   @spec list(GenServer.server()) :: [Session.t()]
   def list(store \\ __MODULE__) do
     GenServer.call(store, :list)
@@ -145,7 +145,7 @@ defmodule PhoenixElxirBeam.MCP.SessionStore do
     sessions =
       state.sessions
       |> Map.values()
-      |> Enum.sort_by(& &1.created_at, {:desc, DateTime})
+      |> Enum.sort_by(& &1.seq, :desc)
 
     {:reply, sessions, state}
   end
