@@ -1,11 +1,10 @@
 defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   @moduledoc """
-  Policy-enforcing proxy sitting between the (simulated) MCP client and
-  either a mock MCP server or a real one registered via
-  `PhoenixElxirBeam.MCP.ServerRegistry`. Every `tools/call` is checked
-  against `PhoenixElxirBeam.MCP.PolicyEngine` before being forwarded; a
-  blocked call never reaches the target server. `initialize` and
-  `tools/list` are forwarded untouched and never consulted against the
+  Policy-enforcing proxy sitting between the MCP client and a real server
+  registered via `PhoenixElxirBeam.MCP.ServerRegistry`. Every `tools/call`
+  is checked against `PhoenixElxirBeam.MCP.PolicyEngine` before being
+  forwarded; a blocked call never reaches the target server. `initialize`
+  and `tools/list` are forwarded untouched and never consulted against the
   policy engine.
   """
 
@@ -19,8 +18,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     PolicyEngine,
     Redaction,
     ServerRegistry,
-    StdioServer,
-    ToolCatalog
+    StdioServer
   }
 
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
@@ -133,18 +131,15 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   end
 
   defp tool_tags(server_id, tool_name) do
-    case ToolCatalog.tool(server_id, tool_name) do
-      %{tags: tags} -> tags
-      nil -> real_tool_tags(ServerRegistry.get_server(server_id), tool_name)
-    end
-  end
+    case ServerRegistry.get_server(server_id) do
+      nil ->
+        []
 
-  defp real_tool_tags(nil, _tool_name), do: []
-
-  defp real_tool_tags(server, tool_name) do
-    case Enum.find(server.tools, &(&1.name == tool_name)) do
-      nil -> []
-      tool -> tool.tags
+      server ->
+        case Enum.find(server.tools, &(&1.name == tool_name)) do
+          nil -> []
+          tool -> tool.tags
+        end
     end
   end
 
@@ -162,9 +157,6 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     case fetch(server_id, envelope(jsonrpc, id, "tools/call", rpc_params)) do
       {:error, message} ->
         upstream_error(conn, id, message)
-
-      {:ok, %{"result" => %{"chunks" => chunks}} = resp_body} when is_list(chunks) ->
-        stream_and_scan(conn, server_id, session_id, tool_name, resp_body, chunks)
 
       {:ok, %{"result" => %{"content" => content}} = resp_body} when is_list(content) ->
         ctx =
@@ -219,88 +211,10 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # A streamed `tools/call` result: fold over the chunks, running the `chunk`
-  # pipeline phase over each one as it "arrives". A `chunk`-phase deny cuts the
-  # stream — chunks already delivered are kept, nothing further is sent, and a
-  # termination notice is appended. The assembled `content` is returned in one
-  # JSON-RPC reply (the demo does not model a real streaming transport).
-  defp stream_and_scan(conn, server_id, session_id, tool_name, resp_body, chunks) do
-    entries = PluginRegistry.active_chunk()
-    total = length(chunks)
-
-    {delivered, findings, terminated} =
-      chunks
-      |> Enum.with_index()
-      |> Enum.reduce_while({[], [], nil}, fn {chunk, index}, {acc, facc, _} ->
-        ctx =
-          CallContext.new(%{
-            phase: :chunk,
-            call: %{
-              session_id: session_id,
-              server_id: server_id,
-              tool_name: tool_name,
-              method: "tools/call"
-            },
-            response: %{stream: true, chunk: chunk, chunk_index: index, delivered: acc}
-          })
-
-        {verdict, chunk_findings, redactions, reason} = Pipeline.run_chunk(ctx, entries)
-        facc = facc ++ chunk_findings
-
-        case verdict do
-          :deny ->
-            {:halt, {acc, facc, reason || "stream terminated by policy"}}
-
-          :allow ->
-            kept = if redactions == [], do: chunk, else: hd(Redaction.apply([chunk], redactions))
-            {:cont, {acc ++ [kept], facc, nil}}
-        end
-      end)
-
-    withheld =
-      terminated &&
-        "stream terminated after #{length(delivered)}/#{total} chunks: #{terminated}"
-
-    PolicyEngine.record_response_scan(session_id, server_id, tool_name, findings, withheld, [])
-
-    content =
-      if terminated,
-        do: delivered ++ [stream_notice(terminated, length(delivered), total)],
-        else: delivered
-
-    result =
-      resp_body["result"]
-      |> Map.delete("chunks")
-      |> Map.delete("stream")
-      |> Map.put("content", content)
-      |> maybe_flag_terminated(terminated)
-
-    json(conn, Map.put(resp_body, "result", result))
-  end
-
-  defp maybe_flag_terminated(result, nil), do: result
-  defp maybe_flag_terminated(result, _reason), do: Map.put(result, "streamTerminated", true)
-
-  defp stream_notice(reason, delivered, total) do
-    %{
-      "type" => "text",
-      "text" => "‹stream terminated by policy after #{delivered}/#{total} chunks: #{reason}›"
-    }
-  end
-
   defp fetch(server_id, body) do
     case ServerRegistry.get_server(server_id) do
-      nil -> fetch_from_mock(server_id, body)
+      nil -> {:error, "no MCP server registered for '#{server_id}'"}
       server -> fetch_from_real(server, body)
-    end
-  end
-
-  defp fetch_from_mock(server_id, body) do
-    port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
-
-    case Req.post("http://127.0.0.1:#{port}/mcp/servers/#{server_id}", json: body) do
-      {:ok, %{status: 200, body: resp_body}} -> {:ok, resp_body}
-      _ -> {:error, "upstream mock server error"}
     end
   end
 

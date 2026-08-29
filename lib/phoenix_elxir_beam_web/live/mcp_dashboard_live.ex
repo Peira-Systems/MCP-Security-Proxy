@@ -1,23 +1,14 @@
 defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @moduledoc """
-  Live dashboard visualizing MCP tool calls flowing through the policy
-  proxy: a small tool graph that lights up as calls are made and turns red
-  when a dangerous tool-chain is detected and blocked, a console-style
-  event log (live session feed, or the durable history browser), and
-  real-server registration/testing.
+  Live dashboard for the policy proxy: a tool graph that lights up as real
+  `tools/call`s flow through and turns red when a call is blocked, a
+  console-style event log (live feed or the durable history browser), the
+  plugin pipeline, and real-server registration / tag curation.
   """
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{
-    Demo,
-    EventLog,
-    HoldRegistry,
-    MockDrift,
-    ServerRegistry,
-    ToolCatalog
-  }
-
+  alias PhoenixElxirBeam.MCP.{EventLog, HoldRegistry, ServerRegistry}
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
@@ -36,17 +27,13 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       :timer.send_interval(5_000, :refresh_plugins)
     end
 
-    graph =
-      for server_id <- ToolCatalog.servers(),
-          do: %{id: server_id, tools: ToolCatalog.tools(server_id)}
+    graph = build_graph()
 
     socket =
       socket
       |> assign(:page_title, "MCP Dashboard")
       |> assign(:graph, graph)
       |> assign(:positions, layout_positions(graph))
-      |> assign(:running, false)
-      |> assign(:scenario, nil)
       |> assign(:real_servers, ServerRegistry.list_servers())
       |> assign(:registering, false)
       |> assign(:manual_session_id, generate_manual_session_id())
@@ -67,11 +54,20 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:ok, refresh_history(socket)}
   end
 
+  # The graph's server + tool nodes come from the live ServerRegistry —
+  # `%{id, name, tools}` per registered server.
+  defp build_graph do
+    for server <- ServerRegistry.list_servers() do
+      %{id: server.id, name: server.name, tools: server.tools}
+    end
+  end
+
+  defp graph_server_ids(graph), do: Enum.map(graph, & &1.id)
+
   # Fixed four-tier layout — agent, policy gate, server, tool — left to
-  # right. Positions are final, not a seed for client-side relaxation: the
-  # graph no longer jitters into place, it's laid out once here.
+  # right. Positions are final, not a seed for client-side relaxation.
   defp layout_positions(graph) do
-    server_count = length(graph)
+    server_count = max(length(graph), 1)
     server_spacing = 170
     first_server_y = 240 - server_spacing * (server_count - 1) / 2
 
@@ -94,62 +90,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   @impl true
-  def handle_event("run_benign", _params, socket) do
-    {:ok, _pid} = Demo.run_benign_session()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_attack", _params, socket) do
-    {:ok, _pid} = Demo.run_attack_simulation()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_untagged_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_untagged_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_restricted_agent", _params, socket) do
-    {:ok, _pid} = Demo.run_restricted_agent()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_secret_arg_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_secret_arg_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_bulk_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_bulk_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_response_injection", _params, socket) do
-    {:ok, _pid} = Demo.run_response_injection()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_rapid_probing", _params, socket) do
-    {:ok, _pid} = Demo.run_rapid_probing()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_stream_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_stream_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_rug_pull_demo", _params, socket) do
-    {:ok, _pid} = Demo.run_rug_pull_demo()
-
-    {:noreply,
-     put_flash(
-       socket,
-       :info,
-       "Rug-pull demo: registering the files server, then poisoning + re-handshaking…"
-     )}
-  end
-
   def handle_event("set_console_mode", %{"mode" => mode}, socket)
       when mode in ["live", "history"] do
     socket = assign(socket, :console_mode, mode)
@@ -259,25 +199,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end
   end
 
-  def handle_event("register_stdio_preset", %{"preset" => preset}, socket) do
-    liveview = self()
-
-    case stdio_preset(preset) do
-      {:ok, name, cmd, args} ->
-        Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-          send(
-            liveview,
-            {:server_registered, ServerRegistry.register_stdio_server(name, cmd, args)}
-          )
-        end)
-
-        {:noreply, socket |> assign(:registering, true) |> clear_flash()}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, reason)}
-    end
-  end
-
   def handle_event("remove_server", %{"server_id" => server_id}, socket) do
     :ok = ServerRegistry.remove_server(server_id)
 
@@ -316,24 +237,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, start_rehandshake(socket, server_id)}
   end
 
-  def handle_event("simulate_drift", %{"server_id" => server_id}, socket) do
-    case socket.assigns.real_servers
-         |> Enum.find(&(&1.id == server_id))
-         |> mock_server_id() do
-      nil ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "This server isn't backed by a local mock — can't simulate drift."
-         )}
-
-      mock_id ->
-        MockDrift.poison(mock_id)
-        {:noreply, start_rehandshake(socket, server_id)}
-    end
-  end
-
   def handle_event(
         "clear_tool_block",
         %{"server_id" => server_id, "tool_name" => tool_name},
@@ -368,10 +271,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   def handle_event("clear_feed", _params, socket) do
-    # The manual "Call tool" flow never emits a `:session_start` event (see
-    # `apply_event/2` below), so it never gets the clean-slate reset a demo
-    # run gets for free — this button is that reset, made explicit instead
-    # of implicit.
     {:noreply,
      socket
      |> stream(:events, [], reset: true)
@@ -389,11 +288,15 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, apply_event(socket, event)}
   end
 
-  # Any ServerRegistry mutation (from this or another dashboard, or a demo
-  # task) — refetch the server list.
+  # Any ServerRegistry mutation (from this or another dashboard) — refetch
+  # the server list and rebuild the graph.
   def handle_info({:servers_changed}, socket) do
+    graph = build_graph()
+
     {:noreply,
      socket
+     |> assign(:graph, graph)
+     |> assign(:positions, layout_positions(graph))
      |> assign(:real_servers, ServerRegistry.list_servers())
      |> assign(:server_options, EventLog.distinct_server_ids())}
   end
@@ -407,7 +310,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       update(socket, :pending_holds, &[hold | Enum.reject(&1, fn h -> h.id == hold.id end)])
 
     socket =
-      if hold.server_id in ToolCatalog.servers() do
+      if hold.server_id in graph_server_ids(socket.assigns.graph) do
         push_event(socket, "mcp_graph_event", %{
           server_id: hold.server_id,
           tool_name: hold.tool_name,
@@ -540,21 +443,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp plugin_note(_entry), do: nil
 
-  # The mock `server_id` (e.g. "files") behind a registered server whose
-  # base URL points at this app's own mock endpoint, or nil if it points
-  # elsewhere. Used to gate the "simulate drift" action.
-  defp mock_server_id(nil), do: nil
-  defp mock_server_id(%{base_url: base_url}), do: mock_server_id(base_url)
-
-  defp mock_server_id(base_url) when is_binary(base_url) do
-    case URI.parse(base_url) do
-      %URI{path: "/mcp/servers/" <> id} when id != "" -> id
-      _ -> nil
-    end
-  end
-
-  defp mock_server_id(_), do: nil
-
   defp parse_date("", _edge), do: nil
 
   defp parse_date(date_string, edge) do
@@ -587,149 +475,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   defp tag_atom("sensitive_read"), do: :sensitive_read
   defp tag_atom("network_egress"), do: :network_egress
 
-  # Fixed commands, not user-supplied — the dashboard form only ever passes a
-  # preset key, never a raw command string, so there's no arbitrary-command
-  # injection surface here.
-  #
-  # Each preset can be overridden with an env var holding the full command line
-  # (`MCP_FILESYSTEM_CMD` / `MCP_FETCH_CMD`), which is how a containerized
-  # deployment points at servers baked into its own image. Without an override
-  # we fall back to the local-dev layout (a project-root `.venv` / a
-  # `priv/mcp_servers` npm install), probing both the POSIX (`bin/`) and
-  # Windows (`Scripts/`) venv layouts.
-  defp stdio_preset("filesystem") do
-    sandbox = sandbox_dir()
-
-    case env_cmd("MCP_FILESYSTEM_CMD") do
-      {:ok, cmd, args} ->
-        {:ok, "real-filesystem (stdio)", cmd, args ++ [sandbox]}
-
-      :none ->
-        node = System.find_executable("node")
-
-        entry =
-          Path.expand(
-            "priv/mcp_servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
-            File.cwd!()
-          )
-
-        cond do
-          is_nil(node) ->
-            {:error, preset_unavailable("filesystem", "node not found on PATH")}
-
-          not File.exists?(entry) ->
-            {:error,
-             preset_unavailable(
-               "filesystem",
-               "#{entry} not found — run: npm install --prefix priv/mcp_servers @modelcontextprotocol/server-filesystem"
-             )}
-
-          true ->
-            {:ok, "real-filesystem (stdio)", node, [entry, sandbox]}
-        end
-    end
-  end
-
-  defp stdio_preset("fetch") do
-    case env_cmd("MCP_FETCH_CMD") do
-      {:ok, cmd, args} ->
-        {:ok, "real-fetch (stdio)", cmd, args}
-
-      :none ->
-        case venv_python() do
-          {:ok, python} ->
-            {:ok, "real-fetch (stdio)", python, ["-m", "mcp_server_fetch"]}
-
-          :none ->
-            {:error,
-             preset_unavailable(
-               "fetch",
-               "no .venv found — run: python -m venv .venv && .venv/bin/python -m pip install mcp-server-fetch " <>
-                 "(.venv\\Scripts\\python on Windows)"
-             )}
-        end
-    end
-  end
-
-  # Splits an env-var command line on whitespace: `"python -m mcp_server_fetch"`
-  # -> `{:ok, "/usr/bin/python", ["-m", "mcp_server_fetch"]}`. Good enough for
-  # the fixed commands we expect here — no shell quoting is supported. The
-  # executable is resolved to an absolute path because `StdioServer` spawns it
-  # via `:spawn_executable`, which does not search `PATH`.
-  defp env_cmd(var) do
-    case System.get_env(var) do
-      value when is_binary(value) and value != "" ->
-        case String.split(value, ~r/\s+/, trim: true) do
-          [cmd | args] -> {:ok, resolve_executable(cmd), args}
-          [] -> :none
-        end
-
-      _ ->
-        :none
-    end
-  end
-
-  defp resolve_executable(cmd) do
-    expanded = Path.expand(cmd, File.cwd!())
-
-    cond do
-      Path.type(cmd) == :absolute -> cmd
-      File.regular?(expanded) -> expanded
-      true -> System.find_executable(cmd) || cmd
-    end
-  end
-
-  # The filesystem server's one allowed directory. In a release `priv` is under
-  # the versioned app dir (not the cwd), so resolve it through `app_dir/2` and
-  # only fall back to a cwd-relative path for `mix phx.server` dev.
-  defp sandbox_dir do
-    release_path = Application.app_dir(:phoenix_elxir_beam, "priv/mcp_sandbox")
-
-    if File.dir?(release_path) do
-      release_path
-    else
-      Path.expand("priv/mcp_sandbox", File.cwd!())
-    end
-  end
-
-  defp venv_python do
-    candidates =
-      [".venv/bin/python", ".venv/bin/python3", ".venv/Scripts/python.exe"]
-      |> Enum.map(&Path.expand(&1, File.cwd!()))
-
-    case Enum.find(candidates, &File.exists?/1) do
-      nil -> :none
-      python -> {:ok, python}
-    end
-  end
-
-  # In a packaged release (e.g. the Docker image) the local-dev toolchains
-  # aren't present; tell the operator to set the override rather than showing a
-  # path that only makes sense on a dev machine.
-  defp preset_unavailable(preset, detail) do
-    if System.get_env("RELEASE_NAME") do
-      "the '#{preset}' demo server isn't available in this deployment — " <>
-        "set MCP_#{String.upcase(preset)}_CMD to a command that launches it (#{detail})"
-    else
-      detail
-    end
-  end
-
   defp generate_manual_session_id do
     "manual-" <> (:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower))
-  end
-
-  defp apply_event(socket, %{status: :session_start} = event) do
-    socket
-    |> assign(scenario: event.scenario, running: true)
-    |> stream(:events, [event], reset: true)
-    |> push_event("mcp_graph_reset", %{})
   end
 
   defp apply_event(socket, %{status: status} = event) when status in [:ok, :blocked] do
     socket = stream_insert(socket, :events, event, at: 0)
 
-    if event.server_id in ToolCatalog.servers() do
+    if event.server_id in graph_server_ids(socket.assigns.graph) do
       push_event(socket, "mcp_graph_event", %{
         server_id: event.server_id,
         tool_name: event.tool_name,
@@ -747,11 +500,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     stream_insert(socket, :events, event, at: 0)
   end
 
-  defp apply_event(socket, %{status: :session_complete} = event) do
-    socket
-    |> stream_insert(:events, event, at: 0)
-    |> assign(:running, false)
-  end
+  defp apply_event(socket, _event), do: socket
 
   defp format_time(%DateTime{} = ts) do
     Calendar.strftime(ts, "%H:%M:%S")
@@ -766,25 +515,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")
   end
 
-  defp status_label(:session_start), do: "started"
   defp status_label(:ok), do: "allowed"
   defp status_label(:blocked), do: "blocked"
   defp status_label(:held), do: "held"
-  defp status_label(:session_complete), do: "complete"
   defp status_label("ok"), do: "allowed"
   defp status_label("blocked"), do: "blocked"
   defp status_label("held"), do: "held"
-  defp status_label("session_start"), do: "started"
-  defp status_label("session_complete"), do: "complete"
   defp status_label(other), do: other
 
   defp console_status_class(status) when status in [:ok, "ok"], do: "text-success"
   defp console_status_class(status) when status in [:blocked, "blocked"], do: "text-error"
   defp console_status_class(status) when status in [:held, "held"], do: "text-warning"
-
-  defp console_status_class(status) when status in [:session_start, "session_start"],
-    do: "text-info"
-
   defp console_status_class(_), do: "text-base-content/50"
 
   defp sort_caret_class(sort_by, column) when sort_by == column, do: "text-primary"

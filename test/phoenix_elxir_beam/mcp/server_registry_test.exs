@@ -7,8 +7,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     name = :"server_registry_#{System.unique_integer([:positive])}"
     start_supervised!({ServerRegistry, name: name})
 
-    port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
-    base_url = "http://127.0.0.1:#{port}/mcp/servers/files"
+    base_url = PhoenixElxirBeam.MCPHTTPTestServer.start!()
 
     %{name: name, base_url: base_url}
   end
@@ -26,7 +25,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
              "read_secrets",
              "read_config",
              "export_all",
-             "stream_export"
+             "post_webhook"
            ]
 
     assert Enum.all?(server.tools, &(&1.tags == []))

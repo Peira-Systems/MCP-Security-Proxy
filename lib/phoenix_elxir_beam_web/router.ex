@@ -31,7 +31,6 @@ defmodule PhoenixElxirBeamWeb.Router do
     pipe_through :api
 
     post "/proxy/:server_id", ProxyController, :handle
-    post "/servers/:server_id", MockServerController, :handle
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
