@@ -1,20 +1,25 @@
 // Minimal out-of-process plugin (sidecar) used to test SidecarRunner /
 // Pipeline sidecar dispatch without a Python dependency. Speaks the
 // newline-delimited JSON-RPC 2.0 Plugin Protocol (docs/plugin-protocol.md).
+//
+// Covers two phases: `discovery` (scan tool descriptions, quarantine) and
+// `post_call` (scan tool responses, redact a hidden-instruction block).
 
 const MANIFEST = {
   protocolVersion: "0.1",
   plugin: { name: "test-sidecar-scanner", version: "0.1.0" },
   capabilities: {
     scanner: {
-      phases: ["discovery"],
-      dataNeeds: ["tool.description"],
+      phases: ["discovery", "post_call"],
+      dataNeeds: ["tool.description", "response.content"],
       timeoutMs: 1000,
       failMode: "fail_open",
       canBlock: true
     }
   }
 }
+
+const IMPORTANT_BLOCK = /<IMPORTANT>[\s\S]*?<\/IMPORTANT>/i
 
 function scanText(text) {
   return (text || "").includes("<IMPORTANT>")
@@ -43,6 +48,35 @@ function handle(msg) {
         }
       }
       return { findings, toolUpdates }
+    }
+    case "call/inspectResponse": {
+      const ctx = msg.params.context || {}
+      const content = (ctx.response && ctx.response.content) || []
+      const findings = []
+      const redactions = []
+      content.forEach((part, index) => {
+        const text = part && part.text
+        if (!scanText(text)) return
+        findings.push({
+          id: `f-sidecar-resp-${index}`,
+          type: "prompt_injection",
+          severity: "high",
+          title: `Suspicious phrase in ${(ctx.call && ctx.call.toolName) || "tool"} response`,
+          evidence: "<IMPORTANT>",
+          plugin: MANIFEST.plugin
+        })
+        if (IMPORTANT_BLOCK.test(text)) {
+          redactions.push({
+            path: `content[${index}].text`,
+            match: "/<IMPORTANT>[\\s\\S]*?<\\/IMPORTANT>/",
+            replacement: "‹hidden instruction removed by test-sidecar-scanner›"
+          })
+        }
+      })
+      if (findings.length === 0) return { verdict: "allow" }
+      const result = { verdict: "annotate", severity: "high", findings }
+      if (redactions.length > 0) result.mutations = { redactResponse: redactions }
+      return result
     }
     case "call/evaluate":
       return { verdict: "allow" }

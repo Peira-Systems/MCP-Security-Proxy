@@ -78,14 +78,17 @@ Sidecars: the **stdio** transport (§5.1) is built — `Plugin.SidecarRunner` (s
 codec, camelCase + string tags + `dataNeeds` filtering), `Manifest.from_wire/1`.
 `Plugin.Registry` starts one runner per `{:sidecar, _}` config entry in `handle_continue/2`
 and `Pipeline` dispatches to it on `entry.impl == {:sidecar, name}` through the same
-`timeout_ms` / `fail_mode` path as an in-process plugin. The reference
-`priv/plugins/prompt_injection_scanner.py` runs as a `discovery` scanner. A read-only
+`timeout_ms` / `fail_mode` path as an in-process plugin — for `discovery/inspect`,
+`call/evaluate` (`pre_call`), and `call/inspectResponse` (`post_call`). The reference
+`priv/plugins/prompt_injection_scanner.py` runs in **both** `discovery` (scan tool
+descriptions, quarantine) and `post_call` (scan tool responses, strip a hidden-instruction
+block via a `redactResponse` mutation before the agent sees it — the "the web page told the
+agent to exfiltrate" attack; `Demo.run_response_injection/0` drives it). A read-only
 **Plugins** panel on the dashboard lists every plugin and each sidecar's health.
 
 Not built yet: the **HTTP** sidecar transport (§5.2); `pre_call` scanner invocation
 (argument-inspecting logic ships as a `policy` — `TaintedArgGuard` — instead);
-`post_call` invocation of **sidecar** plugins (`call/inspectResponse` is wired in
-`Pipeline` but no sidecar declares `post_call` yet); real HMAC taint markers (substring
+real HMAC taint markers (substring
 match on the retained raw secret stands in); batched / remote audit sinks and a real
 `audit/record` notification; a dashboard UI for the plugin registry; circuit breaker and
 decision cache. On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after

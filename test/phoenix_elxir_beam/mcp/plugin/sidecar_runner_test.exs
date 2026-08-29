@@ -25,7 +25,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunnerTest do
     assert %Manifest{} = manifest = SidecarRunner.manifest(name)
     assert manifest.plugin.name == "test-sidecar-scanner"
     assert %{scanner: scanner} = manifest.capabilities
-    assert scanner.phases == [:discovery]
+    assert scanner.phases == [:discovery, :post_call]
     assert scanner.can_block == true
   end
 

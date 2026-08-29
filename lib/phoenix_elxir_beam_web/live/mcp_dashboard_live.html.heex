@@ -74,6 +74,15 @@
           Run bulk exfil
         </button>
         <button
+          id="run-response-injection-btn"
+          type="button"
+          phx-click="run_response_injection"
+          disabled={@running}
+          class="btn btn-outline btn-sm"
+        >
+          Run response injection
+        </button>
+        <button
           id="run-rug-pull-btn"
           type="button"
           phx-click="run_rug_pull_demo"

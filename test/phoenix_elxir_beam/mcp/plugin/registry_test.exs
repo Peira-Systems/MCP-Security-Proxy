@@ -103,6 +103,21 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert [%{name: "test-sidecar-scanner"}] = Registry.active_scanners(:discovery, reg)
   end
 
+  test "a sidecar declaring :post_call is exposed via active_post_call/1" do
+    node = System.find_executable("node") || raise "node not found on PATH"
+    sc_name = "sc-#{System.unique_integer([:positive])}"
+
+    reg =
+      start_registry([
+        {:sidecar, name: sc_name, transport: :stdio, cmd: node, args: [@sidecar_fixture]}
+      ])
+
+    assert [%{name: "test-sidecar-scanner", kind: :scanner, impl: {:sidecar, _}}] =
+             Registry.active_post_call(reg)
+
+    assert "response.content" in hd(Registry.active_post_call(reg)).data_needs
+  end
+
   test "a sidecar with a bad command is skipped; other plugins still register" do
     reg =
       start_registry([

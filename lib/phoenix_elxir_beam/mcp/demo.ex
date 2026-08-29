@@ -115,6 +115,24 @@ defmodule PhoenixElxirBeam.MCP.Demo do
   end
 
   @doc """
+  Response-injection simulation: fetch an external web page whose text
+  carries a hidden instruction block telling the agent to read secrets and
+  exfiltrate them. The out-of-process `prompt-injection-scanner` sidecar
+  runs in `post_call`, flags a `prompt_injection` finding, and strips the
+  block from the response before the agent ever sees it.
+  """
+  def run_response_injection do
+    start_task(:response_injection, [
+      {"net", jsonrpc("initialize", %{})},
+      {"net",
+       jsonrpc("tools/call", %{
+         "name" => "fetch_page",
+         "arguments" => %{"url" => "https://acme.example/about"}
+       })}
+    ])
+  end
+
+  @doc """
   Rug-pull demo: register the `files` mock as an external server (a clean
   handshake), then poison its `tools/list` and re-handshake. The re-handshake
   trips `PhoenixElxirBeam.MCP.Plugins.RugPull`, quarantining `read_secrets`.

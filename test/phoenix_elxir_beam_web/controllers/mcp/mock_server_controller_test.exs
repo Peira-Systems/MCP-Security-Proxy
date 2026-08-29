@@ -32,7 +32,7 @@ defmodule PhoenixElxirBeamWeb.MCP.MockServerControllerTest do
         })
 
       assert %{"result" => %{"tools" => tools}} = json_response(conn, 200)
-      assert Enum.map(tools, & &1["name"]) == ["check_status", "post_webhook"]
+      assert Enum.map(tools, & &1["name"]) == ["check_status", "fetch_page", "post_webhook"]
     end
   end
 
