@@ -17,6 +17,9 @@ defmodule PhoenixElxirBeam.MCP.Session do
   defstruct [
     :id,
     :server_id,
+    # `key_id` of the API key that opened the session — later requests on
+    # this session must present the same key.
+    :key_id,
     :agent_id,
     :client_info,
     :protocol_version,
@@ -33,6 +36,7 @@ defmodule PhoenixElxirBeam.MCP.Session do
   @type t :: %__MODULE__{
           id: String.t(),
           server_id: String.t(),
+          key_id: String.t() | nil,
           agent_id: String.t() | nil,
           client_info: map() | nil,
           protocol_version: String.t(),

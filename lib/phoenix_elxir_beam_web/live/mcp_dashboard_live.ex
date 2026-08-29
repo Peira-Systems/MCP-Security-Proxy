@@ -8,7 +8,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{EventLog, HoldRegistry, ServerRegistry, SessionStore}
+  alias PhoenixElxirBeam.MCP.{ApiKey, EventLog, HoldRegistry, ServerRegistry, SessionStore}
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
@@ -48,6 +48,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
       |> assign(:session_count, safe_session_count())
+      |> assign(:api_keys, safe_api_keys())
+      |> assign(:new_token, nil)
       |> assign(:pending_holds, safe_pending_holds())
       |> stream(:events, [])
 
@@ -277,6 +279,48 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, update(socket, :pending_holds, &Enum.reject(&1, fn h -> h.id == hold_id end))}
   end
 
+  def handle_event("issue_key", params, socket) do
+    principal = String.trim(params["principal"] || "")
+    agent_id = String.trim(params["agent_id"] || "")
+    all_servers = params["all_servers"] == "true"
+    server_ids = params |> Map.get("servers", %{}) |> Map.keys()
+
+    cond do
+      principal == "" or agent_id == "" ->
+        {:noreply, put_flash(socket, :error, "Principal and agent id are required")}
+
+      not all_servers and server_ids == [] ->
+        {:noreply, put_flash(socket, :error, "Grant at least one server, or check 'all servers'")}
+
+      true ->
+        case ApiKey.issue(%{
+               principal: principal,
+               agent_id: agent_id,
+               all_servers: all_servers,
+               granted_server_ids: server_ids
+             }) do
+          {:ok, _key, token} ->
+            {:noreply,
+             socket
+             |> assign(:api_keys, safe_api_keys())
+             |> assign(:new_token, token)
+             |> put_flash(:info, "Key issued — copy the token now, it won't be shown again")}
+
+          {:error, _cs} ->
+            {:noreply, put_flash(socket, :error, "Couldn't issue key")}
+        end
+    end
+  end
+
+  def handle_event("dismiss_token", _params, socket) do
+    {:noreply, assign(socket, :new_token, nil)}
+  end
+
+  def handle_event("revoke_key", %{"key_id" => key_id}, socket) do
+    ApiKey.revoke(key_id)
+    {:noreply, assign(socket, :api_keys, safe_api_keys())}
+  end
+
   @impl true
   def handle_info({:mcp_event, event}, socket) do
     {:noreply, apply_event(socket, event)}
@@ -299,7 +343,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply,
      socket
      |> assign(:plugins, plugin_rows())
-     |> assign(:session_count, safe_session_count())}
+     |> assign(:session_count, safe_session_count())
+     |> assign(:api_keys, safe_api_keys())}
   end
 
   def handle_info({:hold_pending, hold}, socket) do
@@ -409,6 +454,12 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     :exit, _ -> 0
   end
 
+  defp safe_api_keys do
+    ApiKey.list()
+  rescue
+    _ -> []
+  end
+
   defp held_ago(%DateTime{} = ts) do
     case DateTime.diff(DateTime.utc_now(), ts) do
       s when s < 1 -> "just now"
@@ -462,14 +513,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   # Runs a full one-shot MCP session against the proxy — handshake, the tool
-  # call, teardown — exactly as an external client would. The proxy mints the
-  # session id; we read it back off the initialize response.
+  # call, teardown — exactly as an external client would, authenticating with
+  # the internal dashboard key. The proxy mints the session id; we read it
+  # back off the initialize response.
   defp call_real_tool(server_id, tool_name, arguments) do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
     base = "http://127.0.0.1:#{port}/mcp/proxy/#{server_id}"
+    auth = [{"authorization", "Bearer #{ApiKey.dashboard_token()}"}]
 
     init =
       Req.post(base,
+        headers: auth,
         json: %{
           "jsonrpc" => "2.0",
           "id" => 1,
@@ -483,7 +537,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
     with {:ok, resp} <- init,
          [session_id | _] <- Req.Response.get_header(resp, "mcp-session-id") do
-      headers = [{"mcp-session-id", session_id}]
+      headers = [{"mcp-session-id", session_id} | auth]
 
       Req.post(base,
         json: %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},

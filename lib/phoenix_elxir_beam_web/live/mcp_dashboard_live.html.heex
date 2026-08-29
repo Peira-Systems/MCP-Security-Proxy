@@ -720,6 +720,95 @@
 
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Client keys</h2>
+        <span class="text-xs text-base-content/40">
+          {length(@api_keys)} — API keys downstream MCP clients authenticate with
+        </span>
+      </div>
+
+      <div
+        :if={@new_token}
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 bg-success/10 px-4 py-2.5 text-sm"
+      >
+        <span class="font-semibold text-success">New token (shown once):</span>
+        <code phx-no-curly-interpolation class="rounded bg-base-300 px-2 py-0.5 font-mono text-xs">
+          {@new_token}
+        </code>
+        <button type="button" phx-click="dismiss_token" class="btn btn-ghost btn-xs ml-auto">
+          dismiss
+        </button>
+      </div>
+
+      <.form
+        for={to_form(%{})}
+        id="issue-key-form"
+        phx-submit="issue_key"
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-2.5"
+      >
+        <input
+          type="text"
+          name="principal"
+          placeholder="Principal (e.g. acme-prod)"
+          class="input input-bordered input-sm w-44"
+        />
+        <input
+          type="text"
+          name="agent_id"
+          placeholder="agent://acme-prod"
+          class="input input-bordered input-sm w-44"
+        />
+        <label class="flex items-center gap-1 text-xs">
+          <input type="checkbox" name="all_servers" value="true" class="checkbox checkbox-xs" />
+          all servers
+        </label>
+        <label :for={s <- @real_servers} class="flex items-center gap-1 text-xs">
+          <input type="checkbox" name={"servers[#{s.id}]"} value="1" class="checkbox checkbox-xs" />
+          {s.name}
+        </label>
+        <button type="submit" class="btn btn-primary btn-sm">Issue key</button>
+      </.form>
+
+      <div :if={@api_keys == []} class="p-4 text-center text-sm text-base-content/50">
+        No client keys issued yet.
+      </div>
+
+      <div
+        :for={key <- @api_keys}
+        class="flex flex-wrap items-center gap-2 border-t border-base-300 px-4 py-2 text-sm first:border-t-0"
+      >
+        <span class="font-mono text-xs">{key.key_id}</span>
+        <span class="font-semibold">{key.principal}</span>
+        <span class="text-xs text-base-content/50">{key.agent_id}</span>
+        <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] text-base-content/60">
+          {if key.all_servers,
+            do: "all servers",
+            else: "#{length(key.granted_server_ids)} server(s)"}
+        </span>
+        <span
+          :if={key.disabled_at}
+          class="rounded-full bg-error/20 px-2 py-0.5 text-[10px] font-semibold text-error"
+        >
+          revoked
+        </span>
+        <span class="text-[10px] text-base-content/40">
+          {if key.last_used_at,
+            do: "last used #{format_datetime(key.last_used_at)}",
+            else: "never used"}
+        </span>
+        <button
+          :if={!key.disabled_at}
+          type="button"
+          phx-click="revoke_key"
+          phx-value-key_id={key.key_id}
+          class="btn btn-ghost btn-xs text-error ml-auto"
+        >
+          Revoke
+        </button>
+      </div>
+    </div>
+
+    <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Servers &amp; tools</h2>
         <span class="text-xs text-base-content/40">
           {length(@real_servers)} registered — real Streamable HTTP or stdio MCP servers, tools discovered live

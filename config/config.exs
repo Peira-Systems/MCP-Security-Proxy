@@ -11,6 +11,10 @@ config :phoenix_elxir_beam,
   ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# HTTP Basic auth for the dashboard + /dev tools. Overridden in
+# config/runtime.exs for prod (DASHBOARD_USER / DASHBOARD_PASSWORD).
+config :phoenix_elxir_beam, :dashboard_auth, username: "admin", password: "admin"
+
 # The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
 # per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
 # once. It is NOT set here: `Config` merges the keyword-shaped list by key, so

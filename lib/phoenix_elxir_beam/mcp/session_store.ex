@@ -38,7 +38,7 @@ defmodule PhoenixElxirBeam.MCP.SessionStore do
 
   @doc """
   Mints a session bound to `server_id`. `opts`: `:client_info`,
-  `:protocol_version` (already negotiated), `:agent_id`.
+  `:protocol_version` (already negotiated), `:agent_id`, `:key_id`.
   """
   @spec open(String.t(), keyword(), GenServer.server()) :: {:ok, Session.t()}
   def open(server_id, opts \\ [], store \\ __MODULE__) do
@@ -97,6 +97,7 @@ defmodule PhoenixElxirBeam.MCP.SessionStore do
     session = %Session{
       id: generate_id(),
       server_id: server_id,
+      key_id: opts[:key_id],
       agent_id: opts[:agent_id],
       client_info: opts[:client_info],
       protocol_version: opts[:protocol_version],

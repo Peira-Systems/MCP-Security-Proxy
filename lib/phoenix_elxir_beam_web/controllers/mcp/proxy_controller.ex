@@ -29,6 +29,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   use PhoenixElxirBeamWeb, :controller
 
   alias PhoenixElxirBeam.MCP.{
+    ApiKey,
     CallContext,
     HoldRegistry,
     HttpTransport,
@@ -48,6 +49,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
 
   @no_server_code -32001
   @no_session_code -32001
+  @forbidden_code -32001
   @chain_blocked_code -32001
   @response_withheld_code -32002
   @quarantined_code -32003
@@ -88,34 +90,55 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
-  # DELETE /mcp/proxy/:server_id — explicit session teardown.
+  # DELETE /mcp/proxy/:server_id — explicit session teardown. Only the key
+  # that opened the session may close it.
   def delete(conn, _params) do
-    conn |> session_id_header() |> maybe_close_session()
+    session_id = session_id_header(conn)
+
+    case SessionStore.fetch(session_id) do
+      {:ok, %Session{key_id: key_id}} when is_binary(key_id) ->
+        if key_id == conn.assigns.api_key.key_id, do: SessionStore.close(session_id)
+
+      _ ->
+        :ok
+    end
+
     send_resp(conn, 204, "")
   end
-
-  defp maybe_close_session(nil), do: :ok
-  defp maybe_close_session(session_id), do: SessionStore.close(session_id)
 
   # -- handshake ----------------------------------------------------------
 
   defp handle_initialize(conn, server_id, id, jsonrpc, rpc_params) do
-    case ServerRegistry.get_server(server_id) do
-      nil ->
+    key = conn.assigns.api_key
+
+    cond do
+      ServerRegistry.get_server(server_id) == nil ->
         json(conn, error(jsonrpc, id, @no_server_code, no_server_message(server_id)))
 
-      server ->
-        agent_id = conn |> get_req_header("mcp-agent-id") |> List.first()
+      not ApiKey.authorize?(key, server_id) ->
+        json(
+          conn,
+          error(
+            jsonrpc,
+            id,
+            @forbidden_code,
+            "key #{key.key_id} is not authorized for server '#{server_id}'"
+          )
+        )
+
+      true ->
+        server = ServerRegistry.get_server(server_id)
         protocol = negotiate_protocol(rpc_params["protocolVersion"])
 
         {:ok, session} =
           SessionStore.open(server_id,
             client_info: rpc_params["clientInfo"],
             protocol_version: protocol,
-            agent_id: agent_id
+            agent_id: key.agent_id,
+            key_id: key.key_id
           )
 
-        :ok = PolicyEngine.ensure_session(session.id, agent_id)
+        :ok = PolicyEngine.ensure_session(session.id, key.agent_id)
 
         result = %{
           "protocolVersion" => protocol,
@@ -170,8 +193,24 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       {:ok, %Session{server_id: bound}} when bound != server_id ->
         json(conn, error(jsonrpc, id, @no_session_code, "session is bound to a different server"))
 
+      {:ok, %Session{key_id: key_id}}
+      when key_id != nil and key_id != conn.assigns.api_key.key_id ->
+        json(conn, error(jsonrpc, id, @forbidden_code, "session belongs to a different key"))
+
       {:ok, %Session{} = session} ->
-        fun.(session)
+        if ApiKey.authorize?(conn.assigns.api_key, server_id) do
+          fun.(session)
+        else
+          json(
+            conn,
+            error(
+              jsonrpc,
+              id,
+              @forbidden_code,
+              "key is no longer authorized for server '#{server_id}'"
+            )
+          )
+        end
     end
   end
 

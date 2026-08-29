@@ -160,27 +160,33 @@ M1–M4 are written against the real shape once, not adapted twice.
   response to `-32002` mid-transfer; the buffer ceiling stops a flood before any verdict;
   the tool-chaining policy still fires across streamed calls.
 
-### M1.4 — Authentication & authorization
-- **Downstream client auth: signed API keys** (decided 2026-08-28). Ed25519 or HMAC-SHA256,
-  `key_id` + secret, presented as `Authorization: Bearer <key_id>.<secret>`; keys stored
-  hashed (Argon2/bcrypt) in Postgres, issued/revoked via the admin API + dashboard. mTLS
-  stays available as an opt-in in front of the app via a reverse-proxy compose service, not
-  built into Bandit. OAuth2/OIDC is out of scope. No unauthenticated path to
-  `POST /mcp/proxy/:server_id`.
-- **Agent identity:** replace the trusted `mcp-agent-id` header with a signed token (JWT or
-  PASETO) or a value derived from the client cert. Every `RuleEngine` / audit-attribution
-  path depends on this.
-- **Authorization:** a `principal → [server_id]` grant table — which authenticated caller
-  may reach which registered server.
-- **Dashboard + `/dev` routes:** move behind auth (session login + RBAC roles
-  `viewer` / `operator` / `admin`). `/dev` LiveDashboard = `admin` only.
-- **Files:** new `MCPWeb.Auth` plug pipeline, `MCP.ApiKey` + `MCP.Principal` schemas,
-  `MCP.AgentToken` verifier, router pipeline split (`:mcp_authed`, `:dashboard_authed`),
-  `RRBAC` on LiveView `on_mount`.
-- **Acceptance:** every proxy request without a valid key → `401`; a valid key for
-  principal A calling a server only granted to principal B → `403` + audit row; the
-  dashboard redirects anonymous users to login; agent id in audit rows is
-  cryptographically bound, not caller-asserted.
+### M1.4 — Authentication & authorization — **done** (`MCP.ApiKey`, `Plugs.ApiKeyAuth`)
+- **Downstream client auth: signed API keys.** `Authorization: Bearer mcpk_<id>.<secret>`;
+  only `sha256(secret)` stored (the secret is 256 bits of entropy — nothing to brute-force —
+  compared constant-time via `Plug.Crypto.secure_compare`). `Plugs.ApiKeyAuth` on the
+  `:mcp_api` pipeline: no unauthenticated path to `POST`/`DELETE /mcp/proxy/:server_id`
+  (`401` + `WWW-Authenticate: Bearer`). Issued/revoked from the dashboard "Client keys"
+  panel; `MCP.ApiKey.issue/1` is also callable from IEx / a release.
+- **Agent identity** is a property of the key (`agent_id`, required at issuance) — the
+  `mcp-agent-id` header is gone. Captured onto the session at `initialize`, threaded into
+  every `CallContext` / audit row.
+- **Authorization:** each key carries `all_servers` or an explicit `granted_server_ids`
+  list. Checked at `initialize` (`403`-equivalent JSON-RPC error) and re-checked on every
+  request in `with_session` (a mid-session revoke takes effect at once). A session is also
+  bound to its `key_id` — another key cannot drive it.
+- **Dashboard + `/dev`** sit behind HTTP Basic auth (`config :phoenix_elxir_beam,
+  :dashboard_auth`, from `DASHBOARD_USER` / `DASHBOARD_PASSWORD` in prod). **Full session
+  login + RBAC roles (`viewer`/`operator`/`admin`) deferred to M3.4** (runtime policy
+  management, which already owns operator-facing controls + change auditing).
+- **Files:** `MCP.ApiKey` (schema + context), `20260829160900_create_api_keys` migration,
+  `PhoenixElxirBeamWeb.Plugs.ApiKeyAuth`, router pipeline split (`:mcp_api`,
+  `:dashboard_auth`), `Session.key_id`, an internal boot-time `mcpk_dashboard` key for the
+  dashboard's manual "Call tool" flow, `test/support/mcp_proxy_helpers.ex`.
+- **Acceptance:** `api_key_test` + the auth/authz sections of `proxy_controller_test` —
+  no token / bogus token / revoked key → `401`; a key not granted the target server →
+  refused at `initialize`; a session used by a different key → refused; agent id in the
+  broadcast/audit event comes from the key, not a header. `curl` verified: dashboard +
+  `/dev` `401` without Basic auth, proxy `401` without a bearer, `/health` open.
 
 ### M1.5 — Transport hardening
 - TLS: terminate at the `app` container (Bandit `https` keyfile/certfile from

@@ -54,6 +54,17 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
+  # Dashboard / dev-tools Basic auth. Required in prod — no default.
+  dashboard_user = System.get_env("DASHBOARD_USER") || "admin"
+
+  dashboard_pass =
+    System.get_env("DASHBOARD_PASSWORD") ||
+      raise "environment variable DASHBOARD_PASSWORD is missing"
+
+  config :phoenix_elxir_beam, :dashboard_auth,
+    username: dashboard_user,
+    password: dashboard_pass
+
   database_path = System.get_env("DATABASE_PATH") || "/data/phoenix_elxir_beam.db"
 
   config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,

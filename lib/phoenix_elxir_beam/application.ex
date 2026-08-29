@@ -10,6 +10,13 @@ defmodule PhoenixElxirBeam.Application do
     children = [
       PhoenixElxirBeamWeb.Telemetry,
       PhoenixElxirBeam.Repo,
+      # One-shot: mint the internal key the dashboard's manual tool-call flow
+      # authenticates with. Transient so it doesn't restart after it exits.
+      %{
+        id: :dashboard_key_init,
+        start: {Task, :start_link, [&ensure_dashboard_key/0]},
+        restart: :transient
+      },
       {DNSCluster,
        query: Application.get_env(:phoenix_elxir_beam, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: PhoenixElxirBeam.PubSub},
@@ -47,5 +54,14 @@ defmodule PhoenixElxirBeam.Application do
   def config_change(changed, _new, removed) do
     PhoenixElxirBeamWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp ensure_dashboard_key do
+    PhoenixElxirBeam.MCP.ApiKey.ensure_dashboard_key()
+  rescue
+    error ->
+      require Logger
+      Logger.warning("dashboard key init skipped: #{Exception.message(error)}")
+      :ok
   end
 end
