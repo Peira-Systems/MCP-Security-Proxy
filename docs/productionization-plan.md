@@ -94,7 +94,7 @@ M1–M4 are written against the real shape once, not adapted twice.
 
 ## M1 — Real proxy
 
-### M1.1 — Downstream MCP session lifecycle
+### M1.1 — Downstream MCP session lifecycle — **done** (`MCP.Session`, `MCP.SessionStore`)
 - Handle `initialize` / `notifications/initialized` from the downstream client: protocol
   version check, capability negotiation, `serverInfo` passthrough from the upstream.
 - Issue proxy-owned `mcp-session-id` values; never trust the inbound header as identity.
@@ -109,6 +109,10 @@ M1–M4 are written against the real shape once, not adapted twice.
 - **Acceptance:** a real MCP client (e.g. MCP Inspector) completes `initialize` →
   `tools/list` → `tools/call` through the proxy; a `tools/call` with no prior handshake is
   refused; an idle session is GC'd and a later call on it fails closed.
+- **Deferred to M1.5:** per-client *upstream* sessions for `:http` servers — the proxy
+  still reuses the one upstream `mcp-session-id` captured at registration. `:stdio`
+  upstreams share their one process regardless. The downstream session abstraction is in
+  place; only the upstream leg is shared.
 
 ### M1.2 — Full method coverage
 - `resources/list`, `resources/read`, `resources/subscribe`: route through `discovery`
