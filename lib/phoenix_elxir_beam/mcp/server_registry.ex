@@ -415,7 +415,12 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
     {url, transport_headers} = HttpTransport.prepare(base_url)
     headers = transport_headers ++ headers
 
-    case Req.post(url, json: body, headers: headers, receive_timeout: 10_000) do
+    case Req.post(url,
+           json: body,
+           headers: headers,
+           receive_timeout: HttpTransport.receive_timeout(),
+           connect_options: HttpTransport.connect_options()
+         ) do
       {:ok, %Req.Response{status: status, body: %{"result" => result}} = resp}
       when status in 200..299 ->
         {:ok, result, resp}

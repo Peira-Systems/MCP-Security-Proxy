@@ -54,6 +54,42 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert json_response(conn, 401)
   end
 
+  # -- transport hardening (M1.5) -----------------------------------
+
+  test "an oversized request body is rejected with 413", %{sid: sid, token: token} do
+    big = String.duplicate("x", 1_200_000)
+
+    conn =
+      authed(token)
+      |> put_req_header("content-length", "1200000")
+      |> proxy_post(sid, rpc("initialize", %{"junk" => big}))
+
+    assert %{"error" => %{"message" => message}} = json_response(conn, 413)
+    assert message =~ "exceeds"
+  end
+
+  test "a principal over its rate limit gets 429 + Retry-After", %{sid: sid, token: token} do
+    prev = Application.get_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter)
+
+    Application.put_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
+      window_ms: 60_000,
+      max_per_window: 2
+    )
+
+    on_exit(fn ->
+      Application.put_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter, prev)
+    end)
+
+    for _ <- 1..2 do
+      authed(token) |> proxy_post(sid, rpc("ping", %{}))
+    end
+
+    conn = authed(token) |> proxy_post(sid, rpc("ping", %{}))
+    assert %{"error" => %{"message" => "rate limit exceeded"}} = json_response(conn, 429)
+    assert [retry] = get_resp_header(conn, "retry-after")
+    assert String.to_integer(retry) >= 1
+  end
+
   # -- authorization -------------------------------------------------
 
   test "initialize is refused for a server the key isn't granted", %{sid: sid} do

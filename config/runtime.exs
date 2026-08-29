@@ -104,13 +104,33 @@ if config_env() == :prod do
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      # Bind on all interfaces (IPv4 + IPv6).
+      ip: {0, 0, 0, 0, 0, 0, 0, 0},
+      port: String.to_integer(System.get_env("PORT", "4000")),
+      # Cap concurrent connections and header size (Bandit / Thousand Island
+      # defaults are already conservative; pinned here so hardening is visible
+      # in one place). The proxy body cap lives in Plugs.RequestLimits.
+      http_1_options: [max_header_length: 16_384],
+      thousand_island_options: [max_connections: 16_384]
     ],
     secret_key_base: secret_key_base
+
+  # TLS termination in the app container. The Docker Compose reference setup
+  # puts a reverse proxy (Caddy/nginx) in front for TLS instead; set these
+  # only when Bandit should terminate TLS directly.
+  case {System.get_env("SSL_CERT_PATH"), System.get_env("SSL_KEY_PATH")} do
+    {cert, key} when is_binary(cert) and is_binary(key) ->
+      config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
+        https: [
+          port: String.to_integer(System.get_env("SSL_PORT", "443")),
+          cipher_suite: :strong,
+          certfile: cert,
+          keyfile: key
+        ]
+
+    _ ->
+      :ok
+  end
 
   # ## SSL Support
   #

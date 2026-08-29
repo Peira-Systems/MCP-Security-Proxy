@@ -26,6 +26,24 @@ defmodule PhoenixElxirBeam.MCP.HttpTransport do
 
   @accept "application/json, text/event-stream"
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
+  @receive_timeout_ms 15_000
+
+  @doc "Default per-request receive timeout for an upstream MCP call."
+  def receive_timeout, do: @receive_timeout_ms
+
+  @doc """
+  Req `connect_options` for an upstream request. Req/Finch verify TLS against
+  the system CA store by default, so this returns `[]` normally;
+  `config :phoenix_elxir_beam, :upstream_tls_verify, false` disables
+  verification for a single self-signed dev server.
+  """
+  def connect_options do
+    if Application.get_env(:phoenix_elxir_beam, :upstream_tls_verify, true) do
+      []
+    else
+      [transport_opts: [verify: :verify_none]]
+    end
+  end
 
   @doc "Returns the `{url, headers}` to use for an MCP JSON-RPC POST to `base_url`."
   def prepare(base_url) do

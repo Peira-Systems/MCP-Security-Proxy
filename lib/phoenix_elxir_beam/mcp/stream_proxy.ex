@@ -24,7 +24,6 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   @default_max_buffer_bytes 8_000_000
   @default_deadline_ms 30_000
-  @receive_timeout_ms 15_000
 
   @type call_meta :: %{
           session_id: String.t() | nil,
@@ -81,7 +80,8 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     case Req.post(url,
            json: body,
            headers: transport_headers ++ session_headers,
-           receive_timeout: @receive_timeout_ms,
+           receive_timeout: HttpTransport.receive_timeout(),
+           connect_options: HttpTransport.connect_options(),
            into: into
          ) do
       {:ok, resp} ->

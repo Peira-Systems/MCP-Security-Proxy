@@ -14,10 +14,12 @@ defmodule PhoenixElxirBeamWeb.Router do
     plug :accepts, ["json"]
   end
 
-  # The proxy endpoint: no unauthenticated path (M1.4).
+  # The proxy endpoint: size-limited, authenticated, rate-limited (M1.4–M1.5).
   pipeline :mcp_api do
     plug :accepts, ["json"]
+    plug PhoenixElxirBeamWeb.Plugs.RequestLimits
     plug PhoenixElxirBeamWeb.Plugs.ApiKeyAuth
+    plug PhoenixElxirBeamWeb.Plugs.RateLimit
   end
 
   # The dashboard and dev tools sit behind HTTP Basic auth (credentials from

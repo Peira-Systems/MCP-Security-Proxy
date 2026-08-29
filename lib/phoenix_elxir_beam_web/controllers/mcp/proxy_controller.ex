@@ -552,7 +552,12 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     {url, transport_headers} = HttpTransport.prepare(server.base_url)
     headers = transport_headers ++ session_headers
 
-    case Req.post(url, json: body, headers: headers, receive_timeout: 15_000) do
+    case Req.post(url,
+           json: body,
+           headers: headers,
+           receive_timeout: HttpTransport.receive_timeout(),
+           connect_options: HttpTransport.connect_options()
+         ) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
       _ -> {:error, "upstream real server error"}
     end

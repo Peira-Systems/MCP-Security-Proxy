@@ -23,6 +23,7 @@ defmodule PhoenixElxirBeam.Application do
       # PolicyEngine reads the plugin registry's ETS table and runs the
       # pipeline on TaskSupervisor-spawned tasks, so both must precede it.
       {Task.Supervisor, name: PhoenixElxirBeam.MCP.TaskSupervisor},
+      PhoenixElxirBeam.MCP.RateLimiter,
       # Sidecar plugin subprocesses. Must precede the Plugin.Registry, which
       # starts one per {:sidecar, _} config entry. Generous restart limits so
       # a flaky sidecar doesn't take the supervisor (and its siblings) down.

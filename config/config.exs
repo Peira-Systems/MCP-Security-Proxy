@@ -15,6 +15,17 @@ config :phoenix_elxir_beam,
 # config/runtime.exs for prod (DASHBOARD_USER / DASHBOARD_PASSWORD).
 config :phoenix_elxir_beam, :dashboard_auth, username: "admin", password: "admin"
 
+# Proxy endpoint hardening (M1.5).
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
+  window_ms: 1_000,
+  max_per_window: 20
+
+config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Plugs.RequestLimits, max_body_bytes: 1_048_576
+
+# Verify TLS certificates when the proxy dials an upstream `:http` MCP server.
+# Set false only for a dev server with a self-signed cert.
+config :phoenix_elxir_beam, :upstream_tls_verify, true
+
 # The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
 # per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
 # once. It is NOT set here: `Config` merges the keyword-shaped list by key, so

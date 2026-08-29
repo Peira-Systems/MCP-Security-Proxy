@@ -188,23 +188,29 @@ M1–M4 are written against the real shape once, not adapted twice.
   broadcast/audit event comes from the key, not a header. `curl` verified: dashboard +
   `/dev` `401` without Basic auth, proxy `401` without a bearer, `/health` open.
 
-### M1.5 — Transport hardening
-- TLS: terminate at the `app` container (Bandit `https` keyfile/certfile from
-  `runtime.exs`) **or** document a reverse-proxy (Caddy/nginx) compose service doing it.
-  `force_ssl: [hsts: true]`.
-- Limits on the proxy endpoint: request body size, header count/size, max concurrent
-  connections, per-principal rate limit (distinct from `ResponseSizeGuard` / `BaselineGuard`
-  which police tool semantics, not HTTP).
-- Upstream `:http` / `:stdio` transports: connection pooling (Finch pool for `:http`),
-  retry policy with jitter, TLS cert verification **on** for upstream `:http`, per-server
-  connect/receive timeouts from `ServerRegistry` config.
-- **Files:** `Endpoint` plug additions, new `MCP.RateLimiter` (token bucket in ETS, or
-  `Hammer`), `HttpTransport` / `StdioServer` pool + retry config, `ServerRegistry` schema
-  gains `timeout_ms` / `tls_verify`.
-- **Acceptance:** a 100 MB request body is rejected before buffering; a principal over its
-  rate limit gets `429` + `Retry-After`; an upstream with a self-signed cert is refused
-  unless explicitly trusted in its registration; `nmap`/`testssl` against the endpoint
-  shows TLS-only + HSTS.
+### M1.5 — Transport hardening — **done** (`MCP.RateLimiter`, `Plugs.RequestLimits` / `RateLimit`)
+- **Proxy endpoint limits** — `Plugs.RequestLimits` rejects a body over `max_body_bytes`
+  (default 1 MiB) with `413` *before* it is buffered; `Plug.Parsers` has a 2 MB backstop;
+  `runtime.exs` pins Bandit `max_header_length` + Thousand Island `max_connections`.
+- **Per-principal rate limiting** — `MCP.RateLimiter`: fixed-window counter per
+  `{key_id, window}` in a `write_concurrency` ETS table via atomic `:ets.update_counter`,
+  swept periodically. `Plugs.RateLimit` (after `ApiKeyAuth`, keyed on the authenticated
+  `key_id`) → `429` + `Retry-After` over budget (config `window_ms` / `max_per_window`).
+- **Upstream `:http`** — TLS verification is on by default (Req/Finch against the system CA
+  store); `HttpTransport.connect_options/0` exposes a `config :upstream_tls_verify, false`
+  opt-out for one self-signed dev server, threaded through `discover` / `StreamProxy` /
+  `forward_to_upstream`. A single `receive_timeout` constant lives in `HttpTransport`.
+- **TLS termination** — `runtime.exs` gains an env-driven `https` listener
+  (`SSL_CERT_PATH` / `SSL_KEY_PATH`, `cipher_suite: :strong`); the reference Compose setup
+  puts a reverse proxy in front instead. `prod.exs` `force_ssl: [hsts: true, …]` with
+  `/health` and loopback excluded.
+- **Deferred:** per-server `timeout_ms` / `tls_verify` in the registration record (waits on
+  M2.2's durable `ServerRegistry`); retry-with-jitter (a POST retry can double-execute a
+  `tools/call` — needs per-method safety classification first); explicit Finch pool tuning
+  (Req's default pool is adequate at single-node scale).
+- **Acceptance:** `rate_limiter_test` + `proxy_controller_test` — a 1.2 MB body → `413`
+  before parsing; a key over a 2/window budget → `429` + `Retry-After ≥ 1`; separate keys
+  have separate budgets; a new window resets.
 
 ---
 
