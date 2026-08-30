@@ -37,6 +37,12 @@ cp .env.example .env    # then fill in SECRET_KEY_BASE, POSTGRES_PASSWORD, DASHB
 docker compose up -d    # the app runs migrations on start
 ```
 
+Health: `/health/live` (liveness, used by the container healthcheck) and
+`/health/ready` (Postgres + upstream reachability). Metrics: Prometheus text at
+`/metrics`. Add the observability stack with
+`docker compose -f docker-compose.yml -f compose.observability.yml up -d` — see
+[`docs/observability.md`](docs/observability.md).
+
 ## Stack
 
 Phoenix 1.8 · LiveView · Bandit · Ecto/Postgres. HTTP via `Req`.

@@ -65,6 +65,22 @@ if config_env() == :prod do
     username: dashboard_user,
     password: dashboard_pass
 
+  # Optional bearer token for GET /metrics (M3.2). Unset ⇒ the endpoint is
+  # open — only acceptable if it's unreachable from outside the scrape network.
+  case System.get_env("METRICS_TOKEN") do
+    token when is_binary(token) and token != "" ->
+      config :phoenix_elxir_beam, :metrics_token, token
+
+    _ ->
+      :ok
+  end
+
+  # Readiness (GET /health/ready) fails with 503 when a registered upstream is
+  # unreachable. Set READINESS_REQUIRE_UPSTREAMS=false to make upstream
+  # reachability advisory (DB-only readiness).
+  config :phoenix_elxir_beam, :readiness,
+    require_upstreams: System.get_env("READINESS_REQUIRE_UPSTREAMS", "true") != "false"
+
   # Off-DB audit-chain checkpoint (M2.3). Put the file on a volume separate
   # from Postgres. The key must be stable across deploys and NOT stored in
   # the database — a rotated key invalidates older checkpoints.

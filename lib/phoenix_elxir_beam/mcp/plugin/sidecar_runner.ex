@@ -230,12 +230,27 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
     failures = state.failures + 1
 
     if failures >= @circuit_threshold do
-      Logger.warning("SidecarRunner: #{failures} consecutive failures — circuit open")
+      name = sidecar_name(state)
+      Logger.warning("SidecarRunner: #{name} — #{failures} consecutive failures — circuit open")
+
+      # Alert only on the opening transition, not every further failure.
+      if is_nil(state.breaker_opened_at) do
+        PhoenixElxirBeam.MCP.Alerts.emit(
+          :sidecar_circuit_open,
+          :critical,
+          "sidecar plugin #{name} circuit breaker opened after #{failures} consecutive failures",
+          %{plugin: name}
+        )
+      end
+
       %{state | failures: failures, breaker_opened_at: System.monotonic_time(:millisecond)}
     else
       %{state | failures: failures}
     end
   end
+
+  defp sidecar_name(%{manifest: %Manifest{plugin: %{name: name}}}) when is_binary(name), do: name
+  defp sidecar_name(_), do: "unknown"
 
   defp breaker_open?(%{breaker_opened_at: nil}), do: false
 

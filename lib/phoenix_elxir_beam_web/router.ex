@@ -39,6 +39,12 @@ defmodule PhoenixElxirBeamWeb.Router do
     pipe_through :api
 
     get "/health", HealthController, :show
+    get "/health/live", HealthController, :live
+    get "/health/ready", HealthController, :ready
+
+    # Prometheus scrape endpoint (M3.2). Optionally gated by METRICS_TOKEN —
+    # otherwise unauthenticated; keep it on an internal network.
+    get "/metrics", MetricsController, :index
   end
 
   scope "/mcp", PhoenixElxirBeamWeb.MCP do

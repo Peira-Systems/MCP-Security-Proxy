@@ -24,7 +24,7 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding}
+  alias PhoenixElxirBeam.MCP.{Alerts, CallContext, Decision, Finding, Telemetry}
   alias PhoenixElxirBeam.MCP.Plugin.{Scanner, SidecarRunner, Wire}
 
   @task_supervisor PhoenixElxirBeam.MCP.TaskSupervisor
@@ -59,10 +59,17 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   @spec run(CallContext.phase(), CallContext.t(), [entry()]) ::
           {:allow | :deny | :hold, Decision.t(), [Finding.t()]}
   def run(phase, %CallContext{} = ctx, entries) when is_list(entries) do
-    entries
-    |> Enum.filter(&applies?(&1, phase, ctx))
-    |> Enum.sort_by(& &1.order)
-    |> evaluate_chain(phase, ctx, [])
+    Telemetry.span([:pipeline, :run], %{phase: phase}, fn ->
+      {verdict, decision, _findings} =
+        result =
+        entries
+        |> Enum.filter(&applies?(&1, phase, ctx))
+        |> Enum.sort_by(& &1.order)
+        |> evaluate_chain(phase, ctx, [])
+
+      Telemetry.decision(verdict, decision.deciding_plugin, phase)
+      {result, %{phase: phase, verdict: verdict}}
+    end)
   end
 
   @doc """
@@ -76,14 +83,16 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   @spec run_discovery(CallContext.t(), [entry()]) ::
           {:ok, [Finding.t()], [Scanner.tool_update()]}
   def run_discovery(%CallContext{phase: :discovery} = ctx, entries) when is_list(entries) do
-    {findings, updates} =
-      entries
-      |> Enum.filter(&(&1.enabled and &1.kind == :scanner and :discovery in &1.phases))
-      |> Enum.sort_by(& &1.order)
-      |> Enum.map(&invoke_discovery(&1, ctx))
-      |> Enum.reduce({[], []}, fn {fs, us}, {facc, uacc} -> {facc ++ fs, uacc ++ us} end)
+    Telemetry.span([:pipeline, :run], %{phase: :discovery}, fn ->
+      {findings, updates} =
+        entries
+        |> Enum.filter(&(&1.enabled and &1.kind == :scanner and :discovery in &1.phases))
+        |> Enum.sort_by(& &1.order)
+        |> Enum.map(&invoke_discovery(&1, ctx))
+        |> Enum.reduce({[], []}, fn {fs, us}, {facc, uacc} -> {facc ++ fs, uacc ++ us} end)
 
-    {:ok, findings, merge_tool_updates(updates)}
+      {{:ok, findings, merge_tool_updates(updates)}, %{phase: :discovery, verdict: :allow}}
+    end)
   end
 
   @doc """
@@ -102,22 +111,30 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   @spec run_post_call(CallContext.t(), [entry()]) ::
           {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
   def run_post_call(%CallContext{phase: :post_call} = ctx, entries) when is_list(entries) do
-    results =
-      entries
-      |> Enum.filter(&(&1.enabled and &1.kind in [:policy, :scanner] and :post_call in &1.phases))
-      |> Enum.sort_by(& &1.order)
-      |> Enum.map(&invoke_post_call(&1, ctx))
+    Telemetry.span([:pipeline, :run], %{phase: :post_call}, fn ->
+      results =
+        entries
+        |> Enum.filter(
+          &(&1.enabled and &1.kind in [:policy, :scanner] and :post_call in &1.phases)
+        )
+        |> Enum.sort_by(& &1.order)
+        |> Enum.map(&invoke_post_call(&1, ctx))
 
-    findings = Enum.flat_map(results, & &1.findings)
-    redactions = Enum.flat_map(results, & &1.redactions)
-    taint_sources = Enum.flat_map(results, & &1.taint_sources)
-    denial = Enum.find(results, &(&1.verdict == :deny))
+      findings = Enum.flat_map(results, & &1.findings)
+      redactions = Enum.flat_map(results, & &1.redactions)
+      taint_sources = Enum.flat_map(results, & &1.taint_sources)
+      denial = Enum.find(results, &(&1.verdict == :deny))
 
-    if denial do
-      {:deny, findings, redactions, taint_sources, denial.reason || "response withheld by policy"}
-    else
-      {:allow, findings, redactions, taint_sources, nil}
-    end
+      result =
+        if denial do
+          {:deny, findings, redactions, taint_sources,
+           denial.reason || "response withheld by policy"}
+        else
+          {:allow, findings, redactions, taint_sources, nil}
+        end
+
+      {result, %{phase: :post_call, verdict: elem(result, 0)}}
+    end)
   end
 
   @doc """
@@ -137,61 +154,82 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   @spec run_chunk(CallContext.t(), [entry()]) ::
           {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
   def run_chunk(%CallContext{phase: :chunk} = ctx, entries) when is_list(entries) do
-    results =
-      entries
-      |> Enum.filter(&(&1.enabled and &1.kind in [:policy, :scanner] and :chunk in &1.phases))
-      |> Enum.sort_by(& &1.order)
-      |> Enum.map(&invoke_post_call(&1, ctx, :chunk, "call/inspectChunk"))
+    Telemetry.span([:pipeline, :run], %{phase: :chunk}, fn ->
+      results =
+        entries
+        |> Enum.filter(&(&1.enabled and &1.kind in [:policy, :scanner] and :chunk in &1.phases))
+        |> Enum.sort_by(& &1.order)
+        |> Enum.map(&invoke_post_call(&1, ctx, :chunk, "call/inspectChunk"))
 
-    findings = Enum.flat_map(results, & &1.findings)
-    redactions = Enum.flat_map(results, & &1.redactions)
-    taint_sources = Enum.flat_map(results, & &1.taint_sources)
-    denial = Enum.find(results, &(&1.verdict == :deny))
+      findings = Enum.flat_map(results, & &1.findings)
+      redactions = Enum.flat_map(results, & &1.redactions)
+      taint_sources = Enum.flat_map(results, & &1.taint_sources)
+      denial = Enum.find(results, &(&1.verdict == :deny))
 
-    if denial do
-      {:deny, findings, redactions, taint_sources, denial.reason || "stream terminated by policy"}
-    else
-      {:allow, findings, redactions, taint_sources, nil}
-    end
+      result =
+        if denial do
+          {:deny, findings, redactions, taint_sources,
+           denial.reason || "stream terminated by policy"}
+        else
+          {:allow, findings, redactions, taint_sources, nil}
+        end
+
+      {result, %{phase: :chunk, verdict: elem(result, 0)}}
+    end)
   end
 
   defp invoke_post_call(entry, ctx, phase \\ :post_call, method \\ "call/inspectResponse") do
+    started = System.monotonic_time()
+
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn ->
         post_call_eval(entry, ctx, phase, method)
       end)
 
-    case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, findings}} when is_list(findings) ->
-        %{findings: findings, redactions: [], taint_sources: [], verdict: :allow, reason: nil}
+    {result, outcome} =
+      case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {:ok, findings}} when is_list(findings) ->
+          {%{findings: findings, redactions: [], taint_sources: [], verdict: :allow, reason: nil},
+           :ok}
 
-      {:ok, {:ok, findings, %Decision{} = d}} when is_list(findings) ->
-        %{
-          findings: findings,
-          redactions: redactions_of(d),
-          taint_sources: taint_sources_of(d),
-          verdict: post_call_verdict(d, entry),
-          reason: d.reason
-        }
+        {:ok, {:ok, findings, %Decision{} = d}} when is_list(findings) ->
+          {%{
+             findings: findings,
+             redactions: redactions_of(d),
+             taint_sources: taint_sources_of(d),
+             verdict: post_call_verdict(d, entry),
+             reason: d.reason
+           }, :ok}
 
-      {:ok, %Decision{} = d} ->
-        %{
-          findings: d.findings,
-          redactions: redactions_of(d),
-          taint_sources: taint_sources_of(d),
-          verdict: post_call_verdict(d, entry),
-          reason: d.reason
-        }
+        {:ok, %Decision{} = d} ->
+          {%{
+             findings: d.findings,
+             redactions: redactions_of(d),
+             taint_sources: taint_sources_of(d),
+             verdict: post_call_verdict(d, entry),
+             reason: d.reason
+           }, :ok}
 
-      {:ok, other} ->
-        post_call_fail(entry, "returned #{inspect(other)}")
+        {:ok, other} ->
+          {post_call_fail(entry, "returned #{inspect(other)}"), :bad_return}
 
-      {:exit, reason} ->
-        post_call_fail(entry, "crashed (#{inspect(reason)})")
+        {:exit, reason} ->
+          {post_call_fail(entry, "crashed (#{inspect(reason)})"), :crash}
 
-      nil ->
-        post_call_fail(entry, "timed out after #{entry.timeout_ms}ms")
-    end
+        nil ->
+          {post_call_fail(entry, "timed out after #{entry.timeout_ms}ms"), :timeout}
+      end
+
+    Telemetry.plugin_run(
+      entry.name,
+      entry.kind,
+      phase,
+      outcome,
+      result.verdict,
+      System.monotonic_time() - started
+    )
+
+    result
   end
 
   defp post_call_eval(%{impl: {:module, mod}, kind: :scanner} = entry, ctx, phase, _method) do
@@ -253,6 +291,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
         }
 
       :fail_open ->
+        Alerts.emit(
+          :plugin_fail_open,
+          :warning,
+          "post_call #{entry.kind} #{entry.name} #{detail} — response passed without its check",
+          %{plugin: entry.name}
+        )
+
         %{findings: [finding], redactions: [], taint_sources: [], verdict: :allow, reason: nil}
     end
   end
@@ -357,15 +402,29 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   end
 
   defp invoke(entry, phase, ctx) do
+    started = System.monotonic_time()
+
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn -> policy_evaluate(entry, phase, ctx) end)
 
-    case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, %Decision{} = decision} -> decision
-      {:ok, other} -> fail(entry, "returned #{inspect(other)}")
-      {:exit, reason} -> fail(entry, "crashed (#{inspect(reason)})")
-      nil -> fail(entry, "timed out after #{entry.timeout_ms}ms")
-    end
+    {decision, outcome} =
+      case Task.yield(task, entry.timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, %Decision{} = decision} -> {decision, :ok}
+        {:ok, other} -> {fail(entry, "returned #{inspect(other)}"), :bad_return}
+        {:exit, reason} -> {fail(entry, "crashed (#{inspect(reason)})"), :crash}
+        nil -> {fail(entry, "timed out after #{entry.timeout_ms}ms"), :timeout}
+      end
+
+    Telemetry.plugin_run(
+      entry.name,
+      entry.kind,
+      phase,
+      outcome,
+      decision.verdict,
+      System.monotonic_time() - started
+    )
+
+    decision
   end
 
   defp policy_evaluate(%{impl: {:module, mod}} = entry, phase, ctx) do
@@ -402,6 +461,13 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
         %{Decision.deny(:high, "policy plugin #{entry.name} unavailable") | findings: [finding]}
 
       :fail_open ->
+        Alerts.emit(
+          :plugin_fail_open,
+          :warning,
+          "policy plugin #{entry.name} #{detail} — call allowed without its check",
+          %{plugin: entry.name}
+        )
+
         %{Decision.allow() | verdict: :annotate, findings: [finding]}
     end
   end

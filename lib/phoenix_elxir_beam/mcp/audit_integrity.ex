@@ -119,6 +119,7 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrity do
   defp handle_result({:broken, detail}) do
     Logger.error("mcp.audit.integrity chain check FAILED: #{detail}")
     Phoenix.PubSub.broadcast(@pubsub, @topic, {:audit_integrity, :broken, detail})
+    PhoenixElxirBeam.MCP.Alerts.emit(:audit_integrity, :critical, detail)
   end
 
   defp handle_result({:skipped, _}), do: :ok

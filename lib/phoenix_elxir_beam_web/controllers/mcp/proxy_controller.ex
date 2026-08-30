@@ -42,7 +42,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     Session,
     SessionStore,
     StdioServer,
-    StreamProxy
+    StreamProxy,
+    Telemetry
   }
 
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
@@ -445,14 +446,26 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
         {:error, no_server_message(server_id)}
 
       %{transport: :http} = server ->
-        StreamProxy.run(server, body, meta)
+        measured_upstream(:http, fn -> StreamProxy.run(server, body, meta) end)
 
       %{transport: :stdio, pid: pid} ->
-        case StdioServer.request(pid, body) do
-          {:ok, resp_body} -> {:ok, resp_body, [], []}
-          {:error, _reason} -> {:error, "upstream real server error"}
-        end
+        measured_upstream(:stdio, fn ->
+          case StdioServer.request(pid, body) do
+            {:ok, resp_body} -> {:ok, resp_body, [], []}
+            {:error, _reason} -> {:error, "upstream real server error"}
+          end
+        end)
     end
+  end
+
+  # Wraps an upstream call in a `[:mcp, :upstream, :request]` telemetry span
+  # (latency + ok/error rate per transport) — see PhoenixElxirBeam.MCP.Telemetry.
+  defp measured_upstream(transport, fun) do
+    Telemetry.span([:upstream, :request], %{transport: transport}, fn ->
+      result = fun.()
+      outcome = if match?({:error, _}, result), do: :error, else: :ok
+      {result, %{transport: transport, outcome: outcome}}
+    end)
   end
 
   defp scan_response(
@@ -536,7 +549,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   defp upstream_request(server_id, body) do
     case ServerRegistry.get_server(server_id) do
       nil -> {:error, no_server_message(server_id)}
-      server -> forward_to_upstream(server, body)
+      server -> measured_upstream(server.transport, fn -> forward_to_upstream(server, body) end)
     end
   end
 

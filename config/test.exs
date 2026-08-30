@@ -57,6 +57,11 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   secret_key_base: "zeTuYfL8VcWlAQ7T/K6kG14U6cayBKJVm9zDPnfI2OKZoFE5GTH3vaZZjHAszdEi",
   server: true
 
+# The telemetry poller's upstream readiness probe makes outbound HTTP; keep it
+# out of the request path during tests (readiness is exercised directly via
+# MCP.Health / the health controller suite instead).
+config :phoenix_elxir_beam, :telemetry_probe_upstreams, false
+
 # In test we don't send emails
 config :phoenix_elxir_beam, PhoenixElxirBeam.Mailer, adapter: Swoosh.Adapters.Test
 

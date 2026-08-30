@@ -318,26 +318,31 @@ fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled 
   a pushed GHCR image; `docs/ci-cd.md` has the one-command rollback (`docker compose pull
   app && up -d app` on the prior tag).
 
-### M3.2 — Observability
-- Metrics exporter: `TelemetryMetricsPrometheus` (scrape endpoint) **or** an OTLP exporter,
-  fed from the existing `telemetry_metrics`. Series: per-phase pipeline latency
-  (p50/p99), verdict counts by plugin, plugin failure / circuit-breaker state, session
-  table size, hold-queue depth, upstream request latency + error rate.
-- Optional compose sidecars: `prometheus` + `grafana` + `loki` + `promtail`, or point at an
-  external stack. `StructuredLogSink` output shipped to Loki / a SIEM; document the JSON
-  schema.
-- Genuine OTLP `auditSink` (protocol §18 open item) only if the SIEM story needs spans over
-  log lines — otherwise `StructuredLogSink` + promtail is enough.
-- Readiness probe: checks Postgres + each registered upstream reachable. Liveness: separate,
-  process-only. Wire both into the compose healthcheck / an external monitor.
-- Alerting rules: circuit breaker opened, `verify_chain` failed, a `fail_open` plugin
-  actually fired open, session table growth rate, upstream unreachable.
-- **Files:** `MCPWeb.MetricsController` or OTLP exporter in `application.ex`,
-  `PhoenixElxirBeamWeb.Telemetry` new metrics, `compose.observability.yml` overlay,
-  `HealthController` split into `/health/live` + `/health/ready`, alert rules file.
-- **Acceptance:** `/metrics` scrapes clean; a Grafana dashboard shows per-phase latency
-  under load; killing an upstream flips `/health/ready` to `503` and fires an alert;
-  forcing a `verify_chain` failure fires an alert.
+### M3.2 — Observability — **done** (`MCP.Telemetry`, `MCP.Alerts`, `MCP.Health`, `docs/observability.md`)
+- Metrics: `telemetry_metrics_prometheus_core` reporter in `PhoenixElxirBeamWeb.Telemetry`,
+  scraped as Prometheus text at `GET /metrics` (`MetricsController`, optional `METRICS_TOKEN`
+  bearer). `MCP.Telemetry` defines the `[:mcp, ...]` event taxonomy; the pipeline emits
+  per-phase spans (`mcp_pipeline_run_stop_duration` by phase/verdict) + per-plugin spans
+  (`mcp_plugin_run_stop_duration` by plugin/phase/outcome ok|timeout|crash|bad_return);
+  the proxy controller emits `mcp_upstream_request_stop_duration` (transport/outcome);
+  `mcp_decision_count`, `mcp_alert_count`; poller gauges `mcp_sessions_count` /
+  `mcp_holds_pending` / `mcp_servers_{count,unreachable}`.
+- Health split: `GET /health/live` (process-only, compose healthcheck) + `GET /health/ready`
+  (`MCP.Health` — `SELECT 1` + concurrent upstream probe; 503 + JSON detail; upstream
+  strictness via `READINESS_REQUIRE_UPSTREAMS`). `/health` kept as a live alias.
+- Alerts: `MCP.Alerts.emit/3` — structured `mcp.alert` log line + `"mcp:alerts"` PubSub →
+  dashboard amber banner + `mcp_alert_count` counter. Keys: `audit_integrity` (wired from
+  M2.3), `plugin_fail_open`, `sidecar_circuit_open`, `upstream_unreachable` (probe
+  transition, deduped via `:persistent_term`). **No Alertmanager/webhook/email** — routing
+  is left to log consumers / the Prometheus rules (locked decision).
+- Compose: `compose.observability.yml` overlay (prometheus + grafana),
+  `deploy/prometheus/{prometheus.yml,alert.rules.yml}`, `deploy/grafana/provisioning/`.
+- **Deferred:** Grafana dashboard JSON not checked in; Loki/promtail overlay (structured
+  logs are SIEM-ready, shipping is deployment-specific); OTLP exporter (Prometheus chosen).
+- **Acceptance:** `metrics_controller_test` (`/metrics` renders the MCP series, token gate),
+  `health_controller_test` (live 200 always; ready 200, and 503 with per-upstream detail
+  when a stdio upstream is killed), `alerts_test`, `pipeline_telemetry_test` (phase +
+  per-plugin + decision events, `:timeout` outcome). Suite green at 271.
 
 ### M3.3 — Load & latency
 - Load-test the request path: p50/p99 added latency per phase, behaviour at N concurrent

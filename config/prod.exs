@@ -15,10 +15,13 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   force_ssl: [
     hsts: true,
     rewrite_on: [:x_forwarded_proto],
-    # `/health` is polled by the container / an external monitor over plain
-    # HTTP; every other request is redirected to HTTPS.
+    # `/health/*` is polled by the container / an external monitor and
+    # `/metrics` scraped by Prometheus, both over plain HTTP on an internal
+    # network; every other request is redirected to HTTPS.
     exclude: fn conn ->
-      conn.host in ["localhost", "127.0.0.1"] or conn.request_path == "/health"
+      conn.host in ["localhost", "127.0.0.1"] or
+        conn.request_path == "/metrics" or
+        String.starts_with?(conn.request_path, "/health")
     end
   ]
 

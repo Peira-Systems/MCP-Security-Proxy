@@ -34,6 +34,26 @@
     </div>
 
     <div
+      :if={@alerts != []}
+      class="rounded-box border border-warning/50 bg-warning/10 px-4 py-3 space-y-1"
+    >
+      <div class="text-sm font-semibold text-warning">
+        Operational alerts ({length(@alerts)})
+      </div>
+      <div :for={alert <- Enum.take(@alerts, 5)} class="text-xs text-base-content/70">
+        <span class={[
+          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+          alert.severity == :critical && "bg-error/20 text-error",
+          alert.severity == :warning && "bg-warning/20 text-warning"
+        ]}>
+          {alert.key}
+        </span>
+        {alert.detail}
+        <span class="text-base-content/40">· {Calendar.strftime(alert.at, "%H:%M:%S")}</span>
+      </div>
+    </div>
+
+    <div
       :for={hold <- @pending_holds}
       id={"hold-" <> hold.id}
       class="flex flex-wrap items-center gap-3 rounded-box border border-warning/50 bg-warning/10 px-4 py-3"

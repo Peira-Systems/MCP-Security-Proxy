@@ -20,6 +20,9 @@ defmodule PhoenixElxirBeam.Application do
       {DNSCluster,
        query: Application.get_env(:phoenix_elxir_beam, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: PhoenixElxirBeam.PubSub},
+      # Operational alert bus (M3.2) — structured log + dashboard banner +
+      # the [:mcp, :alert] telemetry counter. Fail-soft; start it early.
+      PhoenixElxirBeam.MCP.Alerts,
       # PolicyEngine reads the plugin registry's ETS table and runs the
       # pipeline on TaskSupervisor-spawned tasks, so both must precede it.
       {Task.Supervisor, name: PhoenixElxirBeam.MCP.TaskSupervisor},

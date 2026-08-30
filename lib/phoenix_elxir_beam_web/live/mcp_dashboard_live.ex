@@ -23,6 +23,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @servers_topic "mcp:servers"
   @holds_topic "mcp:holds"
   @audit_topic "mcp:audit"
+  @alerts_topic "mcp:alerts"
   @history_page_size 20
 
   @impl true
@@ -32,6 +33,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @audit_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @alerts_topic)
       # Sidecar plugin health drifts and MCP sessions come and go with no
       # broadcast; a light poll keeps the Plugins panel + session count current.
       :timer.send_interval(5_000, :refresh_plugins)
@@ -59,6 +61,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:plugins, plugin_rows())
       |> assign(:session_count, safe_session_count())
       |> assign(:integrity, safe_integrity())
+      |> assign(:alerts, safe_alerts())
       |> assign(:api_keys, safe_api_keys())
       |> assign(:new_token, nil)
       |> assign(:pending_holds, safe_pending_holds())
@@ -355,6 +358,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, :integrity, {:broken, detail})}
   end
 
+  def handle_info({:alert, alert}, socket) do
+    {:noreply, assign(socket, :alerts, Enum.take([alert | socket.assigns.alerts], 20))}
+  end
+
   def handle_info(:refresh_plugins, socket) do
     {:noreply,
      socket
@@ -487,6 +494,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     _ -> :unknown
   catch
     :exit, _ -> :unknown
+  end
+
+  defp safe_alerts do
+    PhoenixElxirBeam.MCP.Alerts.recent()
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
   end
 
   defp held_ago(%DateTime{} = ts) do

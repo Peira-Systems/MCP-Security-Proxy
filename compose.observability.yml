@@ -1,0 +1,45 @@
+# Observability overlay (M3.2). Adds Prometheus + Grafana alongside the base
+# stack. Use with:
+#
+#   docker compose -f docker-compose.yml -f compose.observability.yml up -d
+#
+# Prometheus scrapes the app at app:4000/metrics over the compose network.
+# Grafana is published on :3000 (default admin/admin — change GF_SECURITY_*).
+# Point an external Prometheus at the same endpoint instead if you already run
+# one. Alert routing (email/Slack/PagerDuty) is an Alertmanager concern and is
+# deliberately left out — see docs/observability.md.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:
