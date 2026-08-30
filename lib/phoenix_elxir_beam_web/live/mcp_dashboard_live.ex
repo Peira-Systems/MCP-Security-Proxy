@@ -8,12 +8,21 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
-  alias PhoenixElxirBeam.MCP.{ApiKey, EventLog, HoldRegistry, ServerRegistry, SessionStore}
+  alias PhoenixElxirBeam.MCP.{
+    ApiKey,
+    AuditIntegrity,
+    EventLog,
+    HoldRegistry,
+    ServerRegistry,
+    SessionStore
+  }
+
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
 
   @topic "mcp:events"
   @servers_topic "mcp:servers"
   @holds_topic "mcp:holds"
+  @audit_topic "mcp:audit"
   @history_page_size 20
 
   @impl true
@@ -22,6 +31,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @audit_topic)
       # Sidecar plugin health drifts and MCP sessions come and go with no
       # broadcast; a light poll keeps the Plugins panel + session count current.
       :timer.send_interval(5_000, :refresh_plugins)
@@ -48,6 +58,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
       |> assign(:session_count, safe_session_count())
+      |> assign(:integrity, safe_integrity())
       |> assign(:api_keys, safe_api_keys())
       |> assign(:new_token, nil)
       |> assign(:pending_holds, safe_pending_holds())
@@ -162,16 +173,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   def handle_event("verify_audit_chain", _params, socket) do
-    flash =
-      case EventLog.verify_chain() do
+    {level, msg, integrity} =
+      case AuditIntegrity.check_now() do
         :ok ->
-          {:info, "Audit chain intact — #{socket.assigns.history_result.total_count} event(s)"}
+          {:info, "Audit chain intact — #{socket.assigns.history_result.total_count} event(s)",
+           :ok}
 
-        {:error, %{event_id: event_id, occurred_at: at}} ->
-          {:error, "Audit chain BROKEN at event #{event_id} (#{format_datetime(at)})"}
+        {:broken, detail} ->
+          {:error, "Audit chain BROKEN: #{detail}", {:broken, detail}}
       end
 
-    {:noreply, put_flash(socket, elem(flash, 0), elem(flash, 1))}
+    {:noreply, socket |> assign(:integrity, integrity) |> put_flash(level, msg)}
   end
 
   def handle_event("history_paginate", %{"page" => page}, socket) do
@@ -339,6 +351,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
      |> assign(:server_options, EventLog.distinct_server_ids())}
   end
 
+  def handle_info({:audit_integrity, :broken, detail}, socket) do
+    {:noreply, assign(socket, :integrity, {:broken, detail})}
+  end
+
   def handle_info(:refresh_plugins, socket) do
     {:noreply,
      socket
@@ -458,6 +474,19 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     ApiKey.list()
   rescue
     _ -> []
+  end
+
+  # `:ok` | `{:broken, detail}` | `:unknown`
+  defp safe_integrity do
+    case AuditIntegrity.status() do
+      %{last_check: %{result: :ok}} -> :ok
+      %{last_check: %{result: {:broken, detail}}} -> {:broken, detail}
+      _ -> :unknown
+    end
+  rescue
+    _ -> :unknown
+  catch
+    :exit, _ -> :unknown
   end
 
   defp held_ago(%DateTime{} = ts) do

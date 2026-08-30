@@ -48,6 +48,39 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   end
 
   @doc """
+  The current chain head — `%{event_id, hash, count}` over the hashed rows,
+  or `nil` if there are none. Used by the off-DB checkpoint
+  (`PhoenixElxirBeam.MCP.AuditCheckpoint`) so a later truncation of the log
+  is detectable even when the shortened chain still verifies internally.
+  """
+  @spec head() :: %{event_id: String.t(), hash: String.t(), count: non_neg_integer()} | nil
+  def head do
+    row =
+      PolicyEvent
+      |> where([e], not is_nil(e.hash))
+      |> order_by(desc: :id)
+      |> limit(1)
+      |> Repo.one()
+
+    case row do
+      nil ->
+        nil
+
+      row ->
+        count =
+          PolicyEvent |> where([e], not is_nil(e.hash)) |> Repo.aggregate(:count, :id)
+
+        %{event_id: row.event_id, hash: row.hash, count: count}
+    end
+  end
+
+  @doc "Whether `hash` is the `hash` of some row still in the log."
+  @spec hash_present?(String.t()) :: boolean()
+  def hash_present?(hash) when is_binary(hash) do
+    PolicyEvent |> where([e], e.hash == ^hash) |> Repo.exists?()
+  end
+
+  @doc """
   Replays the log in insert order, recomputing each row's `hash` from the
   previous row's. Returns `:ok`, or `{:error, %{event_id:, occurred_at:}}`
   for the first row whose stored `prev_hash` / `hash` doesn't line up — i.e.

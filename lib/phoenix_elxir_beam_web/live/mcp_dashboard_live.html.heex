@@ -11,6 +11,26 @@
       <span class="text-sm text-base-content/50">
         {length(@real_servers)} server(s) · {@session_count} session(s) · {length(@plugins)} plugin(s)
       </span>
+
+      <span
+        :if={@integrity == :ok}
+        class="ml-auto inline-flex items-center gap-1.5 text-xs text-success"
+      >
+        <span class="size-2 rounded-full bg-success"></span> audit chain verified
+      </span>
+    </div>
+
+    <div
+      :if={match?({:broken, _}, @integrity)}
+      class="flex flex-wrap items-center gap-3 rounded-box border border-error bg-error/15 px-4 py-3"
+    >
+      <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-error/25 text-error">
+        ⚠
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-error">Audit chain integrity check FAILED</div>
+        <div class="text-xs text-base-content/70">{elem(@integrity, 1)}</div>
+      </div>
     </div>
 
     <div

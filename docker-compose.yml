@@ -31,11 +31,15 @@ services:
     environment:
       PORT: ${PORT:-4000}
       DATABASE_URL: postgres://${POSTGRES_USER:-mcp_proxy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_proxy}
+      # Off-DB audit-chain checkpoint — a volume separate from Postgres.
+      AUDIT_CHECKPOINT_PATH: /checkpoints/audit.log
       # Lets a registered `localhost` / `127.0.0.1` MCP server URL (e.g. the
       # JetBrains IDE plugin on the host) be reached from inside the container.
       MCP_HOST_LOOPBACK_ALIAS: host.docker.internal
     ports:
       - "${PORT:-4000}:${PORT:-4000}"
+    volumes:
+      - audit_checkpoints:/checkpoints
     # Makes `host.docker.internal` resolve to the host. Automatic on Docker
     # Desktop; declared here so it also works on plain Docker Engine / Linux.
     extra_hosts:
@@ -50,3 +54,4 @@ services:
 
 volumes:
   pg_data:
+  audit_checkpoints:

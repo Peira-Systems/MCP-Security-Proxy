@@ -32,6 +32,15 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
   ]
 
+# Audit checkpoint file per test partition, under the OS tmp dir.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+  key: "test-audit-checkpoint-key",
+  path:
+    Path.join(
+      System.tmp_dir!(),
+      "mcp_audit_checkpoints#{System.get_env("MIX_TEST_PARTITION")}.log"
+    )
+
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
   username: System.get_env("PGUSER", "postgres"),
   password: System.get_env("PGPASSWORD", "postgres"),

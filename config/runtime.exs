@@ -65,6 +65,15 @@ if config_env() == :prod do
     username: dashboard_user,
     password: dashboard_pass
 
+  # Off-DB audit-chain checkpoint (M2.3). Put the file on a volume separate
+  # from Postgres. The key must be stable across deploys and NOT stored in
+  # the database — a rotated key invalidates older checkpoints.
+  config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+    key:
+      System.get_env("AUDIT_CHECKPOINT_KEY") ||
+        raise("environment variable AUDIT_CHECKPOINT_KEY is missing"),
+    path: System.get_env("AUDIT_CHECKPOINT_PATH") || "/checkpoints/audit.log"
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise "environment variable DATABASE_URL is missing (postgres://user:pass@host/db)"

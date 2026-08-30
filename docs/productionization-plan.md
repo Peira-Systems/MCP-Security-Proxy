@@ -271,22 +271,27 @@ M1–M4 are written against the real shape once, not adapted twice.
 restart drops the client connection anyway; `HoldRegistry` persistence — a restart already
 fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled with its UI).
 
-### M2.3 — Audit durability & tamper-evidence
-- Audit records written to append-only storage in addition to Postgres: an external log
-  stream (M3.2 `StructuredLogSink` → shipper) **or** a WORM object-store sink. At minimum,
-  the hash chain is checkpointed: every N events or T minutes, write
-  `{last_hash, count, timestamp, signature}` to a separate volume / object store so a
-  Postgres compromise can't silently rewrite history.
-- `EventLog.verify_chain/0` runs on a schedule (`Oban` cron or a `GenServer` timer) with
-  alerting on failure — not just a dashboard button.
-- Retention / rotation / export policy: documented, and enforced by a scheduled job
-  (archive events older than X to cold storage, keep the chain contiguous).
-- **Files:** new `MCP.Plugins.CheckpointSink` (or extend `EventLogSink`),
-  `MCP.ChainVerifier` scheduled job, `MCP.AuditRetention` job, alert hook (M3.2).
-- **Acceptance:** tampering with a `policy_events` row in Postgres is caught by the next
-  scheduled `verify_chain` and raises an alert; a checkpoint file exists off the app DB and
-  matches the chain head; events past the retention window are archived, not deleted
-  in-place.
+### M2.3 — Audit durability & tamper-evidence — **done** (`MCP.AuditIntegrity`, `MCP.AuditCheckpoint`)
+- **Scheduled verification + alerting** — `MCP.AuditIntegrity` GenServer runs
+  `EventLog.verify_chain/0` every `interval_ms` (default 15 min) and compares the live head
+  against the newest checkpoint. On failure: a structured `mcp.audit.integrity` error line
+  (for the SIEM) + `{:audit_integrity, :broken, detail}` on the `"mcp:audit"` PubSub topic →
+  a red banner on the dashboard. `status/0` + `check_now/0` (the "verify audit chain" button
+  routes through this).
+- **Off-DB checkpoint anchoring** — `MCP.AuditCheckpoint` appends a signed
+  `{event_id, hash, count, verified_at, HMAC}` line to a file on a volume separate from
+  Postgres (`AUDIT_CHECKPOINT_KEY` / `AUDIT_CHECKPOINT_PATH`, a `checkpoints` compose
+  volume). Catches a **truncated** log that still verifies internally (count drop, or a
+  checkpointed head hash that is gone); a forged checkpoint fails the HMAC and is ignored.
+- New `EventLog.head/0` + `hash_present?/1`; `EventLog.record` chain semantics unchanged.
+- **Deferred:** retention / archival — deleting old rows breaks `verify_chain` from genesis,
+  so it needs an anchor-aware verifier (start from a signed retention anchor). Small
+  follow-up; the external log shipper (M3.2) covers long-term retention meanwhile.
+  `verify_chain` also still loads every row into memory — verify-from-checkpoint is the
+  scaling fix, same follow-up.
+- **Acceptance:** `audit_integrity_test` — a tampered row is caught, a truncated-but-valid
+  log is caught via the checkpoint, a forged checkpoint is ignored, `status` reports the last
+  result, a clean chain writes a fresh checkpoint.
 
 ---
 

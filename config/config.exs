@@ -26,6 +26,15 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Plugs.RequestLimits, max_body_by
 # Set false only for a dev server with a self-signed cert.
 config :phoenix_elxir_beam, :upstream_tls_verify, true
 
+# Off-DB anchoring of the audit hash chain (M2.3). In prod the key comes
+# from AUDIT_CHECKPOINT_KEY and the path should be on a volume separate from
+# Postgres (config/runtime.exs).
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+  key: "dev-audit-checkpoint-key-not-for-production",
+  path: "priv/audit_checkpoints.log"
+
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditIntegrity, interval_ms: 900_000
+
 # The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
 # per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
 # once. It is NOT set here: `Config` merges the keyword-shaped list by key, so

@@ -32,6 +32,8 @@ defmodule PhoenixElxirBeam.Application do
       PhoenixElxirBeam.MCP.Plugin.Registry,
       PhoenixElxirBeam.MCP.HoldRegistry,
       PhoenixElxirBeam.MCP.PolicyEngine,
+      # Scheduled audit-chain tamper-evidence check + off-DB checkpoints.
+      PhoenixElxirBeam.MCP.AuditIntegrity,
       # Owns the table of live downstream MCP sessions; teardown notifies
       # PolicyEngine, so it starts after it.
       PhoenixElxirBeam.MCP.SessionStore,

@@ -50,3 +50,6 @@ npm-debug.log
 # Local Python venv (e.g. for the prompt-injection sidecar plugin's deps).
 /.venv/
 
+# Local audit-chain checkpoint file (M2.3).
+/priv/audit_checkpoints.log
+
