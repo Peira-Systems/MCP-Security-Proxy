@@ -1,7 +1,12 @@
 defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   @moduledoc """
-  In-memory registry of real MCP servers registered at runtime from the
-  dashboard, over either of two real transports:
+  Registry of real MCP servers registered at runtime from the dashboard,
+  over either of two real transports. In-memory for the request path, with
+  every registration persisted to Postgres (`PhoenixElxirBeam.MCP.ServerStore`)
+  so a restart reloads them and re-handshakes — no hand re-registration
+  after a deploy.
+
+  Transports:
 
     * `:http` — Streamable HTTP against a base URL.
     * `:stdio` — a real MCP server process spawned locally, spoken to
@@ -24,8 +29,18 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   """
 
   use GenServer
+  require Logger
 
-  alias PhoenixElxirBeam.MCP.{CallContext, HttpTransport, Pipeline, StdioServer, ToolHash}
+  alias PhoenixElxirBeam.MCP.{
+    CallContext,
+    HttpTransport,
+    Pipeline,
+    ServerRegistration,
+    ServerStore,
+    StdioServer,
+    ToolHash
+  }
+
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @servers_topic "mcp:servers"
@@ -85,7 +100,33 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   # Server callbacks
 
   @impl true
-  def init(_), do: {:ok, %{servers: %{}}}
+  def init(_), do: {:ok, %{servers: %{}}, {:continue, :restore}}
+
+  @impl true
+  def handle_continue(:restore, state) do
+    servers =
+      for reg <- ServerStore.all(), reduce: %{} do
+        acc ->
+          case safe_restore(reg) do
+            {:ok, server} ->
+              Map.put(acc, server.id, server)
+
+            {:error, reason} ->
+              Logger.warning(
+                "ServerRegistry: could not restore #{reg.id} (#{reg.name}): #{inspect(reason)}"
+              )
+
+              acc
+          end
+      end
+
+    if map_size(servers) > 0 do
+      Logger.info("ServerRegistry: restored #{map_size(servers)} server(s) from Postgres")
+      broadcast_change()
+    end
+
+    {:noreply, %{state | servers: servers}}
+  end
 
   @impl true
   def handle_call({:register, name, base_url}, _from, state) do
@@ -132,6 +173,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
                   base_url: nil,
                   session_id: nil,
                   pid: pid,
+                  command: cmd,
+                  args: args,
                   command_label: command_label(cmd, args),
                   tools: discovered_tools(tools),
                   findings: [],
@@ -239,14 +282,107 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
         :ok
     end
 
+    ServerStore.delete(server_id)
     broadcast_change()
     {:reply, :ok, %{state | servers: Map.delete(state.servers, server_id)}}
   end
 
-  # Persists `server` and tells subscribed dashboards to refresh.
+  # Persists `server` to Postgres, caches it, and tells dashboards to refresh.
   defp put_and_broadcast(state, server) do
+    ServerStore.persist(server)
     broadcast_change()
     put_in(state.servers[server.id], server)
+  end
+
+  # -- restore-on-boot ------------------------------------------------
+
+  defp safe_restore(%ServerRegistration{} = reg) do
+    restore(reg)
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp restore(%ServerRegistration{transport: "http"} = reg) do
+    case discover(reg.base_url) do
+      {:ok, session_id, raw_tools} ->
+        conn = %{transport: :http, base_url: reg.base_url, session_id: session_id, pid: nil}
+        {:ok, rebuild(reg, conn, raw_tools)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp restore(%ServerRegistration{transport: "stdio"} = reg) do
+    with {:ok, pid} <-
+           DynamicSupervisor.start_child(
+             PhoenixElxirBeam.MCP.StdioServerSupervisor,
+             {StdioServer, cmd: reg.command, args: reg.args}
+           ),
+         {:ok, raw_tools} <- discover_stdio(pid) do
+      conn = %{
+        transport: :stdio,
+        base_url: nil,
+        session_id: nil,
+        pid: pid,
+        command: reg.command,
+        args: reg.args,
+        command_label: reg.command_label
+      }
+
+      {:ok, rebuild(reg, conn, raw_tools)}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Fresh tools from the live handshake, with the persisted operator/scanner
+  # overlay merged back by name and the discovery scanners re-run against the
+  # pinned hashes.
+  defp rebuild(%ServerRegistration{} = reg, conn, raw_tools) do
+    overlay = reg.tool_state || %{}
+    previous_hashes = Map.new(overlay, fn {name, ts} -> {name, ts["hash"]} end)
+
+    tools =
+      raw_tools
+      |> discovered_tools()
+      |> Enum.map(fn tool ->
+        case Map.get(overlay, tool.name) do
+          nil ->
+            tool
+
+          ts ->
+            %{
+              tool
+              | tags: restore_tags(ts["tags"]),
+                quarantined: ts["quarantined"] || false,
+                quarantine_reason: ts["quarantine_reason"]
+            }
+        end
+      end)
+
+    server =
+      Map.merge(conn, %{
+        id: reg.id,
+        name: reg.name,
+        tools: tools,
+        findings: [],
+        last_handshake_at: DateTime.utc_now()
+      })
+
+    apply_discovery(server, previous_hashes)
+  end
+
+  defp restore_tags(nil), do: []
+
+  defp restore_tags(tags) when is_list(tags), do: Enum.flat_map(tags, &safe_atom/1)
+
+  defp safe_atom(tag) do
+    [String.to_existing_atom(tag)]
+  rescue
+    ArgumentError -> []
   end
 
   defp broadcast_change do

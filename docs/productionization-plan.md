@@ -253,9 +253,19 @@ M1–M4 are written against the real shape once, not adapted twice.
   persisted row holds strings, never the raw secret; `drop_session` deletes the row; the
   sweep removes stale rows.
 
-**M2.2b — ServerRegistry → Postgres** (next)
-- Persist registration records + tool tags / hashes / quarantine. On boot: reload,
-  re-handshake `:http`, re-spawn `:stdio`.
+**M2.2b — ServerRegistry → Postgres — done** (`MCP.ServerStore`, `MCP.ServerRegistration`)
+- `server_registrations` table: identity + connection (`base_url`, or `command` / `args` for
+  stdio) + a per-tool `tool_state` overlay (`tags`, `quarantined`, `quarantine_reason`,
+  pinned `hash`). Fresh tool descriptions/schemas always come from the live handshake — only
+  the overlay is stored.
+- `put_and_broadcast` persists write-through; `remove_server` deletes. `ServerRegistry.init`
+  returns `{:continue, :restore}` → reload every record, re-handshake `:http` /
+  re-spawn `:stdio`, merge the overlay back by name, re-run the discovery scanners against
+  the pinned hashes. An unreachable server on boot is logged and skipped (record kept), not
+  fatal. All DB calls fail-soft.
+- **Acceptance:** `server_registry_durability_test` — an `:http` server + its operator tags,
+  and a re-spawned `:stdio` server + its quarantine, survive a registry restart;
+  `remove_server` deletes the row; an unreachable server on boot doesn't crash the registry.
 
 **Deferred:** `SessionStore` (the MCP-handshake session table) → Postgres — lower value, a
 restart drops the client connection anyway; `HoldRegistry` persistence — a restart already
