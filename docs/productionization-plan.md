@@ -233,24 +233,33 @@ M1–M4 are written against the real shape once, not adapted twice.
 - **Verified:** `PGPORT=5433 mix test` green (248) against a real Postgres 17; migrations
   create + apply clean.
 
-### M2.2 — Durable session / taint / baseline / registry state
-- Move `PolicyEngine` per-session state (`tags`, `taint` provenance, `call_log`,
-  `call_count`) out of GenServer memory into Postgres (write-through: GenServer keeps a
-  cache, Postgres is the source of truth). A `tools/call` decision **must** see this
-  session's own prior taint after a proxy restart.
-- `HoldRegistry`: parked calls persisted. On restart, a parked hold is either re-driven or
-  fails closed per its `on_timeout`. (Single-node, so "operator on node B" from the ADR
-  doesn't apply — but restart survival does.)
-- `ServerRegistry`: registered servers persisted in Postgres + optionally seeded from
-  config at boot. No more hand re-registration after every deploy. This replaces the
-  removed preset buttons (M0.3).
-- Plugin `Registry`: runtime enable/disable/reorder state persisted (feeds M3.4).
-- **Files:** `MCP.SessionStore` Postgres impl, `sessions` / `session_taint` /
-  `session_calls` tables, `MCP.Hold` schema, `MCP.Server` schema + `ServerRegistry` load
-  path, `MCP.PluginState` schema.
-- **Acceptance:** `docker compose restart app` mid-session → the next `tools/call` on that
-  session still sees prior taint and is blocked accordingly; a registered server survives a
-  restart; a parked hold survives a restart or resolves per `on_timeout`.
+### M2.2 — Durable session / taint / registry state
+
+**M2.2a — PolicyEngine session state → Postgres — done** (`MCP.PolicyStore`, `MCP.PolicySession`)
+- Write-through cache: `PolicyEngine` keeps its in-memory `sessions` map; `policy_sessions`
+  (session_id PK, `agent_id`, `tags`, `taint`, `call_count`) is the source of truth. A
+  `record_call` / `ensure_session` / `record_response_scan` for a session not in the cache
+  **rehydrates it from Postgres** before deciding; only a session unknown to both fails
+  closed. Persist is fail-soft (logged, not raised).
+- **Not persisted:** the 60 s `call_log` (ephemeral, `BaselineGuard` re-warms) and the raw
+  `secret` bytes on a taint source (stripped on write — `TaintedArgGuard`'s byte match
+  degrades to `TaintGuard`'s coarse check for a restart-recovered session until M4.1).
+- Consistency model: single-node, so "prior call on another node" is out of scope; the
+  requirement is **restart survival**, which the write-through cache gives. `PolicyEngine`
+  runs an hourly sweep of `policy_sessions` rows idle > 24 h (backstop for `SessionStore`'s
+  GC → `drop_session/2` → row delete).
+- **Acceptance:** `policy_engine_durability_test` — kill + restart the engine, then a
+  `tools/call` on a pre-restart session still sees its tag / taint and is blocked; the
+  persisted row holds strings, never the raw secret; `drop_session` deletes the row; the
+  sweep removes stale rows.
+
+**M2.2b — ServerRegistry → Postgres** (next)
+- Persist registration records + tool tags / hashes / quarantine. On boot: reload,
+  re-handshake `:http`, re-spawn `:stdio`.
+
+**Deferred:** `SessionStore` (the MCP-handshake session table) → Postgres — lower value, a
+restart drops the client connection anyway; `HoldRegistry` persistence — a restart already
+fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled with its UI).
 
 ### M2.3 — Audit durability & tamper-evidence
 - Audit records written to append-only storage in addition to Postgres: an external log
