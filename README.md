@@ -24,6 +24,10 @@ mix precommit                    # compile (warnings as errors) + format + test 
 Repo connection defaults to `postgres:postgres@localhost:5432`; override with
 `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE`.
 
+`mix ci` runs the full gate CI enforces (format check, warnings-as-errors,
+`deps.audit`, tests, dialyzer). See [`docs/ci-cd.md`](docs/ci-cd.md) for the
+pipelines, releases, and rollback.
+
 ## Deployment
 
 Single-node Docker Compose (`app` + `postgres`):

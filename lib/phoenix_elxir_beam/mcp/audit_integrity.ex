@@ -101,8 +101,9 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrity do
           :ok
       end
     else
+      # no checkpoint yet, or an empty log — nothing to verify against, so
+      # just (re)write the checkpoint from the current head.
       nil -> write_checkpoint()
-      _ -> write_checkpoint()
     end
   end
 

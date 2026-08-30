@@ -53,3 +53,6 @@ npm-debug.log
 # Local audit-chain checkpoint file (M2.3).
 /priv/audit_checkpoints.log
 
+# Dialyzer PLT files (rebuilt from deps; cached in CI).
+/priv/plts/
+

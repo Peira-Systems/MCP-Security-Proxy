@@ -297,15 +297,26 @@ fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled 
 
 ## M3 — Operable
 
-### M3.1 — CI/CD
-- CI pipeline (GitHub Actions or equivalent): `mix precommit` + `mix test` +
-  `mix deps.audit` + `mix dialyzer` + the `security-review` step on every PR touching
-  `lib/phoenix_elxir_beam/mcp/`.
-- Release automation: build + push the image on tag; `docker compose pull && up -d` with
-  the migration step; rollback = redeploy the previous image tag (document the exact
-  commands in the runbook, M4.4).
-- **Acceptance:** a red `mix test` blocks merge; a tagged commit produces a pushed image;
-  a documented one-command rollback restores the previous version.
+### M3.1 — CI/CD — **done** (`.github/workflows/`, `docs/ci-cd.md`)
+- `ci.yml`: on every PR + push to `main`/`master` — `deps.unlock --check-unused`,
+  `format --check-formatted`, `compile --warnings-as-errors`, `mix deps.audit`, `mix test`
+  (against a `postgres:17` service container), plus `mix dialyzer` in a parallel job. Deps +
+  `_build` + PLT are cached on `mix.lock`. Elixir/OTP pinned to the Dockerfile args.
+- `release.yml`: on a `v*` tag — `docker/build-push-action` builds the runtime image and
+  pushes it to `ghcr.io/<owner>/<repo>` (`:<version>`, `:<major>.<minor>`, `:latest`) with
+  GHA layer cache.
+- `security-review.yml`: PR touching `mcp/**` / `priv/plugins/**` / `config/**` →
+  `anthropics/claude-code-security-review`, posted as PR comments. Job is skipped unless an
+  `ANTHROPIC_API_KEY` repo secret exists (forks/clones stay green).
+- New deps `:mix_audit` + `:dialyxir` (`only: [:dev, :test], runtime: false`); `mix ci`
+  alias = the local equivalent of the gate; `dialyzer` config in `mix.exs` (PLT →
+  `priv/plts`, gitignored). Deploy + rollback commands documented in `docs/ci-cd.md`.
+- **Deferred:** branch-protection *enforcement* of the checks is a repo setting, not code;
+  auto-deploy onto the node (no server access from CI) — deploy stays a documented manual
+  `docker compose pull && up -d` on the host.
+- **Acceptance:** a red `mix test` / `dialyzer` fails the `CI` workflow; a `v*` tag produces
+  a pushed GHCR image; `docs/ci-cd.md` has the one-command rollback (`docker compose pull
+  app && up -d app` on the prior tag).
 
 ### M3.2 — Observability
 - Metrics exporter: `TelemetryMetricsPrometheus` (scrape endpoint) **or** an OTLP exporter,
