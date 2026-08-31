@@ -9,6 +9,7 @@
 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | every PR, push to `main`/`master` | `deps.unlock --check-unused`, `format --check-formatted`, `compile --warnings-as-errors`, `mix deps.audit`, `mix test` (against a `postgres:17` service), and `mix dialyzer` in a parallel job |
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | push of a `v*` tag | build the runtime image and push it to `ghcr.io/<owner>/<repo>` tagged `:<version>`, `:<major>.<minor>`, and `:latest` |
 | [`.github/workflows/security-review.yml`](../.github/workflows/security-review.yml) | PR touching `lib/phoenix_elxir_beam/mcp/**`, `priv/plugins/**`, `config/**` | Claude security review of the diff, posted as PR comments. Skipped unless an `ANTHROPIC_API_KEY` repo secret is set. |
+| [`.github/workflows/load.yml`](../.github/workflows/load.yml) | nightly (04:00 UTC) + manual | Runs `bench/load.exs` against a fresh Postgres, publishes latency numbers to the run summary. **Non-blocking** — fails only on a >1% error rate, not the latency budget. See [`docs/latency-budget.md`](latency-budget.md). |
 
 A red `mix test` or `mix dialyzer` blocks merge once branch protection requires
 the `CI` checks (Settings → Branches → require status checks: `compile · format ·

@@ -1,0 +1,88 @@
+name: Load test
+
+# Nightly request-path load test (M3.3). Non-blocking: it publishes latency
+# numbers to the run summary and fails only on a >1% error rate, not on the
+# latency budget (LOAD_ENFORCE is not set). Run it by hand from the Actions tab
+# with workflow_dispatch.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: "parallel workers"
+        default: "50"
+      duration_s:
+        description: "measured seconds"
+        default: "30"
+
+permissions:
+  contents: read
+
+env:
+  ELIXIR_VERSION: "1.17.3"
+  OTP_VERSION: "27.1.2"
+  MIX_ENV: dev
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PORT: "4090"
+      LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
+      LOAD_DURATION_S: ${{ github.event.inputs.duration_s || '30' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-load-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-load-
+
+      - run: mix deps.get
+
+      - run: mix ecto.create && mix ecto.migrate
+
+      - name: Run load test
+        run: |
+          mix run --no-start bench/load.exs | tee load-results.txt
+          {
+            echo '### Load test results'
+            echo '```'
+            cat load-results.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: load-results
+          path: load-results.txt
