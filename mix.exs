@@ -120,6 +120,7 @@ defmodule PhoenixElxirBeam.MixProject do
         "format --check-formatted",
         "compile --warnings-as-errors",
         "deps.audit",
+        "hex.audit",
         "test",
         "dialyzer"
       ]

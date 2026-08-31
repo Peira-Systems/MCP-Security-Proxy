@@ -229,14 +229,19 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     with {:ok, name} <- Keyword.fetch(opts, :name),
          cmd when is_binary(cmd) <- resolve_cmd(Keyword.get(opts, :cmd)),
          runner = Module.concat(SidecarRunner, name),
+         resolved_args = Enum.map(Keyword.get(opts, :args, []), &resolve_arg/1),
          {:ok, _pid} <-
            DynamicSupervisor.start_child(
              supervisor,
              {SidecarRunner,
               name: runner,
+              plugin_name: to_string(name),
               cmd: cmd,
-              args: Enum.map(Keyword.get(opts, :args, []), &resolve_arg/1),
-              config: Keyword.get(opts, :config, %{})}
+              cmd_string: to_string(Keyword.get(opts, :cmd)),
+              args: resolved_args,
+              config: Keyword.get(opts, :config, %{}),
+              pin: Keyword.get(opts, :pin),
+              limits: Keyword.get(opts, :limits)}
            ),
          %Manifest{} = manifest <- SidecarRunner.manifest(runner),
          kind when not is_nil(kind) <-

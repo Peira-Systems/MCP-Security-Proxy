@@ -54,9 +54,10 @@ FROM ${RUNNER_IMAGE} AS runner
 # python3 backs the in-tree prompt-injection sidecar plugin
 # (priv/plugins/prompt_injection_scanner.py), spawned over stdio by the
 # plugin Registry.
+# util-linux provides `prlimit` for the sidecar resource caps (M3.5).
 RUN apt-get update -y && \
     apt-get install -y libstdc++6 openssl libncurses6 locales ca-certificates curl \
-      python3 \
+      python3 util-linux \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen

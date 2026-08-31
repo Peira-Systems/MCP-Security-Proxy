@@ -20,7 +20,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
 
   require Logger
 
-  alias PhoenixElxirBeam.MCP.Plugin.Manifest
+  alias PhoenixElxirBeam.MCP.Alerts
+  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, Provenance}
 
   @circuit_threshold 5
   @circuit_cooldown_ms 30_000
@@ -70,8 +71,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
   def init(opts) do
     cmd = Keyword.fetch!(opts, :cmd)
     args = Keyword.get(opts, :args, [])
+    limits = Keyword.get(opts, :limits)
 
-    port = Port.open({:spawn_executable, cmd}, [:binary, :exit_status, args: args])
+    {exec, exec_args} = apply_resource_limits(cmd, args, limits)
+    port = Port.open({:spawn_executable, exec}, [:binary, :exit_status, args: exec_args])
 
     state = %{
       port: port,
@@ -82,14 +85,62 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
       config: Keyword.get(opts, :config, %{}),
       proxy: Keyword.get(opts, :proxy, %{name: "mcp-security-proxy", version: "0.1.0"}),
       failures: 0,
-      breaker_opened_at: nil
+      breaker_opened_at: nil,
+      # Provenance (M3.5): the plugin name, the configured command string, the
+      # resolved args, and the operator's pin — checked once the manifest is in.
+      prov: %{
+        name: Keyword.get(opts, :plugin_name, to_string(Keyword.fetch!(opts, :name))),
+        cmd: Keyword.get(opts, :cmd_string, cmd),
+        resolved_args: args,
+        pin: Keyword.get(opts, :pin)
+      }
     }
 
-    case handshake(state) do
-      {:ok, state} -> {:ok, state}
-      {:error, reason} -> {:stop, {:handshake_failed, reason}}
+    with {:ok, state} <- handshake(state),
+         :ok <- check_provenance(state) do
+      {:ok, state}
+    else
+      {:error, {:provenance, detail}} ->
+        Alerts.emit(:sidecar_provenance, :critical, detail, %{plugin: state.prov.name})
+        {:stop, {:provenance_mismatch, detail}}
+
+      {:error, reason} ->
+        {:stop, {:handshake_failed, reason}}
     end
   end
+
+  defp check_provenance(state) do
+    case Provenance.verify(state.prov, state.manifest) do
+      {:ok, _digests} -> :ok
+      {:error, detail} -> {:error, {:provenance, detail}}
+    end
+  end
+
+  # Wraps the sidecar command in `prlimit` (Linux) when `limits` is configured
+  # and `prlimit` is available — a best-effort address-space + CPU-time cap so a
+  # runaway sidecar is killed by the kernel, not just the supervisor. The
+  # production-grade option (a container per sidecar) is in docs/plugin-supply-chain.md.
+  defp apply_resource_limits(cmd, args, nil), do: {cmd, args}
+
+  defp apply_resource_limits(cmd, args, limits) do
+    case System.find_executable("prlimit") do
+      nil ->
+        Logger.warning("SidecarRunner: prlimit not found; #{inspect(limits)} not enforced")
+        {cmd, args}
+
+      prlimit ->
+        flags =
+          []
+          |> maybe_flag("--as", limits[:as_mb] && limits[:as_mb] * 1_048_576)
+          |> maybe_flag("--cpu", limits[:cpu_s])
+          |> maybe_flag("--nproc", limits[:nproc])
+
+        {prlimit, flags ++ ["--", cmd | args]}
+    end
+  end
+
+  defp maybe_flag(flags, _name, nil), do: flags
+  defp maybe_flag(flags, name, value), do: flags ++ ["#{name}=#{value}"]
 
   defp handshake(state) do
     send_line(state.port, %{

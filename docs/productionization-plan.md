@@ -422,18 +422,27 @@ secrets (not an external manager).
   log restores prior behaviour; no signing secret is readable in `docker inspect` /
   `.env` on the host.
 
-### M3.5 — Plugin supply chain
-- Manifest signing (protocol §18): verify sidecar plugin provenance (command + image hash +
-  manifest hash recorded at registration, re-verified on start — the mechanism exists for
-  MCP servers; extend it to sidecars).
-- Resource limits on sidecar subprocesses beyond supervisor restart caps: a container per
-  sidecar (compose service) with CPU/memory limits, or cgroup limits on the spawned
-  process.
-- Pin + audit in-process plugin dependencies (`mix deps.audit` in CI already; add a
-  lockfile review gate for `lib/phoenix_elxir_beam/mcp/plugins/`).
-- **Acceptance:** a sidecar whose binary hash changed since registration refuses to start +
-  alerts; a runaway sidecar is OOM-killed at its limit without affecting the app;
-  dependency audit is a CI gate.
+### M3.5 — Plugin supply chain — **done** (`MCP.Plugin.Provenance`, `docs/plugin-supply-chain.md`)
+- **Provenance pinning:** `Provenance.verify/2` computes a **code digest** (command string +
+  sha256 of each arg that resolves to a real file — the plugin script/binary, path-independent)
+  and a **manifest digest** (canonical JSON of the handshake `Manifest`). A sidecar spec's
+  `pin: [code:, manifest:]` is checked in `SidecarRunner.init` after handshake: mismatch →
+  `{:stop, {:provenance_mismatch, _}}` + a `:sidecar_provenance` **critical** alert, the
+  plugin stays down; unpinned → starts but `warning`-logs the computed digests. `prod.exs`
+  ships the prompt-injection sidecar pinned (`code:`).
+- **Resource limits:** `limits: [as_mb:, cpu_s:, nproc:]` on a sidecar spec wraps the command
+  in `prlimit` (util-linux, added to the Dockerfile runner) — kernel-enforced address-space /
+  CPU-time / process caps. Best-effort (no-op + `warning` where `prlimit` is absent).
+  Container-per-sidecar documented as the production-grade path for third-party sidecars.
+- **Dependency audit gate:** `ci.yml` runs `mix deps.audit` (advisories) + `mix hex.audit`
+  (retired packages) on every PR; both also in `mix ci`. Lockfile review expectation
+  documented.
+- **Deferred:** signing the release *image* hash itself (that's a registry/cosign concern,
+  not app code); a runtime "re-verify now" button (the check is startup-only — a running
+  sidecar's script can't change under it without a restart).
+- **Acceptance:** `plugin_provenance_test` — code digest is content-sensitive + stable,
+  manifest digest stable, matching pin starts / wrong pin refuses via `SidecarRunner` with
+  the alert; `mix hex.audit` + `mix deps.audit` green. Suite 294.
 
 ---
 

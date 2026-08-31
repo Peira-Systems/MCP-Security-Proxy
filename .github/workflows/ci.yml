@@ -67,8 +67,10 @@ jobs:
 
       - run: mix compile --warnings-as-errors
 
-      - name: Dependency vulnerability audit
-        run: mix deps.audit
+      - name: Dependency audit
+        run: |
+          mix deps.audit
+          mix hex.audit
 
       - run: mix test
 
