@@ -33,7 +33,7 @@ pipelines, releases, and rollback.
 Single-node Docker Compose (`app` + `postgres`):
 
 ```
-cp .env.example .env    # then fill in SECRET_KEY_BASE, POSTGRES_PASSWORD, DASHBOARD_PASSWORD
+cp .env.example .env    # then fill in SECRET_KEY_BASE, POSTGRES_PASSWORD, ADMIN_EMAIL/ADMIN_PASSWORD
 docker compose up -d    # the app runs migrations on start
 ```
 

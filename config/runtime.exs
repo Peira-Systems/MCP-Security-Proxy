@@ -54,16 +54,10 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
-  # Dashboard / dev-tools Basic auth. Required in prod — no default.
-  dashboard_user = System.get_env("DASHBOARD_USER") || "admin"
-
-  dashboard_pass =
-    System.get_env("DASHBOARD_PASSWORD") ||
-      raise "environment variable DASHBOARD_PASSWORD is missing"
-
-  config :phoenix_elxir_beam, :dashboard_auth,
-    username: dashboard_user,
-    password: dashboard_pass
+  # Operator console auth is session/RBAC based (M3.4). On first boot, when the
+  # `users` table is empty, an admin is seeded from ADMIN_EMAIL / ADMIN_PASSWORD
+  # (see PhoenixElxirBeam.Accounts.seed_admin/0). Set both on the first deploy,
+  # then manage further accounts from the dashboard.
 
   # Optional bearer token for GET /metrics (M3.2). Unset ⇒ the endpoint is
   # open — only acceptable if it's unreachable from outside the scrape network.

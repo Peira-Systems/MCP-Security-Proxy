@@ -1,0 +1,131 @@
+defmodule PhoenixElxirBeam.Accounts do
+  @moduledoc """
+  Operator accounts for the dashboard / policy-management console (M3.4).
+
+  Admin-issued only — there is no public registration. A first-run admin is
+  seeded from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (see `Accounts.seed_admin/0`,
+  called at boot). Session auth is handled by `PhoenixElxirBeamWeb.UserAuth`.
+  """
+  import Ecto.Query
+
+  alias PhoenixElxirBeam.Accounts.{User, UserToken}
+  alias PhoenixElxirBeam.Repo
+
+  require Logger
+
+  ## Lookup
+
+  def get_user!(id), do: Repo.get!(User, id)
+  def get_user(id), do: Repo.get(User, id)
+
+  def get_user_by_email(email) when is_binary(email) do
+    Repo.one(
+      from u in User, where: fragment("lower(?)", u.email) == ^String.downcase(String.trim(email))
+    )
+  end
+
+  def list_users, do: Repo.all(from u in User, order_by: [asc: u.email])
+
+  def count_users, do: Repo.aggregate(User, :count)
+
+  @doc "Returns the user if the email/password pair is valid and the account is enabled."
+  def get_user_by_email_and_password(email, password)
+      when is_binary(email) and is_binary(password) do
+    user = get_user_by_email(email)
+
+    cond do
+      user && not is_nil(user.disabled_at) -> nil
+      User.valid_password?(user, password) -> user
+      true -> nil
+    end
+  end
+
+  ## Mutation
+
+  @doc "Creates a user. `attrs` needs `:email`, `:password`, `:role`."
+  def create_user(attrs) do
+    %User{}
+    |> User.registration_changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def change_user_role(%User{} = user, role) do
+    user |> User.role_changeset(%{role: role}) |> Repo.update()
+  end
+
+  def set_user_password(%User{} = user, password) do
+    user |> User.password_changeset(%{password: password}) |> Repo.update()
+  end
+
+  def set_user_disabled(%User{} = user, disabled?) do
+    at = if disabled?, do: DateTime.utc_now(), else: nil
+
+    user
+    |> Ecto.Changeset.change(disabled_at: at)
+    |> Repo.update()
+    |> tap(fn
+      {:ok, u} -> if disabled?, do: delete_all_sessions(u)
+      _ -> :ok
+    end)
+  end
+
+  def delete_user(%User{} = user), do: Repo.delete(user)
+
+  ## Session tokens
+
+  def create_session_token(user) do
+    {token, struct} = UserToken.build_session_token(user)
+    Repo.insert!(struct)
+    token
+  end
+
+  def get_user_by_session_token(token) when is_binary(token) do
+    Repo.one(UserToken.verify_session_token_query(token))
+  end
+
+  def get_user_by_session_token(_), do: nil
+
+  def delete_session_token(token) do
+    Repo.delete_all(UserToken.by_token_and_context_query(token, "session"))
+    :ok
+  end
+
+  def delete_all_sessions(%User{} = user) do
+    Repo.delete_all(UserToken.by_user_and_contexts_query(user, :all))
+    :ok
+  end
+
+  ## Boot seed
+
+  @doc """
+  Seeds the first admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` when the `users`
+  table is empty. A no-op once any user exists. Fail-soft.
+  """
+  def seed_admin do
+    with 0 <- count_users(),
+         email when is_binary(email) <- System.get_env("ADMIN_EMAIL"),
+         password when is_binary(password) <- System.get_env("ADMIN_PASSWORD") do
+      case create_user(%{email: email, password: password, role: :admin}) do
+        {:ok, user} ->
+          Logger.info("Accounts: seeded initial admin #{user.email}")
+
+        {:error, changeset} ->
+          Logger.warning("Accounts: admin seed failed: #{inspect(changeset.errors)}")
+      end
+    else
+      _ -> :ok
+    end
+  rescue
+    error -> Logger.warning("Accounts: admin seed skipped: #{Exception.message(error)}")
+  end
+
+  ## Authorization
+
+  @doc "Whether `user` holds at least `required` (`:viewer < :operator < :admin`)."
+  def role_at_least?(%User{role: role}, required), do: rank(role) >= rank(required)
+  def role_at_least?(_, _), do: false
+
+  defp rank(:viewer), do: 0
+  defp rank(:operator), do: 1
+  defp rank(:admin), do: 2
+end

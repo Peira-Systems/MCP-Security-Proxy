@@ -1,6 +1,8 @@
 defmodule PhoenixElxirBeamWeb.Router do
   use PhoenixElxirBeamWeb, :router
 
+  import PhoenixElxirBeamWeb.UserAuth
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -8,10 +10,23 @@ defmodule PhoenixElxirBeamWeb.Router do
     plug :put_root_layout, html: {PhoenixElxirBeamWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :fetch_current_user
   end
 
   pipeline :api do
     plug :accepts, ["json"]
+  end
+
+  pipeline :require_authenticated do
+    plug :require_authenticated_user
+  end
+
+  pipeline :require_admin_role do
+    plug :require_admin
+  end
+
+  pipeline :redirect_if_authenticated do
+    plug :redirect_if_user_is_authenticated
   end
 
   # The proxy endpoint: size-limited, authenticated, rate-limited (M1.4–M1.5).
@@ -22,17 +37,32 @@ defmodule PhoenixElxirBeamWeb.Router do
     plug PhoenixElxirBeamWeb.Plugs.RateLimit
   end
 
-  # The dashboard and dev tools sit behind HTTP Basic auth (credentials from
-  # config, env-driven in prod). Full session login + RBAC is M3.4.
-  pipeline :dashboard_auth do
-    plug :dashboard_basic_auth
+  ## Login (M3.4 — replaces the M1.4 HTTP Basic auth)
+
+  scope "/", PhoenixElxirBeamWeb do
+    pipe_through [:browser, :redirect_if_authenticated]
+
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
   end
 
   scope "/", PhoenixElxirBeamWeb do
-    pipe_through [:browser, :dashboard_auth]
+    pipe_through :browser
 
-    live "/", MCPDashboardLive
-    live "/mcp/dashboard", MCPDashboardLive
+    delete "/logout", SessionController, :delete
+    get "/logout", SessionController, :delete
+  end
+
+  ## Operator console — requires an authenticated account
+
+  scope "/", PhoenixElxirBeamWeb do
+    pipe_through [:browser, :require_authenticated]
+
+    live_session :authenticated,
+      on_mount: [{PhoenixElxirBeamWeb.UserAuth, :ensure_authenticated}] do
+      live "/", MCPDashboardLive
+      live "/mcp/dashboard", MCPDashboardLive
+    end
   end
 
   scope "/", PhoenixElxirBeamWeb do
@@ -54,30 +84,15 @@ defmodule PhoenixElxirBeamWeb.Router do
     delete "/proxy/:server_id", ProxyController, :delete
   end
 
-  # LiveDashboard + Swoosh mailbox preview — dev only, and behind the same
-  # Basic auth as the app dashboard.
+  # LiveDashboard + Swoosh mailbox preview — dev only, admin-gated.
   if Application.compile_env(:phoenix_elxir_beam, :dev_routes) do
     import Phoenix.LiveDashboard.Router
 
     scope "/dev" do
-      pipe_through [:browser, :dashboard_auth]
+      pipe_through [:browser, :require_authenticated, :require_admin_role]
 
       live_dashboard "/dashboard", metrics: PhoenixElxirBeamWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
-    end
-  end
-
-  # Compares against `config :phoenix_elxir_beam, :dashboard_auth` — set from
-  # DASHBOARD_USER / DASHBOARD_PASSWORD in `config/runtime.exs` for prod.
-  defp dashboard_basic_auth(conn, _opts) do
-    case Application.get_env(:phoenix_elxir_beam, :dashboard_auth) do
-      [username: user, password: pass] when is_binary(user) and is_binary(pass) ->
-        Plug.BasicAuth.basic_auth(conn, username: user, password: pass)
-
-      _ ->
-        conn
-        |> Plug.Conn.send_resp(500, "dashboard auth is not configured")
-        |> Plug.Conn.halt()
     end
   end
 end

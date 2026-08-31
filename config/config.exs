@@ -11,10 +11,6 @@ config :phoenix_elxir_beam,
   ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
-# HTTP Basic auth for the dashboard + /dev tools. Overridden in
-# config/runtime.exs for prod (DASHBOARD_USER / DASHBOARD_PASSWORD).
-config :phoenix_elxir_beam, :dashboard_auth, username: "admin", password: "admin"
-
 # Proxy endpoint hardening (M1.5).
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
   window_ms: 1_000,

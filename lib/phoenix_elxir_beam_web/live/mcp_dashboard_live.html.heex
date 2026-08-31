@@ -18,6 +18,17 @@
       >
         <span class="size-2 rounded-full bg-success"></span> audit chain verified
       </span>
+
+      <span class={[
+        "inline-flex items-center gap-2 text-xs text-base-content/60",
+        @integrity != :ok && "ml-auto"
+      ]}>
+        {@current_user.email}
+        <span class="rounded-full bg-base-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+          {@current_user.role}
+        </span>
+        <.link href={~p"/logout"} method="delete" class="link link-hover">log out</.link>
+      </span>
     </div>
 
     <div

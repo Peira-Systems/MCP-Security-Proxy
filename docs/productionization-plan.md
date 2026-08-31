@@ -366,17 +366,42 @@ fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled 
   workflow publishes results; budget documented.
 
 ### M3.4 — Runtime policy management
-- Dashboard UI for the plugin `Registry` (protocol §18): enable / disable / reorder /
-  re-verify without redeploy — the GenServer already supports the ops, the panel is
-  read-only today. State persisted (M2.2).
-- Every policy change (plugin toggle, `RuleEngine` rule edit, tag assignment) is itself
-  audited into the same tamper-evident chain — who, when, old value, new value.
-- A change log with one-click rollback per change; approval flow optional for single-node.
-- Secrets: move from `.env` to a secrets manager or at least Docker secrets — no plaintext
-  `.env` with `SECRET_KEY_BASE` / API signing keys on the host.
-- **Files:** `MCPDashboardLive` plugin-admin panel + `operator` RBAC gate,
-  `MCP.PolicyChange` schema feeding an `auditSink`, `MCP.Plugins.RuleEngine` runtime rule
-  editing, `docker-compose.yml` secrets block.
+
+Decisions (2026-08-30): full session login + RBAC (not a Basic-auth role gate); **no**
+approval flow — apply immediately + audit + one-click rollback; secrets → Docker Compose
+secrets (not an external manager).
+
+**M3.4a — Operator accounts + RBAC — done** (`PhoenixElxirBeam.Accounts`, `UserAuth`)
+- `users` + `user_tokens` tables; `Accounts.User` (`viewer < operator < admin`, `pbkdf2`
+  hashed — pure Elixir, no NIF), `Accounts.UserToken` (opaque 32-byte session tokens,
+  30-day validity, deleted on logout / user-disable). `Accounts` context: create / role /
+  password / disable / delete, session-token round-trip, `role_at_least?/2`, `seed_admin/0`
+  (from `ADMIN_EMAIL` / `ADMIN_PASSWORD` when the table is empty, run as a boot Task).
+- `PhoenixElxirBeamWeb.UserAuth` — `fetch_current_user`, `require_authenticated_user`,
+  `require_admin` / `require_operator`, `redirect_if_user_is_authenticated`, `log_in_user` /
+  `log_out_user` (broadcasts `disconnect` to the LiveView socket), `on_mount` hooks.
+  `SessionController` + `SessionHTML` login page. Router: `/login` `/logout`, dashboard
+  behind `:require_authenticated` + `live_session` `:ensure_authenticated`, `/dev` behind
+  `:require_admin_role`. HTTP Basic auth (`:dashboard_auth`, `DASHBOARD_*`) removed; the
+  internal `mcpk_dashboard` API key (manual Call-tool flow) is unrelated and stays.
+- Dashboard header shows the signed-in email + role + a log-out link.
+- **Tests:** `accounts_test` (hashing, uniqueness, disable kills sessions, seed idempotence),
+  `user_auth_test` (login rejects bad creds, real login sets a token, anon → `/login`,
+  authed reaches the dashboard, logout clears the token, `require_admin` gate). Suite 284.
+
+**M3.4b — plugin registry runtime control + persistence — todo**
+- Dashboard panel: enable / disable / reorder / re-verify (`Plugin.Registry` already has
+  `enable`/`disable`/`reorder`), `operator`-gated. Persist toggle/order state to Postgres,
+  restore on boot.
+
+**M3.4c — policy-change auditing + rollback — todo**
+- `MCP.PolicyChange` (actor, at, kind, target, old → new) into the EventLog hash chain;
+  every mutating op routes through it. Change-log UI with per-change revert.
+
+**M3.4d — Docker Compose secrets — todo**
+- `SECRET_KEY_BASE` / `AUDIT_CHECKPOINT_KEY` / DB password → `secrets:` files at
+  `/run/secrets/*`, `runtime.exs` reads them with env fallback.
+
 - **Acceptance:** an operator disables a plugin from the dashboard and the next call
   reflects it, with an audit row naming the operator; reverting the change from the change
   log restores prior behaviour; no signing secret is readable in `docker inspect` /
