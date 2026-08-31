@@ -79,6 +79,11 @@ jobs:
       - name: Prod build compiles
         run: MIX_ENV=prod mix compile --warnings-as-errors
 
+      # Prompt-injection ruleset vs the labelled corpus (M4.3) — fails if recall
+      # or the false-positive rate falls outside budget. See docs/injection-detection.md.
+      - name: Injection ruleset score
+        run: python3 priv/plugins/score_injection.py
+
 
   dialyzer:
     name: dialyzer

@@ -490,12 +490,23 @@ secrets (not an external manager).
 - **Acceptance:** `unclassified_guard_test` (off allows, deny refuses untagged / allows
   tagged, hold parks), `tag_inference_test` (credential / egress / benign). Suite 309.
 
-### M4.3 — Scanner quality
-- The prompt-injection scanner is a demo-grade matcher. Decide the real approach:
-  maintained ruleset, ML classifier, or a dedicated service. Set a false-positive budget
-  and measure against a labelled corpus.
-- **Acceptance:** a documented detection approach with measured precision/recall on a test
-  corpus; the false-positive rate is within budget on a benign traffic sample.
+### M4.3 — Scanner quality — **done** (`injection_rules.json`, `score_injection.py`, `docs/injection-detection.md`)
+- **Approach: maintained regex ruleset** (decided 2026-08-31 — not ML / not an external
+  service; first-party, explainable, no image/network deps). `injection_rules.json` — ~24
+  labelled rules across `instruction_override` / `secrecy` / `exfiltration` /
+  `tool_poisoning`. `prompt_injection_scanner.py` rewritten to load it (ruleset path is
+  `argv[1]`, so it's inside the M3.5 pin — prod pin + args updated).
+- **Corpus + measurement:** `priv/plugins/corpus/injection_corpus.jsonl` (95 labelled
+  samples, 46 malicious / 49 benign — benign set has trigger-word near-misses).
+  `score_injection.py` measures recall / precision / FP rate, **budget** recall ≥ 0.85,
+  precision ≥ 0.90, FP ≤ 0.05 — gated in `ci.yml` (`python3 priv/plugins/score_injection.py`).
+  Current: 1.00 / 1.00 / 0.00 (corpus + rules co-authored — budget headroom is the real
+  margin; grow the corpus over time).
+- **Tests:** `prompt_injection_sidecar_test` runs the real Python sidecar over stdio
+  (discovery quarantine, post_call finding + `<important>` redaction, clean-response allow).
+  Suite 313.
+- **Deferred:** paraphrase / multilingual / heavy-obfuscation coverage (documented as a
+  limit feeding M4.4's threat model).
 
 ### M4.4 — Documentation
 - **Threat model:** what this proxy defends against and what it explicitly does not

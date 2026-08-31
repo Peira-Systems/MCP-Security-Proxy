@@ -71,19 +71,22 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.StructuredLogSink, []},
     {
       :sidecar,
-      # Provenance pin (M3.5) — the sidecar refuses to start if its script bytes
-      # change. Recompute after editing the script:
-      #   mix run --no-start -e 'IO.puts PhoenixElxirBeam.MCP.Plugin.Provenance.code_digest("python3", [Application.app_dir(:phoenix_elxir_beam, "priv/plugins/prompt_injection_scanner.py")])'
+      # Provenance pin (M3.5) — the sidecar refuses to start if its script or
+      # ruleset bytes change. Recompute both after editing either:
+      #   mix run --no-start -e 'p = &Application.app_dir(:phoenix_elxir_beam, "priv/plugins/#{&1}"); IO.puts PhoenixElxirBeam.MCP.Plugin.Provenance.code_digest("python3", [p.("prompt_injection_scanner.py"), p.("injection_rules.json")])'
       # Add a `manifest:` entry too from the boot log to also pin its capabilities.
-      # Best-effort kernel resource caps (Linux, needs `prlimit`). The
+      # `limits` = best-effort kernel resource caps (Linux, needs `prlimit`); the
       # production-grade option is a container per sidecar — docs/plugin-supply-chain.md.
       name: "prompt-injection-scanner",
       transport: :stdio,
       cmd: "python3",
-      args: [{:priv, "plugins/prompt_injection_scanner.py"}],
+      args: [
+        {:priv, "plugins/prompt_injection_scanner.py"},
+        {:priv, "plugins/injection_rules.json"}
+      ],
       config: %{},
       grants: %{block: true, mutate: [], network: false},
-      pin: [code: "sha256:7ed7daaa6898df3b4c6cce091d3737c0b6d2e63270463cef1b20634e24d5c66c"],
+      pin: [code: "sha256:105af98b8d84dd06cac2c73ae82275f8a1f314cea9da6ed0027bd384e77ccdde"],
       limits: [as_mb: 512, cpu_s: 30]
     }
   ]

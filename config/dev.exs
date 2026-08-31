@@ -52,7 +52,10 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
      name: "prompt-injection-scanner",
      transport: :stdio,
      cmd: "python",
-     args: [{:priv, "plugins/prompt_injection_scanner.py"}],
+     args: [
+       {:priv, "plugins/prompt_injection_scanner.py"},
+       {:priv, "plugins/injection_rules.json"}
+     ],
      config: %{},
      grants: %{block: true, mutate: [], network: false}}
   ]
