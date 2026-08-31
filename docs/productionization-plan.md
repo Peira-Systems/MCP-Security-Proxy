@@ -389,18 +389,33 @@ secrets (not an external manager).
   `user_auth_test` (login rejects bad creds, real login sets a token, anon → `/login`,
   authed reaches the dashboard, logout clears the token, `require_admin` gate). Suite 284.
 
-**M3.4b — plugin registry runtime control + persistence — todo**
-- Dashboard panel: enable / disable / reorder / re-verify (`Plugin.Registry` already has
-  `enable`/`disable`/`reorder`), `operator`-gated. Persist toggle/order state to Postgres,
-  restore on boot.
+**M3.4b — plugin registry runtime control + persistence — done**
+- `plugin_states` table + `Plugin.PluginState` + `Plugin.StateStore` (write-through, all
+  fail-soft). `Plugin.Registry` gained `persist?` (true only for the singleton): on boot
+  `handle_continue` overlays persisted `enabled` + `position` on the config defaults;
+  `set_enabled` / `reorder` write through. Dashboard Plugins panel gained `operator`-gated
+  enable/disable + ▲▼ reorder controls (`with_operator/2` gate; read-only banner for
+  viewers). Tests: `plugin_state_persistence_test`.
 
-**M3.4c — policy-change auditing + rollback — todo**
-- `MCP.PolicyChange` (actor, at, kind, target, old → new) into the EventLog hash chain;
-  every mutating op routes through it. Change-log UI with per-change revert.
+**M3.4c — policy-change auditing + rollback — done**
+- `MCP.PolicyChange.record/1` → routes through `PolicyEngine.record_policy_change/2` (a new
+  `:policy_change` Event status) so it lands on the same serial `EventLog` hash chain as
+  verdicts; stores `actor / kind / target / before → after` in the row's `decisions`.
+  Broadcasts `{:policy_change, _}` on `"mcp:policy"`. Every dashboard mutating op
+  (plugin toggle/reorder) records one. `PolicyChange.recent/1` + a "Policy changes"
+  dashboard panel with per-change **revert** (plugin_enabled / plugin_order). Tests:
+  `policy_change_test` (chain stays valid, broadcast, recent/summary).
 
-**M3.4d — Docker Compose secrets — todo**
-- `SECRET_KEY_BASE` / `AUDIT_CHECKPOINT_KEY` / DB password → `secrets:` files at
-  `/run/secrets/*`, `runtime.exs` reads them with env fallback.
+**M3.4d — Docker Compose secrets — done**
+- `SECRET_KEY_BASE` / `AUDIT_CHECKPOINT_KEY` / Postgres password are Docker secret files
+  (`secrets/*.txt`, gitignored) mounted at `/run/secrets/*`. `runtime.exs` `fetch_secret/1`
+  reads the file, falling back to the env var. `DATABASE_URL` is built from `POSTGRES_*` +
+  the password secret when unset. `docker-compose.yml` `secrets:` block; postgres uses
+  `POSTGRES_PASSWORD_FILE`. `.env.example` / README updated.
+- **Fixed in passing:** `config/prod.exs` `force_ssl: [exclude: fn …]` — Plug 1.20's
+  `Plug.SSL` requires `:exclude` to be a list, not a function; the prod build had not
+  compiled since the plug bump. Now `exclude: [hosts: […], paths: […]]`. Added a
+  `MIX_ENV=prod mix compile --warnings-as-errors` step to `ci.yml`.
 
 - **Acceptance:** an operator disables a plugin from the dashboard and the next call
   reflects it, with an audit row naming the operator; reverting the change from the change

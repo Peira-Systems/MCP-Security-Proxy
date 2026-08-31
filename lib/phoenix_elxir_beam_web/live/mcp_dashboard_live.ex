@@ -8,11 +8,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   use PhoenixElxirBeamWeb, :live_view
 
+  alias PhoenixElxirBeam.Accounts
+
   alias PhoenixElxirBeam.MCP.{
     ApiKey,
     AuditIntegrity,
     EventLog,
     HoldRegistry,
+    PolicyChange,
     ServerRegistry,
     SessionStore
   }
@@ -24,6 +27,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @holds_topic "mcp:holds"
   @audit_topic "mcp:audit"
   @alerts_topic "mcp:alerts"
+  @policy_topic "mcp:policy"
   @history_page_size 20
 
   @impl true
@@ -34,6 +38,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @audit_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @alerts_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @policy_topic)
       # Sidecar plugin health drifts and MCP sessions come and go with no
       # broadcast; a light poll keeps the Plugins panel + session count current.
       :timer.send_interval(5_000, :refresh_plugins)
@@ -59,6 +64,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
+      |> assign(:can_operate, Accounts.role_at_least?(socket.assigns.current_user, :operator))
+      |> assign(:policy_changes, PolicyChange.recent(15))
       |> assign(:session_count, safe_session_count())
       |> assign(:integrity, safe_integrity())
       |> assign(:alerts, safe_alerts())
@@ -187,6 +194,93 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       end
 
     {:noreply, socket |> assign(:integrity, integrity) |> put_flash(level, msg)}
+  end
+
+  def handle_event("toggle_plugin", %{"name" => name, "enabled" => enabled}, socket) do
+    with_operator(socket, fn user ->
+      want = enabled == "true"
+      current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+
+      if current && current.enabled != want do
+        result = if want, do: Registry.enable(name), else: Registry.disable(name)
+
+        if result == :ok do
+          PolicyChange.record(%{
+            kind: :plugin_enabled,
+            target: name,
+            actor: user.email,
+            before: current.enabled,
+            after: want
+          })
+        end
+      end
+
+      assign(socket, :plugins, plugin_rows())
+    end)
+  end
+
+  def handle_event("move_plugin", %{"name" => name, "dir" => dir}, socket)
+      when dir in ["up", "down"] do
+    with_operator(socket, fn user ->
+      names = Enum.map(socket.assigns.plugins, & &1.name)
+      idx = Enum.find_index(names, &(&1 == name))
+      swap = if dir == "up", do: idx && idx - 1, else: idx && idx + 1
+
+      if idx && swap && swap >= 0 && swap < length(names) do
+        reordered = names |> List.delete_at(idx) |> List.insert_at(swap, name)
+        :ok = Registry.reorder(reordered)
+
+        PolicyChange.record(%{
+          kind: :plugin_order,
+          target: name,
+          actor: user.email,
+          before: names,
+          after: reordered
+        })
+      end
+
+      assign(socket, :plugins, plugin_rows())
+    end)
+  end
+
+  def handle_event("revert_policy_change", %{"event_id" => event_id}, socket) do
+    with_operator(socket, fn user ->
+      case Enum.find(socket.assigns.policy_changes, &(&1.event_id == event_id)) do
+        %{kind: "plugin_enabled", target: name, before: before} ->
+          want = before in [true, "true"]
+          if want, do: Registry.enable(name), else: Registry.disable(name)
+
+          PolicyChange.record(%{
+            kind: :plugin_enabled,
+            target: name,
+            actor: user.email,
+            before: not want,
+            after: want,
+            summary:
+              "#{user.email} reverted #{event_id}: plugin #{name} " <>
+                "#{if want, do: "enabled", else: "disabled"}"
+          })
+
+          assign(socket, :plugins, plugin_rows())
+
+        %{kind: "plugin_order", before: before} when is_list(before) ->
+          :ok = Registry.reorder(before)
+
+          PolicyChange.record(%{
+            kind: :plugin_order,
+            target: "pipeline",
+            actor: user.email,
+            before: Enum.map(socket.assigns.plugins, & &1.name),
+            after: before,
+            summary: "#{user.email} reverted #{event_id}: pipeline order restored"
+          })
+
+          assign(socket, :plugins, plugin_rows())
+
+        _ ->
+          put_flash(socket, :error, "That change can't be reverted from here.")
+      end
+    end)
   end
 
   def handle_event("history_paginate", %{"page" => page}, socket) do
@@ -362,6 +456,13 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, assign(socket, :alerts, Enum.take([alert | socket.assigns.alerts], 20))}
   end
 
+  def handle_info({:policy_change, _change}, socket) do
+    {:noreply,
+     socket
+     |> assign(:policy_changes, PolicyChange.recent(15))
+     |> assign(:plugins, plugin_rows())}
+  end
+
   def handle_info(:refresh_plugins, socket) do
     {:noreply,
      socket
@@ -494,6 +595,18 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     _ -> :unknown
   catch
     :exit, _ -> :unknown
+  end
+
+  # Runs `fun.(user)` only when the current user is at least an operator;
+  # otherwise flashes and returns the socket unchanged. `fun` returns a socket.
+  defp with_operator(socket, fun) do
+    user = socket.assigns.current_user
+
+    if user && Accounts.role_at_least?(user, :operator) do
+      {:noreply, fun.(user)}
+    else
+      {:noreply, put_flash(socket, :error, "That action requires the operator role.")}
+    end
   end
 
   defp safe_alerts do

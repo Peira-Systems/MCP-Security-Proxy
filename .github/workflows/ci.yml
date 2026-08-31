@@ -72,6 +72,12 @@ jobs:
 
       - run: mix test
 
+      # Catch prod-only config / compile breakage (runtime.exs, prod.exs,
+      # force_ssl, releases) that MIX_ENV=test never exercises.
+      - name: Prod build compiles
+        run: MIX_ENV=prod mix compile --warnings-as-errors
+
+
   dialyzer:
     name: dialyzer
     runs-on: ubuntu-latest

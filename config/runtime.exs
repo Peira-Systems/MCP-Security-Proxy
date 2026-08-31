@@ -54,6 +54,18 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
+  # Secrets are read from a Docker secret file at /run/secrets/<lower_name>
+  # when present (M3.4d — nothing sensitive in `docker inspect` / the host
+  # `.env`), falling back to the env var of the same name otherwise.
+  fetch_secret = fn name ->
+    path = "/run/secrets/" <> String.downcase(name)
+
+    case File.read(path) do
+      {:ok, contents} -> String.trim(contents)
+      _ -> System.get_env(name)
+    end
+  end
+
   # Operator console auth is session/RBAC based (M3.4). On first boot, when the
   # `users` table is empty, an admin is seeded from ADMIN_EMAIL / ADMIN_PASSWORD
   # (see PhoenixElxirBeam.Accounts.seed_admin/0). Set both on the first deploy,
@@ -80,13 +92,24 @@ if config_env() == :prod do
   # the database — a rotated key invalidates older checkpoints.
   config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
     key:
-      System.get_env("AUDIT_CHECKPOINT_KEY") ||
-        raise("environment variable AUDIT_CHECKPOINT_KEY is missing"),
+      fetch_secret.("AUDIT_CHECKPOINT_KEY") ||
+        raise("AUDIT_CHECKPOINT_KEY is missing (env var or /run/secrets/audit_checkpoint_key)"),
     path: System.get_env("AUDIT_CHECKPOINT_PATH") || "/checkpoints/audit.log"
 
+  # DATABASE_URL wins if set; otherwise build it from POSTGRES_* + the
+  # postgres_password secret (the compose default).
   database_url =
     System.get_env("DATABASE_URL") ||
-      raise "environment variable DATABASE_URL is missing (postgres://user:pass@host/db)"
+      (
+        pw =
+          fetch_secret.("POSTGRES_PASSWORD") ||
+            raise "no DATABASE_URL and no POSTGRES_PASSWORD (env var or /run/secrets/postgres_password)"
+
+        user = System.get_env("POSTGRES_USER", "mcp_proxy")
+        db = System.get_env("POSTGRES_DB", "mcp_proxy")
+        pg_host = System.get_env("POSTGRES_HOST", "postgres")
+        "postgres://#{user}:#{pw}@#{pg_host}:5432/#{db}"
+      )
 
   config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
     url: database_url,
@@ -104,14 +127,14 @@ if config_env() == :prod do
   # to check this value into version control, so we use an environment
   # variable instead.
   secret_key_base =
-    case System.get_env("SECRET_KEY_BASE") do
+    case fetch_secret.("SECRET_KEY_BASE") do
       value when is_binary(value) and byte_size(value) >= 64 ->
         value
 
       _ ->
         raise """
-        environment variable SECRET_KEY_BASE is missing or too short (must be
-        at least 64 bytes).
+        SECRET_KEY_BASE is missing or too short (must be at least 64 bytes) —
+        set the env var or /run/secrets/secret_key_base.
         You can generate one by calling: mix phx.gen.secret
         """
     end

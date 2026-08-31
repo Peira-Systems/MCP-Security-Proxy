@@ -47,6 +47,9 @@ npm-debug.log
 !.env.example
 *.pem
 
+# Docker Compose secret files (M3.4d).
+/secrets/
+
 # Local Python venv (e.g. for the prompt-injection sidecar plugin's deps).
 /.venv/
 

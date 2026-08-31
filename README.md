@@ -33,9 +33,15 @@ pipelines, releases, and rollback.
 Single-node Docker Compose (`app` + `postgres`):
 
 ```
-cp .env.example .env    # then fill in SECRET_KEY_BASE, POSTGRES_PASSWORD, ADMIN_EMAIL/ADMIN_PASSWORD
-docker compose up -d    # the app runs migrations on start
+cp .env.example .env              # non-secret config: PHX_HOST, ADMIN_EMAIL/PASSWORD, ports
+mkdir -p secrets                  # the three real secrets are Docker secret files:
+openssl rand -hex 64    > secrets/secret_key_base.txt
+openssl rand -hex 32    > secrets/audit_checkpoint_key.txt
+openssl rand -base64 24 > secrets/postgres_password.txt
+docker compose up -d              # the app runs migrations on start
 ```
+
+First boot seeds an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; sign in at `/login`.
 
 Health: `/health/live` (liveness, used by the container healthcheck) and
 `/health/ready` (Postgres + upstream reachability). Metrics: Prometheus text at

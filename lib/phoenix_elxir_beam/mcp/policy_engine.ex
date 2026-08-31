@@ -173,6 +173,17 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     )
   end
 
+  @doc """
+  Receipts a `:policy_change` event — an operator changed runtime policy
+  (plugin toggle/reorder, tag assignment, quarantine clear). Routed through
+  this GenServer so it lands on the same serial hash chain as verdicts
+  (`PhoenixElxirBeam.MCP.PolicyChange`). `change` carries `:actor`, `:kind`,
+  `:target`, `:before`, `:after`, `:summary`.
+  """
+  def record_policy_change(change, name \\ __MODULE__) do
+    GenServer.call(name, {:record_policy_change, change})
+  end
+
   # Server callbacks
 
   @impl true
@@ -266,6 +277,35 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     event = blocked_event(session_id, nil, server_id, tool_name, [], reason)
     receipt(event, state)
     {:reply, {:block, event}, state}
+  end
+
+  def handle_call({:record_policy_change, change}, _from, state) do
+    event = %Event{
+      id: generate_id(),
+      session_id: nil,
+      scenario: nil,
+      server_id: change[:server_id],
+      tool_name: nil,
+      tags: [],
+      status: :policy_change,
+      reason: change.summary,
+      timestamp: DateTime.utc_now()
+    }
+
+    # `before` / `after` must already be JSON-safe (bool / string / list) — the
+    # caller (PhoenixElxirBeam.MCP.PolicyChange) guarantees that.
+    decision = %{
+      plugin: change.actor,
+      verdict: :policy_change,
+      reason: change.summary,
+      kind: to_string(change.kind),
+      target: to_string(change.target),
+      before: change.before,
+      after: change.after
+    }
+
+    receipt(event, state, decisions: [decision])
+    {:reply, {:ok, event.id}, state}
   end
 
   def handle_call(

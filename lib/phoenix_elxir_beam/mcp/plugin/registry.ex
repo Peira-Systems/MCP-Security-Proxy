@@ -27,7 +27,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, SidecarRunner}
+  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, SidecarRunner, StateStore}
 
   @capability_kinds [:policy, :scanner, :audit_sink]
   @sidecar_supervisor PhoenixElxirBeam.MCP.SidecarSupervisor
@@ -118,7 +118,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
 
     state = %{
       table: table,
-      sidecar_supervisor: Keyword.get(opts, :sidecar_supervisor, @sidecar_supervisor)
+      sidecar_supervisor: Keyword.get(opts, :sidecar_supervisor, @sidecar_supervisor),
+      # Only the real, singleton registry reads/writes the persisted overlay
+      # (M3.4b). Named test instances stay in-memory.
+      persist?: Keyword.get(opts, :persist, table == __MODULE__)
     }
 
     {:ok, state, {:continue, {:start_sidecars, sidecars}}}
@@ -130,7 +133,28 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       insert_entry(state.table, spec, index, &start_sidecar(&1, &2, state.sidecar_supervisor))
     end)
 
+    # Overlay the operator's persisted enable/disable + order (M3.4b) on top of
+    # the config-declared defaults, now that every entry is in the table.
+    if state.persist?, do: apply_persisted_overlay(state.table)
+
     {:noreply, state}
+  end
+
+  defp apply_persisted_overlay(table) do
+    stored = StateStore.all()
+
+    for {name, entry} <- :ets.tab2list(table),
+        s = Map.get(stored, name),
+        is_map(s) do
+      entry =
+        entry
+        |> then(&if is_boolean(s.enabled), do: %{&1 | enabled: s.enabled}, else: &1)
+        |> then(&if is_integer(s.position), do: %{&1 | order: s.position}, else: &1)
+
+      :ets.insert(table, {name, entry})
+    end
+
+    :ok
   end
 
   defp insert_entry(table, spec, index, builder) do
@@ -147,6 +171,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     case :ets.lookup(state.table, name) do
       [{^name, entry}] ->
         :ets.insert(state.table, {name, %{entry | enabled: value}})
+        if state.persist?, do: StateStore.put_enabled(name, value)
         {:reply, :ok, state}
 
       [] ->
@@ -166,6 +191,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       :ets.insert(state.table, {name, %{entry | order: order}})
     end)
 
+    if state.persist?, do: StateStore.put_order(Enum.map(list(state.table), & &1.name))
     {:reply, :ok, state}
   end
 

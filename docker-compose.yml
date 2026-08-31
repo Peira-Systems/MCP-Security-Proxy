@@ -1,10 +1,29 @@
+# Secrets (M3.4d): SECRET_KEY_BASE, AUDIT_CHECKPOINT_KEY and the Postgres
+# password are Docker secrets, mounted at /run/secrets/<name> and read by
+# config/runtime.exs — they never appear in `docker inspect` or a host `.env`.
+# Create the files before `docker compose up`:
+#   mkdir -p secrets
+#   openssl rand -hex 32   > secrets/audit_checkpoint_key.txt
+#   openssl rand -hex 64   > secrets/secret_key_base.txt     # or: mix phx.gen.secret
+#   openssl rand -base64 24 > secrets/postgres_password.txt
+# The secrets/ directory is gitignored.
+secrets:
+  secret_key_base:
+    file: ./secrets/secret_key_base.txt
+  audit_checkpoint_key:
+    file: ./secrets/audit_checkpoint_key.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mcp_proxy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-mcp_proxy}
+    secrets:
+      - postgres_password
     volumes:
       - pg_data:/var/lib/postgresql/data
     # Published for local psql / running `mix` against it; the app reaches
@@ -30,12 +49,19 @@ services:
       - .env
     environment:
       PORT: ${PORT:-4000}
-      DATABASE_URL: postgres://${POSTGRES_USER:-mcp_proxy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_proxy}
+      # runtime.exs builds DATABASE_URL from these + the postgres_password secret.
+      POSTGRES_USER: ${POSTGRES_USER:-mcp_proxy}
+      POSTGRES_DB: ${POSTGRES_DB:-mcp_proxy}
+      POSTGRES_HOST: postgres
       # Off-DB audit-chain checkpoint — a volume separate from Postgres.
       AUDIT_CHECKPOINT_PATH: /checkpoints/audit.log
       # Lets a registered `localhost` / `127.0.0.1` MCP server URL (e.g. the
       # JetBrains IDE plugin on the host) be reached from inside the container.
       MCP_HOST_LOOPBACK_ALIAS: host.docker.internal
+    secrets:
+      - secret_key_base
+      - audit_checkpoint_key
+      - postgres_password
     ports:
       - "${PORT:-4000}:${PORT:-4000}"
     volumes:
