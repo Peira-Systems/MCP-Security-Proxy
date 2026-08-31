@@ -448,12 +448,27 @@ secrets (not an external manager).
 
 ## M4 — Close mission gaps
 
-### M4.1 — Taint fidelity (HMAC markers)
-- Replace the retained-raw-secret substring match with real HMAC markers: HMAC the secret
-  under a per-session key, store only the marker, match by tokenising call arguments and
-  HMACing candidates. Defeats base64 / encoding / chunking / reformatting evasion.
-- Taint sources from `resources/read` and `prompts/get` content (**depends on M1.2**).
-- `chunk` → taint accumulation (**done in M1.3**).
+### M4.1 — Taint fidelity (HMAC markers) — **done** (`MCP.TaintMarker`)
+- `MCP.TaintMarker`: `session_key = HMAC(server_key, "taint|" <> session_id)`; a marker is
+  `"tm:" <> HMAC(session_key, representation)`. `markers_for_secret/2` marks a leaked
+  credential *and its encodings* (raw, base64 ±pad, hex lower/upper, URL-encoded);
+  `candidate_markers/2` tokenises outbound arguments two ways (keeping `=`/`+`/`/`, and
+  splitting on `= : & ?`) and also marks each token's plausible base64/hex *decodings*;
+  `tainted?/3` is the set-intersection. Min length 8.
+- `SecretLeak` now emits `markers:` on each taint source instead of the raw `secret:`;
+  `TaintedArgGuard` matches markers (defeats base64 / hex / URL-encoding evasion, not
+  splitting-across-calls). `PolicyEngine.taint_key` dedupes on the marker set.
+- Markers are opaque + safe to persist → `PolicyStore` keeps the full taint source across a
+  restart; the M2.2a "degrades to TaintGuard" caveat is gone. `server_key` from
+  `config :taint_marker_key` (prod: `TAINT_MARKER_KEY` secret or derived from
+  `SECRET_KEY_BASE`).
+- **Deferred:** taint sources from `resources/read` / `prompts/get` content (SecretLeak
+  already runs `post_call` on that content via M1.2's `ResponseContent`, so markers are
+  produced — no extra work needed); `chunk` → taint (**done in M1.3**).
+- **Acceptance:** `taint_marker_test` + `tainted_arg_guard_test` (base64/hex copy of the
+  secret in args is blocked; string-keyed markers from a restart still match);
+  `secret_leak_test` (source carries markers, never the raw secret); `policy_engine_test` +
+  `proxy_controller_test` end-to-end still block. Suite 301.
 - **Files:** `MCP.TaintMarker`, `SecretLeak` + `TaintGuard` + `TaintedArgGuard` rewritten
   against markers, per-session key in `SessionStore`.
 - **Acceptance:** a secret leaked then re-sent base64-encoded in a later call's arguments is

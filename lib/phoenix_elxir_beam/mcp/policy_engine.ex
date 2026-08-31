@@ -501,10 +501,12 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     end
   end
 
-  defp taint_key(%{secret: secret}) when is_binary(secret), do: {:secret, secret}
-
-  defp taint_key(source),
-    do: {tval(source, :origin_tool), tval(source, :finding_type)}
+  defp taint_key(source) do
+    case tval(source, :markers) do
+      [_ | _] = markers -> {:markers, Enum.sort(markers)}
+      _ -> {tval(source, :origin_tool), tval(source, :finding_type)}
+    end
+  end
 
   defp tval(m, k) when is_map(m), do: Map.get(m, k) || Map.get(m, to_string(k))
 

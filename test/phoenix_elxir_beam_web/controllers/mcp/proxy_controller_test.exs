@@ -219,7 +219,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert message =~ "secret"
   end
 
-  test "an outbound argument carrying a secret read earlier is blocked byte-for-byte", %{
+  test "an outbound argument carrying a secret read earlier is blocked by taint marker", %{
     sid: sid,
     token: token
   } do
@@ -233,7 +233,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
       })
 
     assert %{"error" => %{"code" => -32001, "message" => message}} = json_response(exfil, 200)
-    assert message =~ "argument contains a secret"
+    assert message =~ "argument carries a secret"
   end
 
   test "a network-egress call following a sensitive read is blocked", %{sid: sid, token: token} do

@@ -7,10 +7,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyStore do
   restart.
 
   Not persisted: the 60-second behavioural-baseline `call_log` (ephemeral by
-  design — `BaselineGuard` is `fail_open` and re-warms) and the raw `secret`
-  bytes on a taint source (memory-only — `TaintedArgGuard`'s byte-for-byte
-  match degrades to `TaintGuard`'s coarse "a secret flowed" check for a
-  session recovered across a restart, until M4.1's HMAC markers).
+  design — `BaselineGuard` is `fail_open` and re-warms). Taint sources persist
+  in full now that they carry HMAC **markers** rather than the raw secret
+  (M4.1 / `PhoenixElxirBeam.MCP.TaintMarker`), so `TaintedArgGuard` keeps its
+  full precision across a restart. `sanitize_source/1` still drops a stray
+  `secret` key for defence in depth.
   """
 
   import Ecto.Query

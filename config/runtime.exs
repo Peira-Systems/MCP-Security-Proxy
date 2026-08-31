@@ -139,6 +139,15 @@ if config_env() == :prod do
         """
     end
 
+  # HMAC key for taint markers (M4.1). Its own secret if provided, else derived
+  # from SECRET_KEY_BASE so there is always a strong, deploy-stable key.
+  derived_taint_key =
+    :crypto.hash(:sha256, "taint-marker|" <> secret_key_base) |> Base.encode16(case: :lower)
+
+  config :phoenix_elxir_beam,
+         :taint_marker_key,
+         fetch_secret.("TAINT_MARKER_KEY") || derived_taint_key
+
   host = System.get_env("PHX_HOST") || "example.com"
 
   dns_cluster_query =

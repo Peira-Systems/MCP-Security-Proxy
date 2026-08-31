@@ -16,6 +16,11 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
   window_ms: 1_000,
   max_per_window: 20
 
+# HMAC key for taint markers (M4.1). Overridden in config/runtime.exs for prod
+# (TAINT_MARKER_KEY secret, or derived from SECRET_KEY_BASE). Markers are
+# session-scoped and opaque; a rotated key just re-bases in-flight sessions.
+config :phoenix_elxir_beam, :taint_marker_key, "dev-and-test-taint-marker-key-not-a-secret"
+
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Plugs.RequestLimits, max_body_bytes: 1_048_576
 
 # Verify TLS certificates when the proxy dials an upstream `:http` MCP server.
