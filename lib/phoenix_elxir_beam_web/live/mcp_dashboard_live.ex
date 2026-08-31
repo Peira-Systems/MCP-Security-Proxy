@@ -335,13 +335,25 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         %{"server_id" => server_id, "tool_name" => tool_name, "tag" => tag_str},
         socket
       ) do
-    tag = tag_atom(tag_str)
-    server = ServerRegistry.get_server(server_id)
-    tool = Enum.find(server.tools, &(&1.name == tool_name))
-    new_tags = if tag in tool.tags, do: List.delete(tool.tags, tag), else: [tag | tool.tags]
+    with_operator(socket, fn user ->
+      tag = tag_atom(tag_str)
+      server = ServerRegistry.get_server(server_id)
+      tool = Enum.find(server.tools, &(&1.name == tool_name))
+      new_tags = if tag in tool.tags, do: List.delete(tool.tags, tag), else: [tag | tool.tags]
 
-    {:ok, _server} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
-    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+      {:ok, _server} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
+
+      PolicyChange.record(%{
+        kind: :tool_tags,
+        target: "#{server_id}/#{tool_name}",
+        actor: user.email,
+        before: Enum.map(tool.tags, &to_string/1),
+        after: Enum.map(new_tags, &to_string/1),
+        server_id: server_id
+      })
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
   end
 
   def handle_event("rehandshake", %{"server_id" => server_id}, socket) do
@@ -353,8 +365,48 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         %{"server_id" => server_id, "tool_name" => tool_name},
         socket
       ) do
-    {:ok, _server} = ServerRegistry.clear_tool_block(server_id, tool_name)
-    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+    with_operator(socket, fn user ->
+      {:ok, _server} = ServerRegistry.clear_tool_block(server_id, tool_name)
+
+      PolicyChange.record(%{
+        kind: :tool_quarantine,
+        target: "#{server_id}/#{tool_name}",
+        actor: user.email,
+        before: "quarantined",
+        after: "cleared",
+        server_id: server_id
+      })
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
+  end
+
+  def handle_event(
+        "apply_suggested_tags",
+        %{"server_id" => server_id, "tool_name" => tool_name},
+        socket
+      ) do
+    with_operator(socket, fn user ->
+      server = ServerRegistry.get_server(server_id)
+      tool = server && Enum.find(server.tools, &(&1.name == tool_name))
+      suggested = (tool && Map.get(tool, :suggested_tags, [])) || []
+
+      if tool && suggested != [] do
+        new_tags = Enum.uniq(tool.tags ++ suggested)
+        {:ok, _} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
+
+        PolicyChange.record(%{
+          kind: :tool_tags,
+          target: "#{server_id}/#{tool_name}",
+          actor: user.email,
+          before: Enum.map(tool.tags, &to_string/1),
+          after: Enum.map(new_tags, &to_string/1),
+          server_id: server_id
+        })
+      end
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
   end
 
   def handle_event(

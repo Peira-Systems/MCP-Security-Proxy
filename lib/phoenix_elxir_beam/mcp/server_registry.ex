@@ -489,7 +489,10 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
       Map.merge(base, %{
         description_hash: ToolHash.hash(base),
         quarantined: false,
-        quarantine_reason: nil
+        quarantine_reason: nil,
+        # M4.2: name/description heuristics — a hint for the operator, never
+        # enforced. `UnclassifiedGuard` still gates on operator `tags`.
+        suggested_tags: PhoenixElxirBeam.MCP.TagInference.infer(tool["name"], tool["description"])
       })
     end)
   end

@@ -50,6 +50,10 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
          }
        ]
      }},
+    # Default-deny (M4.2): an untagged tool is held for operator sign-off. Set
+    # "off" if you would rather curate tags before enforcement, or "deny" for a
+    # hard refusal.
+    {PhoenixElxirBeam.MCP.Plugins.UnclassifiedGuard, config: %{"mode" => "hold"}},
     {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.BaselineGuard,
      config: %{

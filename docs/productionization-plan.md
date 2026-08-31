@@ -474,15 +474,21 @@ secrets (not an external manager).
 - **Acceptance:** a secret leaked then re-sent base64-encoded in a later call's arguments is
   caught; the raw secret is never persisted or held in memory beyond the marking step.
 
-### M4.2 — Default-deny posture
-- Discovered tools start untagged, so most policies are inert until an operator curates
-  tags. Add a default-deny mode: an untagged tool is denied (or held) until classified.
-- Tag inference at discovery time (name + description heuristics, optionally a classifier)
-  to make curation tractable.
-- **Files:** `Pipeline.run_discovery/2` default-deny flag, `MCP.TagInference`,
-  dashboard "unclassified tools" queue.
-- **Acceptance:** with default-deny on, a newly discovered untagged tool is held on first
-  call until an operator classifies it; tag suggestions are shown at discovery.
+### M4.2 — Default-deny posture — **done** (`MCP.Plugins.UnclassifiedGuard`, `MCP.TagInference`)
+- `UnclassifiedGuard` — a `pre_call` policy (`tool_tags: []`, runs on every call,
+  `fail_closed`). Config `mode` ∈ `"off"` (default) | `"deny"` | `"hold"`: an untagged tool
+  is refused / parked for operator sign-off. `prod.exs` ships `mode: "hold"`; dev/test
+  `"off"` so untagged fixtures still flow.
+- `MCP.TagInference.infer/2` — name + description regex heuristics → suggested
+  `:sensitive_read` / `:network_egress`. Run at discovery (`ServerRegistry.discovered_tools`);
+  stored as a non-persisted `suggested_tags` on each tool. **Never applied automatically.**
+- Dashboard: tools show an "unclassified" pill + an operator-gated "apply suggested: …"
+  button (`apply_suggested_tags` event). Tag changes + quarantine clears now route through
+  `MCP.PolicyChange` (audited — the M3.4c deferral).
+- **Deferred:** an ML classifier (heuristics are enough at this tag vocabulary of 2);
+  a dedicated "unclassified queue" view (the per-tool pills + the hold banner cover it).
+- **Acceptance:** `unclassified_guard_test` (off allows, deny refuses untagged / allows
+  tagged, hold parks), `tag_inference_test` (credential / egress / benign). Suite 309.
 
 ### M4.3 — Scanner quality
 - The prompt-injection scanner is a demo-grade matcher. Decide the real approach:
