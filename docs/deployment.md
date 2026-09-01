@@ -108,11 +108,17 @@ Run `bench/load.exs` against a staging copy to size for your traffic.
 - **Audit checkpoint file** (`audit_checkpoints` volume): back it up *with* the
   DB and from a consistent point — it's the anchor for detecting a truncated
   log. Losing it weakens tamper-evidence but not the chain itself.
-- **`policy_events` growth:** there is no automatic pruning yet (deleting rows
-  breaks `verify_chain` from genesis). Options: provision disk for the volume,
-  or ship rows to long-term storage via `StructuredLogSink` and accept that
-  in-DB history is bounded by disk. An anchor-aware retention verifier is a
-  documented follow-up.
+- **`policy_events` growth — opt-in retention.** Set `AUDIT_RETENTION_DAYS`
+  (unset by default — the log grows unbounded until you do) to have
+  `MCP.AuditRetention` prune rows older than that, on every `AuditIntegrity`
+  cycle (default every 15 min). It only ever deletes rows *before* the row
+  the newest signed checkpoint anchors on — `verify_chain` is anchor-aware
+  (it trusts the oldest surviving row's own stored `prev_hash` rather than
+  requiring true genesis), so a pruned table keeps verifying correctly, and
+  pruning can never delete anything an ongoing check still needs. This is
+  deletion, not archival — don't turn it on until Postgres backups and/or
+  `StructuredLogSink` → SIEM shipping are actually in place to hold what
+  gets pruned. See `MCP.AuditRetention` and `MCP.AuditIntegrity` moduledocs.
 
 ## Upgrades & rollback
 

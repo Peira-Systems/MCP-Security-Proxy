@@ -4,24 +4,34 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrityTest do
 
   import Ecto.Query
 
-  alias PhoenixElxirBeam.MCP.{AuditCheckpoint, AuditEvent, AuditIntegrity, EventLog, PolicyEvent}
+  alias PhoenixElxirBeam.MCP.{
+    AuditCheckpoint,
+    AuditEvent,
+    AuditIntegrity,
+    AuditRetention,
+    EventLog,
+    PolicyEvent
+  }
 
   @name :audit_integrity_test
 
   setup do
     File.rm(Application.get_env(:phoenix_elxir_beam, AuditCheckpoint)[:path])
+    on_exit(fn -> Application.delete_env(:phoenix_elxir_beam, AuditRetention) end)
     start_supervised!({AuditIntegrity, name: @name, first_delay_ms: 60_000})
     :ok
   end
 
-  defp log_event(status \\ "ok") do
-    {:ok, _} =
+  defp log_event(status \\ "ok", occurred_at \\ DateTime.utc_now()) do
+    {:ok, row} =
       EventLog.record(%AuditEvent{
         event_id: Ecto.UUID.generate(),
         session_id: "s-#{System.unique_integer([:positive])}",
         status: status,
-        occurred_at: DateTime.utc_now()
+        occurred_at: occurred_at
       })
+
+    row
   end
 
   test "a clean chain checks ok and writes a checkpoint" do
@@ -90,5 +100,32 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrityTest do
     # the check ignores the forged line and writes a fresh valid one
     assert :ok = AuditIntegrity.check_now(@name)
     assert AuditCheckpoint.latest().count == 1
+  end
+
+  test "retention prunes an old, previously-checkpointed row without breaking later checks" do
+    Application.put_env(:phoenix_elxir_beam, AuditRetention, retention_days: 30)
+    days_ago = fn n -> DateTime.add(DateTime.utc_now(), -n * 86_400, :second) end
+
+    old = log_event("ok", days_ago.(200))
+    # first check: no prior checkpoint yet, so nothing is pruned this round —
+    # it establishes the anchor at `old` (still the only / head row).
+    assert :ok = AuditIntegrity.check_now(@name)
+    assert Repo.get_by(PolicyEvent, event_id: old.event_id)
+
+    recent = log_event("ok", DateTime.utc_now())
+    # second check: prunes against the *previous* anchor (`old`) — nothing
+    # is before it yet, so still nothing pruned — then advances the anchor
+    # to `recent` (the new head).
+    assert :ok = AuditIntegrity.check_now(@name)
+    assert Repo.get_by(PolicyEvent, event_id: old.event_id)
+
+    # third check: `old` is now before the (now-`recent`) anchor and past
+    # the retention window, so it's pruned — and the check still reports ok.
+    assert :ok = AuditIntegrity.check_now(@name)
+    refute Repo.get_by(PolicyEvent, event_id: old.event_id)
+    assert Repo.get_by(PolicyEvent, event_id: recent.event_id)
+
+    # a further check with nothing new keeps verifying fine post-prune.
+    assert :ok = AuditIntegrity.check_now(@name)
   end
 end

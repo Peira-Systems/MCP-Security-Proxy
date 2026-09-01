@@ -8,10 +8,17 @@ defmodule PhoenixElxirBeam.MCP.AuditCheckpoint do
   nothing, since each row already carries its own hash) still verifies. A
   periodic signed checkpoint written **outside Postgres** closes that gap:
   it records `{event_id, hash, count}` for the chain head plus an HMAC over
-  those fields. A later check compares the live head against the newest
-  checkpoint — a drop in `count`, or a checkpointed `hash` that no longer
-  exists as a row, is tamper evidence a DB-only attacker cannot hide (they
-  do not have the HMAC key).
+  those fields. A later check confirms `hash` is still present as some
+  row's `hash` — a checkpointed row going missing or being rewritten (so its
+  original hash no longer appears anywhere) is tamper evidence a DB-only
+  attacker cannot hide (they do not have the HMAC key). `count` is
+  informational only (total hashed rows at checkpoint time); it is not used
+  to decide truncation, since `PhoenixElxirBeam.MCP.AuditRetention` pruning
+  legitimately shrinks it.
+
+  `PhoenixElxirBeam.MCP.AuditRetention.prune/1` looks up the checkpointed
+  `hash`'s row itself to find the boundary it must never delete across — the
+  checkpointed row, and everything after it, is always retained.
 
   Append-only file, one JSON object per line, at
   `config :phoenix_elxir_beam, #{inspect(__MODULE__)}, path: …`

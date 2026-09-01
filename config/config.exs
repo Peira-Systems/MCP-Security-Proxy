@@ -36,6 +36,12 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
 
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditIntegrity, interval_ms: 900_000
 
+# Opt-in pruning of policy_events rows older than N days, anchored so it
+# never touches a row an ongoing verify_since/2 chain check still needs
+# (docs/deployment.md#retention--backups). Off (nil) by default -- the log
+# grows unbounded until an operator sets AUDIT_RETENTION_DAYS.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditRetention, retention_days: nil
+
 # The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
 # per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
 # once. It is NOT set here: `Config` merges the keyword-shaped list by key, so

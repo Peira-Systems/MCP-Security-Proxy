@@ -6,11 +6,24 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrity do
 
   Every `interval_ms` (default 15 min) it:
 
-    1. runs `EventLog.verify_chain/0` (rows present form an unbroken chain);
-    2. compares the live head against the newest signed
-       `PhoenixElxirBeam.MCP.AuditCheckpoint` (catches a truncated log that
-       still verifies internally);
-    3. on success, writes a fresh checkpoint.
+    1. runs `EventLog.verify_chain/0` (every row currently in the table
+       forms an unbroken chain — bounded by however much
+       `PhoenixElxirBeam.MCP.AuditRetention` retains, not total log history,
+       once retention is configured);
+    2. confirms the newest signed `PhoenixElxirBeam.MCP.AuditCheckpoint`'s
+       `hash` is still present as some row's `hash` (catches the
+       checkpointed row itself, or anything before it, being deleted or
+       rewritten — a truncated log that still verifies internally in step 1);
+    3. on success, prunes rows *before* the checkpointed row via
+       `AuditRetention.prune/1` (no-op unless retention is configured), then
+       writes a fresh checkpoint from the current head.
+
+  Step 2 only proves the checkpointed row (and anything committed to a
+  checkpoint before it) is intact — a row added *after* the last checkpoint
+  and deleted again before the next one is a detection window bounded by
+  `interval_ms` that step 1's replay can't close either (there is nothing
+  left to replay). `StructuredLogSink` shipping every event out in real time
+  is the mitigation for that gap (`docs/threat-model.md`).
 
   A failure raises an alert: a structured `mcp.audit.integrity` error line
   for the log shipper / SIEM, and `{:audit_integrity, :broken, detail}` on
@@ -21,7 +34,7 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrity do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{AuditCheckpoint, EventLog}
+  alias PhoenixElxirBeam.MCP.{AuditCheckpoint, AuditRetention, EventLog}
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:audit"
@@ -87,24 +100,29 @@ defmodule PhoenixElxirBeam.MCP.AuditIntegrity do
   end
 
   defp against_checkpoint do
-    with %{} = cp <- AuditCheckpoint.latest(),
-         head when is_map(head) <- EventLog.head() do
-      cond do
-        head.count < cp.count ->
-          {:broken, "log has #{head.count} rows; checkpoint recorded #{cp.count} — truncated"}
+    case AuditCheckpoint.latest() do
+      nil ->
+        # no checkpoint yet — nothing to verify against, so just write one
+        # from the current head (a no-op if the log is empty).
+        write_checkpoint()
 
-        not EventLog.hash_present?(cp.hash) ->
-          {:broken, "checkpointed head hash is no longer present in the log"}
-
-        true ->
+      cp ->
+        if EventLog.hash_present?(cp.hash) do
+          prune_safely(cp.hash)
           write_checkpoint()
-          :ok
-      end
-    else
-      # no checkpoint yet, or an empty log — nothing to verify against, so
-      # just (re)write the checkpoint from the current head.
-      nil -> write_checkpoint()
+        else
+          {:broken, "checkpointed head hash is no longer present in the log"}
+        end
     end
+  end
+
+  # Housekeeping, not a correctness signal for this cycle's verdict — a
+  # pruning hiccup (e.g. disk pressure) must not turn a verified-intact
+  # chain into a :skipped check.
+  defp prune_safely(anchor_hash) do
+    AuditRetention.prune(anchor_hash)
+  rescue
+    error -> Logger.warning("AuditRetention: prune skipped: #{Exception.message(error)}")
   end
 
   defp write_checkpoint do

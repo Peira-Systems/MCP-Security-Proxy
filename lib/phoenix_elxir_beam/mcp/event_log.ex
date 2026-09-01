@@ -11,6 +11,16 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   replays the whole log and reports the first tampered or missing row.
   This is only sound because every write goes through the single
   `PhoenixElxirBeam.MCP.PolicyEngine` GenServer, serially.
+
+  `verify_chain/0` treats the first *surviving* row's own stored `prev_hash`
+  as its starting point rather than requiring it to be `nil` — on a table
+  that was never pruned this is identical to the old, stricter check (the
+  true first-ever row's `prev_hash` genuinely is `nil`); once
+  `PhoenixElxirBeam.MCP.AuditRetention` has pruned earlier rows, it proves
+  internal consistency of everything currently in the table rather than an
+  unbroken line to true genesis — which is also why cost is bounded by the
+  retention window instead of total log history once retention is enabled.
+  See `docs/deployment.md#retention--backups`.
   """
 
   import Ecto.Query
@@ -52,6 +62,9 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   or `nil` if there are none. Used by the off-DB checkpoint
   (`PhoenixElxirBeam.MCP.AuditCheckpoint`) so a later truncation of the log
   is detectable even when the shortened chain still verifies internally.
+  `count` is informational (total hashed rows at checkpoint time) — it is
+  not used to decide truncation, since `PhoenixElxirBeam.MCP.AuditRetention`
+  pruning legitimately shrinks it.
   """
   @spec head() :: %{event_id: String.t(), hash: String.t(), count: non_neg_integer()} | nil
   def head do
@@ -81,21 +94,29 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   end
 
   @doc """
-  Replays the log in insert order, recomputing each row's `hash` from the
-  previous row's. Returns `:ok`, or `{:error, %{event_id:, occurred_at:}}`
-  for the first row whose stored `prev_hash` / `hash` doesn't line up — i.e.
-  a row was altered, inserted, or deleted.
+  Replays every row currently in the table, recomputing each one's `hash`
+  from the previous row's. Returns `:ok`, or
+  `{:error, %{event_id:, occurred_at:}}` for the first row whose stored
+  `prev_hash` / `hash` doesn't line up — i.e. a row was altered or a row
+  *after* it was deleted.
 
   Rows written before the chain migration (`hash IS NULL`) are pre-chain and
-  skipped; verification starts at the first hashed row.
+  skipped; verification starts at the first hashed row, trusting that row's
+  own stored `prev_hash` as the chain's starting point (see the moduledoc —
+  this is what makes the check meaningful after `AuditRetention` has pruned
+  earlier rows, and is unchanged on a table that never has).
   """
   @spec verify_chain() :: :ok | {:error, %{event_id: String.t(), occurred_at: DateTime.t()}}
   def verify_chain do
-    PolicyEvent
-    |> order_by(asc: :id)
-    |> Repo.all()
-    |> Enum.drop_while(&is_nil(&1.hash))
-    |> Enum.reduce_while({:ok, nil}, fn row, {:ok, prev} ->
+    case PolicyEvent |> order_by(asc: :id) |> Repo.all() |> Enum.drop_while(&is_nil(&1.hash)) do
+      [] -> :ok
+      [first | _] = rows -> chain_from(first.prev_hash, rows)
+    end
+  end
+
+  defp chain_from(prev, rows) do
+    rows
+    |> Enum.reduce_while({:ok, prev}, fn row, {:ok, prev} ->
       expected = chain_hash(prev, row_attrs(row))
 
       if row.prev_hash == prev and row.hash == expected do

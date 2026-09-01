@@ -96,6 +96,20 @@ if config_env() == :prod do
         raise("AUDIT_CHECKPOINT_KEY is missing (env var or /run/secrets/audit_checkpoint_key)"),
     path: System.get_env("AUDIT_CHECKPOINT_PATH") || "/checkpoints/audit.log"
 
+  # Opt-in policy_events retention (M2.3 follow-up). Unset/absent = off, the
+  # log grows unbounded (see docs/deployment.md#retention--backups). Only
+  # takes effect once at least two checkpoints have been written, since
+  # pruning is anchored to an already-verified checkpoint.
+  audit_retention_days =
+    case System.get_env("AUDIT_RETENTION_DAYS") do
+      nil -> nil
+      "" -> nil
+      str -> String.to_integer(str)
+    end
+
+  config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditRetention,
+    retention_days: audit_retention_days
+
   # DATABASE_URL wins if set; otherwise build it from POSTGRES_* + the
   # postgres_password secret (the compose default).
   database_url =

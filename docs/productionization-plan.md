@@ -285,14 +285,20 @@ fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled 
 - **Off-DB checkpoint anchoring** — `MCP.AuditCheckpoint` appends a signed
   `{event_id, hash, count, verified_at, HMAC}` line to a file on a volume separate from
   Postgres (`AUDIT_CHECKPOINT_KEY` / `AUDIT_CHECKPOINT_PATH`, a `checkpoints` compose
-  volume). Catches a **truncated** log that still verifies internally (count drop, or a
-  checkpointed head hash that is gone); a forged checkpoint fails the HMAC and is ignored.
+  volume). Catches a **truncated** log that still verifies internally (a checkpointed head
+  hash that is gone); a forged checkpoint fails the HMAC and is ignored.
 - New `EventLog.head/0` + `hash_present?/1`; `EventLog.record` chain semantics unchanged.
-- **Deferred:** retention / archival — deleting old rows breaks `verify_chain` from genesis,
-  so it needs an anchor-aware verifier (start from a signed retention anchor). Small
-  follow-up; the external log shipper (M3.2) covers long-term retention meanwhile.
-  `verify_chain` also still loads every row into memory — verify-from-checkpoint is the
-  scaling fix, same follow-up.
+- **Retention / anchor-aware verify_chain — done** (follow-up, closed):
+  `MCP.AuditRetention.prune/1` deletes `policy_events` rows older than opt-in
+  `AUDIT_RETENTION_DAYS`, but only ever *before* the row the newest checkpoint anchors on.
+  `EventLog.verify_chain/0` now trusts the oldest *surviving* row's own stored `prev_hash` as
+  its starting point instead of requiring true genesis (`nil`), so a pruned table keeps
+  verifying correctly — and once retention is on, its cost is bounded by the retention
+  window rather than total log history. The truncation check dropped the `count` comparison
+  (no longer monotonic once pruning is legitimate) in favor of `hash_present?/1` alone. See
+  `docs/deployment.md#retention--backups` and the `MCP.AuditRetention` moduledoc for the
+  residual detection-window gap (a row added and deleted again between two checkpoint
+  cycles) `StructuredLogSink` mitigates.
 - **Acceptance:** `audit_integrity_test` — a tampered row is caught, a truncated-but-valid
   log is caught via the checkpoint, a forged checkpoint is ignored, `status` reports the last
   result, a clean chain writes a fresh checkpoint.
@@ -563,7 +569,8 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
 
 - ~~API-key auth cache~~ — **done**: `MCP.ApiKeyCache` (short-TTL `key_id -> %ApiKey{}`,
   explicitly invalidated on `revoke/1` / `set_grants/2`). See `docs/latency-budget.md`.
-- Audit retention / anchor-aware `verify_chain` for `policy_events` growth (M2.3).
+- ~~Audit retention / anchor-aware `verify_chain`~~ — **done**: `MCP.AuditRetention` +
+  the relaxed `EventLog.verify_chain/0`. See `docs/deployment.md#retention--backups`.
 - `SessionStore` / `HoldRegistry` → Postgres (M2.2 — low value, a restart drops the client
   connection / fails parked holds closed anyway).
 - Per-server `timeout_ms` / `tls_verify` in the registration record (M1.5).
