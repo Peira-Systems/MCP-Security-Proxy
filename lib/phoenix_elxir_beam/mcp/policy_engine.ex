@@ -123,10 +123,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @doc """
   Resolves a previously `:hold`-ed call once the operator (or the timeout)
   has decided. `:approved` accumulates the call's tags and receipts an `:ok`
-  event; `:denied` receipts a `:blocked` event.
+  event; `:denied` receipts a `:blocked` event. `:orphaned` is the same
+  fail-closed shape as `:denied`, distinguished only by its reason — it's
+  `HoldRegistry.reap_orphans/0`'s outcome for a hold a previous process
+  lifetime never resolved (a restart, deploy, or crash interrupted it).
   """
   def finalize_hold(session_id, server_id, tool_name, tags, outcome, name \\ __MODULE__)
-      when outcome in [:approved, :denied] do
+      when outcome in [:approved, :denied, :orphaned] do
     GenServer.call(name, {:finalize_hold, session_id, server_id, tool_name, tags, outcome})
   end
 
@@ -450,6 +453,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
         :denied ->
           {:block, :blocked, "network egress denied by operator", state}
+
+        :orphaned ->
+          {:block, :blocked, "held call orphaned by a proxy restart", state}
       end
 
     event = %Event{

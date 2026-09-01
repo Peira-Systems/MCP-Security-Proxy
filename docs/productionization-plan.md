@@ -271,9 +271,20 @@ M1–M4 are written against the real shape once, not adapted twice.
   and a re-spawned `:stdio` server + its quarantine, survive a registry restart;
   `remove_server` deletes the row; an unreachable server on boot doesn't crash the registry.
 
-**Deferred:** `SessionStore` (the MCP-handshake session table) → Postgres — lower value, a
-restart drops the client connection anyway; `HoldRegistry` persistence — a restart already
-fails parked holds closed; plugin `Registry` toggle state → **M3.4** (bundled with its UI).
+**Deferred, revisited (follow-up, closed):** `SessionStore` (the MCP-handshake session
+table) → Postgres stays a deliberate non-goal — the thing that would need to survive a
+restart is the client's live HTTP connection, and that's gone regardless of what the proxy
+remembers server-side; a persisted session id has nothing left to resume. `HoldRegistry`
+persistence turned out to have one real, narrow piece worth doing despite "a restart already
+fails parked holds closed": that fail-closed behavior is silent — before this, a hold
+interrupted by a restart left a permanent `:held` audit row with no closing `:ok`/`:blocked`
+event, and the dashboard showed it as pending forever. `MCP.HoldStore` now write-throughs a
+minimal row per open hold (not the full in-memory record — a `timer` ref and a blocked
+`GenServer.call` `from` tuple cannot survive a restart no matter what) and
+`HoldRegistry.reap_orphans/0` runs once at boot, before the endpoint serves, finalizing
+anything still there as `:orphaned` (fails closed, same as `:denied`, distinct audit reason)
+via `PolicyEngine.finalize_hold/6`. See the `HoldStore` and `HoldRegistry` moduledocs.
+Plugin `Registry` toggle state → **M3.4** (bundled with its UI, already done).
 
 ### M2.3 — Audit durability & tamper-evidence — **done** (`MCP.AuditIntegrity`, `MCP.AuditCheckpoint`)
 - **Scheduled verification + alerting** — `MCP.AuditIntegrity` GenServer runs
@@ -558,7 +569,7 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
 - [x] Every proxy request is authenticated and authorized; agent identity is cryptographic. *(M1.4)*
 - [x] Full MCP method coverage with a documented decision per method. *(M1.2 — `MCP.MethodPolicy`)*
 - [x] Real streaming passthrough with an enforced latency budget. *(M1.3 + M3.3)*
-- [x] Session, taint, hold, and registry state survive `docker compose restart`. *(M2.2 — session/taint/registry; hold fails closed by design)*
+- [x] Session, taint, hold, and registry state survive `docker compose restart`. *(M2.2 — session/taint/registry; hold fails closed by design, and now gets a terminal audit event too — `MCP.HoldStore`)*
 - [x] Audit chain is checkpointed off-DB and verified on a schedule with alerting. *(M2.3)*
 - [x] One-command deploy + one-command rollback, migrations automatic. *(M3.1 + `docs/ci-cd.md`)*
 - [x] Metrics scraped, dashboards live, alerts wired. *(M3.2)*
@@ -571,8 +582,11 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
   explicitly invalidated on `revoke/1` / `set_grants/2`). See `docs/latency-budget.md`.
 - ~~Audit retention / anchor-aware `verify_chain`~~ — **done**: `MCP.AuditRetention` +
   the relaxed `EventLog.verify_chain/0`. See `docs/deployment.md#retention--backups`.
-- `SessionStore` / `HoldRegistry` → Postgres (M2.2 — low value, a restart drops the client
-  connection / fails parked holds closed anyway).
+- ~~`SessionStore` / `HoldRegistry` → Postgres~~ — **investigated, closed**: `SessionStore`
+  stays a deliberate non-goal (see M2.2's revisited note above); `HoldRegistry` got the
+  narrow piece that was actually worth doing — `MCP.HoldStore` + boot-time
+  `HoldRegistry.reap_orphans/0`, closing the silent-orphan audit gap without pretending a
+  blocked HTTP request can resume across a restart.
 - Per-server `timeout_ms` / `tls_verify` in the registration record (M1.5).
 - Downstream SSE passthrough + progress-notification relay (M1.3).
 - Injection ruleset: paraphrase / multilingual / obfuscation coverage; grow the corpus (M4.3).

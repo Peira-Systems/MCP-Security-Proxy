@@ -47,6 +47,16 @@ defmodule PhoenixElxirBeam.Application do
       PhoenixElxirBeam.MCP.Plugin.Registry,
       PhoenixElxirBeam.MCP.HoldRegistry,
       PhoenixElxirBeam.MCP.PolicyEngine,
+      # One-shot: finalize (as :orphaned) any hold a previous process
+      # lifetime never resolved — HoldRegistry itself boots empty every
+      # time, so this is what closes the audit gap a restart would
+      # otherwise leave (docs/productionization-plan.md M2.2 follow-up).
+      # Must follow PolicyEngine, which it calls into.
+      %{
+        id: :hold_reap,
+        start: {Task, :start_link, [&reap_orphan_holds/0]},
+        restart: :transient
+      },
       # Scheduled audit-chain tamper-evidence check + off-DB checkpoints.
       PhoenixElxirBeam.MCP.AuditIntegrity,
       # Owns the table of live downstream MCP sessions; teardown notifies
@@ -80,6 +90,15 @@ defmodule PhoenixElxirBeam.Application do
     error ->
       require Logger
       Logger.warning("dashboard key init skipped: #{Exception.message(error)}")
+      :ok
+  end
+
+  defp reap_orphan_holds do
+    PhoenixElxirBeam.MCP.HoldRegistry.reap_orphans()
+  rescue
+    error ->
+      require Logger
+      Logger.warning("hold reap skipped: #{Exception.message(error)}")
       :ok
   end
 end

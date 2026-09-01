@@ -16,7 +16,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineHoldTest do
     engine = :"peh_engine_#{suffix}"
 
     {:ok, _} = start_supervised({Registry, name: reg, plugins: [{ApprovalGate, []}]}, id: reg)
-    {:ok, _} = start_supervised({HoldRegistry, name: holds}, id: holds)
+    {:ok, holds_pid} = start_supervised({HoldRegistry, name: holds}, id: holds)
 
     {:ok, pid} =
       start_supervised(
@@ -25,6 +25,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineHoldTest do
       )
 
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)
+    # HoldRegistry now write-throughs to HoldStore (park/finalize) from its
+    # own process too — allow it the same borrowed connection.
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), holds_pid)
 
     %{engine: engine, holds: holds}
   end
