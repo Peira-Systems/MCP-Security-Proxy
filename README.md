@@ -5,10 +5,17 @@ it calls tools on. Every `tools/call` runs through a plugin pipeline — policy
 decisions, content scanners, tamper-evident audit — before it is forwarded.
 A LiveView dashboard visualizes traffic and lets an operator curate policy.
 
-See [`Project.md`](Project.md) for an overview, [`docs/adr/`](docs/adr) for the
-architecture and productionization decisions, and
-[`docs/productionization-plan.md`](docs/productionization-plan.md) for the
-current roadmap.
+See [`Project.md`](Project.md) for an overview and [`docs/adr/`](docs/adr) for
+the architecture and productionization decisions.
+
+**Docs:** [threat model](docs/threat-model.md) ·
+[deployment guide](docs/deployment.md) · [operator runbook](docs/runbook.md) ·
+[CI/CD](docs/ci-cd.md) · [observability](docs/observability.md) ·
+[latency budget](docs/latency-budget.md) ·
+[plugin supply chain](docs/plugin-supply-chain.md) ·
+[injection detection](docs/injection-detection.md) ·
+[plugin protocol](docs/plugin-protocol.md) ·
+[productionization plan](docs/productionization-plan.md)
 
 ## Development
 
@@ -42,6 +49,9 @@ docker compose up -d              # the app runs migrations on start
 ```
 
 First boot seeds an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; sign in at `/login`.
+
+Full topology, sizing, TLS, retention, and backups: [`docs/deployment.md`](docs/deployment.md).
+Day-to-day operation and incident response: [`docs/runbook.md`](docs/runbook.md).
 
 Health: `/health/live` (liveness, used by the container healthcheck) and
 `/health/ready` (Postgres + upstream reachability). Metrics: Prometheus text at

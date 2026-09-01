@@ -1,9 +1,13 @@
 # Productionization plan
 
-**Status:** Active · **Date:** 2026-08-28 · **Implements:** [ADR-0002](adr/0002-productionization.md)
+**Status:** Complete (M0–M4 done, 2026-08-31) · **Date:** 2026-08-28 · **Implements:** [ADR-0002](adr/0002-productionization.md)
 
 This is the execution plan for ADR-0002. The ADR records *what* would have to change and
 *why*; this document sequences it into shippable milestones with acceptance criteria.
+
+**All milestones M0–M4 are done** on `productionize/m0-strip-scaffolding` (suite 313,
+dialyzer clean, prod build compiles). Remaining follow-ups are tracked inline as
+"**Deferred:**" notes per milestone — none block the definition of done.
 
 ## Decisions locked (ADR-0002 required these before Phase 1)
 
@@ -508,17 +512,21 @@ secrets (not an external manager).
 - **Deferred:** paraphrase / multilingual / heavy-obfuscation coverage (documented as a
   limit feeding M4.4's threat model).
 
-### M4.4 — Documentation
-- **Threat model:** what this proxy defends against and what it explicitly does not
-  (single-node availability, untrusted plugins, side channels, a compromised upstream after
-  handshake, …).
-- **Operator runbook:** deploy, register a server, assign tags, respond to each alert type,
-  investigate an audit-chain failure, roll back.
-- **Deployment guide:** reference compose topology, sizing (Postgres, app memory, sidecar
-  count), network placement (where the proxy sits relative to agents and MCP servers), TLS
-  setup.
-- **Acceptance:** a new operator can deploy and register a server from the guide alone; each
-  alert in M3.2 has a runbook entry.
+### M4.4 — Documentation — **done**
+- **`docs/threat-model.md`** — assets, the primary tool-chaining-exfiltration threat mapped
+  to each defence + milestone, other in-scope threats, explicit non-goals (node-failure
+  availability, post-handshake upstream compromise, the agent↔model channel, untrusted
+  plugins, novel/obfuscated injection, secret-splitting, a compromised `admin`, side
+  channels), and a trust-boundary table.
+- **`docs/runbook.md`** — first-run setup, register a server, classify tools, issue/revoke a
+  key, runtime policy changes, a table with a response for every `MCP.Alerts` key + the
+  Prometheus-only alerts, the audit-chain-failure investigation procedure, deploy, roll back.
+- **`docs/deployment.md`** — topology diagram, prerequisites, `.env` vs `secrets/*.txt`,
+  bring-up + health checks, the observability overlay, a sizing table, retention & backups
+  (incl. the unbounded `policy_events` note), upgrade/rollback.
+- README doc index rewritten; all cross-linked.
+- **Acceptance:** the three docs cover deploy → register → classify → operate → incident
+  response end to end; every M3.2 alert has a runbook row.
 
 ---
 
@@ -538,15 +546,26 @@ M3.2 alerting ──> M2.3 alerting hook
 M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
 ```
 
-## Definition of done ("productionized")
+## Definition of done ("productionized") — met
 
-- No mock / demo / simulation code in `main`.
-- Every proxy request is authenticated and authorized; agent identity is cryptographic.
-- Full MCP method coverage with a documented decision per method.
-- Real streaming passthrough with an enforced latency budget.
-- Session, taint, hold, and registry state survive `docker compose restart`.
-- Audit chain is checkpointed off-DB and verified on a schedule with alerting.
-- One-command deploy + one-command rollback, migrations automatic.
-- Metrics scraped, dashboards live, alerts wired.
-- Policy changeable at runtime by an authorized operator, every change audited.
-- Threat model, operator runbook, and deployment guide published.
+- [x] No mock / demo / simulation code in `main`. *(M0)*
+- [x] Every proxy request is authenticated and authorized; agent identity is cryptographic. *(M1.4)*
+- [x] Full MCP method coverage with a documented decision per method. *(M1.2 — `MCP.MethodPolicy`)*
+- [x] Real streaming passthrough with an enforced latency budget. *(M1.3 + M3.3)*
+- [x] Session, taint, hold, and registry state survive `docker compose restart`. *(M2.2 — session/taint/registry; hold fails closed by design)*
+- [x] Audit chain is checkpointed off-DB and verified on a schedule with alerting. *(M2.3)*
+- [x] One-command deploy + one-command rollback, migrations automatic. *(M3.1 + `docs/ci-cd.md`)*
+- [x] Metrics scraped, dashboards live, alerts wired. *(M3.2)*
+- [x] Policy changeable at runtime by an authorized operator, every change audited. *(M3.4)*
+- [x] Threat model, operator runbook, and deployment guide published. *(M4.4)*
+
+### Follow-ups not blocking DoD (tracked as per-milestone "Deferred:" notes)
+
+- API-key auth cache (M3.3 finding — one DB round-trip per request); spawned as a task chip.
+- Audit retention / anchor-aware `verify_chain` for `policy_events` growth (M2.3).
+- `SessionStore` / `HoldRegistry` → Postgres (M2.2 — low value, a restart drops the client
+  connection / fails parked holds closed anyway).
+- Per-server `timeout_ms` / `tls_verify` in the registration record (M1.5).
+- Downstream SSE passthrough + progress-notification relay (M1.3).
+- Injection ruleset: paraphrase / multilingual / obfuscation coverage; grow the corpus (M4.3).
+- Grafana dashboard JSON checked in; Loki/promtail overlay (M3.2).

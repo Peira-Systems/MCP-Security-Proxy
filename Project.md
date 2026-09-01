@@ -16,18 +16,22 @@ response scanning, behavioural baselining, and human-in-the-loop approval.
 ## Status
 
 This began as a self-contained visualization/education demo (mock MCP servers,
-canned scenario buttons, a simulated streaming transport). As of the
-productionization effort it is being cut over to run in front of **real MCP
-traffic**:
+canned scenario buttons, a simulated streaming transport). The **productionization
+effort (M0–M4) is complete** — it runs in front of **real MCP traffic**: real
+session lifecycle, API-key auth + RBAC, full method coverage, incremental
+streaming, Postgres-backed durable state, tamper-evident audit, metrics + health
++ alerts, runtime policy management, sidecar provenance, HMAC taint markers,
+default-deny, a measured injection ruleset.
 
 - **Architecture** — plugin control plane: [`docs/adr/0001-plugin-architecture.md`](docs/adr/0001-plugin-architecture.md), [`docs/plugin-protocol.md`](docs/plugin-protocol.md)
-- **Productionization** — [`docs/adr/0002-productionization.md`](docs/adr/0002-productionization.md) (rationale), [`docs/productionization-plan.md`](docs/productionization-plan.md) (execution plan, M0–M4)
+- **Productionization** — [`docs/adr/0002-productionization.md`](docs/adr/0002-productionization.md) (rationale), [`docs/productionization-plan.md`](docs/productionization-plan.md) (M0–M4, complete)
+- **Operating it** — [threat model](docs/threat-model.md), [deployment guide](docs/deployment.md), [operator runbook](docs/runbook.md)
 
 The demo scaffolding (mock servers, scenario harness, `MockDrift`, simulated
-streaming) was removed in productionization milestone M0. Real servers are
-registered at runtime via the dashboard; tools are discovered through a live
-`initialize` + `tools/list` handshake and start untagged until an operator
-classifies them.
+streaming) was removed in milestone M0. Real servers are registered at runtime
+via the dashboard; tools are discovered through a live `initialize` +
+`tools/list` handshake and start unclassified — with default-deny on (prod), a
+call to an untagged tool is held until an operator classifies it.
 
 ## Running
 
