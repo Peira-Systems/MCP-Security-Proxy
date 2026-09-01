@@ -10,6 +10,11 @@ defmodule PhoenixElxirBeam.Application do
     children = [
       PhoenixElxirBeamWeb.Telemetry,
       PhoenixElxirBeam.Repo,
+      # Short-TTL key_id -> %ApiKey{} cache so ApiKeyAuth doesn't SELECT on
+      # every proxied request (docs/latency-budget.md). Must precede
+      # dashboard_key_init below, which invalidates the mcpk_dashboard entry
+      # on every boot (its secret rotates each start).
+      PhoenixElxirBeam.MCP.ApiKeyCache,
       # One-shot: mint the internal key the dashboard's manual tool-call flow
       # authenticates with. Transient so it doesn't restart after it exits.
       %{

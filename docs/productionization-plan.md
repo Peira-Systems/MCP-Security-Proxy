@@ -561,7 +561,8 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
 
 ### Follow-ups not blocking DoD (tracked as per-milestone "Deferred:" notes)
 
-- API-key auth cache (M3.3 finding — one DB round-trip per request); spawned as a task chip.
+- ~~API-key auth cache~~ — **done**: `MCP.ApiKeyCache` (short-TTL `key_id -> %ApiKey{}`,
+  explicitly invalidated on `revoke/1` / `set_grants/2`). See `docs/latency-budget.md`.
 - Audit retention / anchor-aware `verify_chain` for `policy_events` growth (M2.3).
 - `SessionStore` / `HoldRegistry` → Postgres (M2.2 — low value, a restart drops the client
   connection / fails parked holds closed anyway).

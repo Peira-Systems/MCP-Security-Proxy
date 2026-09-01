@@ -37,6 +37,30 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyTest do
     assert {:error, :disabled} = ApiKey.authenticate(token)
   end
 
+  test "revoking an already-cached key takes effect on the next request" do
+    {key, token} = issue()
+
+    # populates the cache (docs/latency-budget.md — auth cache follow-up)
+    assert {:ok, _} = ApiKey.authenticate(token)
+
+    assert :ok = ApiKey.revoke(key.key_id)
+    assert {:error, :disabled} = ApiKey.authenticate(token)
+  end
+
+  test "grant changes to an already-cached key take effect on the next request" do
+    {key, token} = issue(%{all_servers: false, granted_server_ids: ["real-a"]})
+
+    assert {:ok, cached} = ApiKey.authenticate(token)
+    assert ApiKey.authorize?(cached, "real-a")
+    refute ApiKey.authorize?(cached, "real-b")
+
+    {:ok, _} = ApiKey.set_grants(key.key_id, server_ids: ["real-b"])
+
+    assert {:ok, refreshed} = ApiKey.authenticate(token)
+    refute ApiKey.authorize?(refreshed, "real-a")
+    assert ApiKey.authorize?(refreshed, "real-b")
+  end
+
   test "authorize? honours all_servers and the grant list" do
     {all, _} = issue(%{all_servers: true})
     {scoped, _} = issue(%{all_servers: false, granted_server_ids: ["real-a"]})

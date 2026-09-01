@@ -27,7 +27,9 @@ end-to-end tools/call   p50 ≈ 230 ms, p99 ≈ 360 ms
 The ~200 ms gap between the instrumented phases and the end-to-end figure is
 **per-request work outside the pipeline**, most of it serialized:
 
-- `Plugs.ApiKeyAuth` — a Postgres `SELECT` on `api_keys` per request.
+- `Plugs.ApiKeyAuth` — a Postgres `SELECT` on `api_keys` per request on a
+  cache miss (now `MCP.ApiKeyCache`-fronted — see the tuning lever below;
+  these numbers predate it).
 - `PolicyEngine.record_call` — a single `GenServer.call` plus the write-through
   `policy_sessions` upsert (M2.2a).
 - `EventLogSink` — the audit hash chain is an **append-only, strictly serial**
@@ -40,11 +42,18 @@ The ~200 ms gap between the instrumented phases and the end-to-end figure is
 At single-node scale with a 10-connection pool, these queue under load. That is
 the expected shape; the pipeline budget above is what M3.3 commits to.
 
-## Tuning levers (not yet pulled — pipeline is within budget)
+## Tuning levers
 
-- **API-key auth cache** — a short-TTL (e.g. 5 s) in-memory cache of
-  `key_id → key` would remove one DB round-trip per request. Highest-value,
-  lowest-risk change; flagged as a follow-up.
+- **API-key auth cache — done.** `MCP.ApiKeyCache` is a short-TTL (default
+  5 s, `config :phoenix_elxir_beam, MCP.ApiKeyCache, ttl_ms:`) in-memory cache
+  of `key_id → %ApiKey{}`, checked before the `api_keys` `SELECT`. The
+  `secure_compare` secret check still runs on every request against the
+  cached row — caching removes the DB round-trip, not the auth check. A
+  cache hit also skips the `last_used_at` `UPDATE` (only written on the
+  cache-miss / DB path, so its granularity becomes ~`ttl_ms` under load).
+  `ApiKey.revoke/1` and `set_grants/2` invalidate the entry immediately, so
+  a revocation or grant change is visible on the very next request rather
+  than waiting out the TTL.
 - **Decision cache** (protocol §18) — deferred: the pipeline is already <1 ms,
   so caching verdicts buys nothing here.
 - **Per-plugin circuit-breaker tuning** — revisit if `mcp_plugin_run_stop_duration`

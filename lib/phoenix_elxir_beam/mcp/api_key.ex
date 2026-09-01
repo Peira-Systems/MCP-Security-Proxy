@@ -14,6 +14,10 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
   Only `sha256(secret)` is stored. The secret is a 256-bit random value, so a
   plain SHA-256 (constant-time compared) is sufficient — there is nothing to
   brute-force. The full token is shown exactly once, at issuance.
+
+  `authenticate/1` reads through `ApiKeyCache` (short-TTL, invalidated
+  explicitly on `revoke/1` / `set_grants/2`) so a proxied request doesn't pay
+  a `SELECT` every time — see `docs/latency-budget.md`.
   """
 
   use Ecto.Schema
@@ -21,6 +25,7 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
   import Ecto.Changeset
   import Ecto.Query
 
+  alias PhoenixElxirBeam.MCP.ApiKeyCache
   alias PhoenixElxirBeam.Repo
   alias __MODULE__
 
@@ -82,6 +87,13 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
   def authenticate(_token), do: {:error, :malformed}
 
   defp verify(key_id, secret) do
+    case ApiKeyCache.get(key_id) do
+      {:ok, key} -> check_secret(key, secret)
+      :miss -> verify_from_db(key_id, secret)
+    end
+  end
+
+  defp verify_from_db(key_id, secret) do
     case Repo.get_by(ApiKey, key_id: key_id) do
       nil ->
         {:error, :unknown_key}
@@ -90,12 +102,21 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
         {:error, :disabled}
 
       %ApiKey{} = key ->
-        if Plug.Crypto.secure_compare(hash(secret), key.token_hash) do
-          touch_last_used(key)
-          {:ok, key}
-        else
-          {:error, :bad_secret}
-        end
+        # last_used_at is touched here, on the DB round-trip, rather than on
+        # every cache hit — its granularity becomes ~ttl_ms under load, which
+        # is plenty for the dashboard display and avoids reintroducing a
+        # per-request write on the path this cache exists to shorten.
+        touch_last_used(key)
+        ApiKeyCache.put(key_id, key)
+        check_secret(key, secret)
+    end
+  end
+
+  defp check_secret(key, secret) do
+    if Plug.Crypto.secure_compare(hash(secret), key.token_hash) do
+      {:ok, key}
+    else
+      {:error, :bad_secret}
     end
   end
 
@@ -140,6 +161,7 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
         |> Repo.update!()
     end
 
+    ApiKeyCache.invalidate(@dashboard_key_id)
     :persistent_term.put(@dashboard_token_term, @dashboard_key_id <> "." <> secret)
     :ok
   end
@@ -151,8 +173,13 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
   @spec revoke(String.t()) :: :ok | {:error, :not_found}
   def revoke(key_id) do
     case Repo.get_by(ApiKey, key_id: key_id) do
-      nil -> {:error, :not_found}
-      key -> key |> change(disabled_at: DateTime.utc_now()) |> Repo.update() |> ok()
+      nil ->
+        {:error, :not_found}
+
+      key ->
+        result = key |> change(disabled_at: DateTime.utc_now()) |> Repo.update() |> ok()
+        ApiKeyCache.invalidate(key_id)
+        result
     end
   end
 
@@ -165,12 +192,16 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
         {:error, :not_found}
 
       key ->
-        key
-        |> change(%{
-          all_servers: Keyword.get(opts, :all_servers, key.all_servers),
-          granted_server_ids: Keyword.get(opts, :server_ids, key.granted_server_ids)
-        })
-        |> Repo.update()
+        result =
+          key
+          |> change(%{
+            all_servers: Keyword.get(opts, :all_servers, key.all_servers),
+            granted_server_ids: Keyword.get(opts, :server_ids, key.granted_server_ids)
+          })
+          |> Repo.update()
+
+        ApiKeyCache.invalidate(key_id)
+        result
     end
   end
 
