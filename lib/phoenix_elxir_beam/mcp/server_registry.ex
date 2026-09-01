@@ -52,9 +52,20 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
     GenServer.start_link(__MODULE__, %{}, name: name)
   end
 
-  @doc "Registers a real HTTP server, discovering its tools via a live handshake."
-  def register_server(name, base_url, registry \\ __MODULE__) do
-    GenServer.call(registry, {:register, name, base_url}, 15_000)
+  @doc """
+  Registers a real HTTP server, discovering its tools via a live handshake.
+
+  `opts` (all optional, M1.5 follow-up):
+
+    * `:timeout_ms` — overrides the default upstream receive timeout for
+      every request to this server (handshake, forwarded calls, streaming).
+    * `:tls_verify` — overrides `config :phoenix_elxir_beam,
+      :upstream_tls_verify` for just this server.
+
+  Either left unset inherits the proxy-wide default.
+  """
+  def register_server(name, base_url, opts \\ [], registry \\ __MODULE__) do
+    GenServer.call(registry, {:register, name, base_url, opts}, 15_000)
   end
 
   @doc """
@@ -129,8 +140,11 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   end
 
   @impl true
-  def handle_call({:register, name, base_url}, _from, state) do
-    case discover(base_url) do
+  def handle_call({:register, name, base_url, opts}, _from, state) do
+    timeout_ms = opts[:timeout_ms]
+    tls_verify = opts[:tls_verify]
+
+    case discover(base_url, %{timeout_ms: timeout_ms, tls_verify: tls_verify}) do
       {:ok, session_id, tools} ->
         server =
           apply_discovery(
@@ -141,6 +155,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
               base_url: base_url,
               session_id: session_id,
               pid: nil,
+              timeout_ms: timeout_ms,
+              tls_verify: tls_verify,
               tools: discovered_tools(tools),
               findings: [],
               last_handshake_at: DateTime.utc_now()
@@ -172,6 +188,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
                   transport: :stdio,
                   base_url: nil,
                   session_id: nil,
+                  timeout_ms: nil,
+                  tls_verify: nil,
                   pid: pid,
                   command: cmd,
                   args: args,
@@ -202,7 +220,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
         {:reply, {:error, :not_found}, state}
 
       %{transport: :http} = server ->
-        case discover(server.base_url) do
+        case discover(server.base_url, server) do
           {:ok, session_id, raw_tools} ->
             server = rehandshaked(%{server | session_id: session_id}, raw_tools)
             {:reply, {:ok, server}, put_and_broadcast(state, server)}
@@ -305,9 +323,17 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   end
 
   defp restore(%ServerRegistration{transport: "http"} = reg) do
-    case discover(reg.base_url) do
+    case discover(reg.base_url, reg) do
       {:ok, session_id, raw_tools} ->
-        conn = %{transport: :http, base_url: reg.base_url, session_id: session_id, pid: nil}
+        conn = %{
+          transport: :http,
+          base_url: reg.base_url,
+          session_id: session_id,
+          pid: nil,
+          timeout_ms: reg.timeout_ms,
+          tls_verify: reg.tls_verify
+        }
+
         {:ok, rebuild(reg, conn, raw_tools)}
 
       {:error, reason} ->
@@ -326,6 +352,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
         transport: :stdio,
         base_url: nil,
         session_id: nil,
+        timeout_ms: nil,
+        tls_verify: nil,
         pid: pid,
         command: reg.command,
         args: reg.args,
@@ -526,7 +554,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
     end
   end
 
-  defp discover(base_url) do
+  defp discover(base_url, opts) do
     init_body = %{
       "jsonrpc" => "2.0",
       "id" => 1,
@@ -538,11 +566,11 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
       }
     }
 
-    with {:ok, _init_result, init_resp} <- post_rpc(base_url, init_body, []),
+    with {:ok, _init_result, init_resp} <- post_rpc(base_url, init_body, [], opts),
          session_id = session_id_from(init_resp),
          list_body = %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list", "params" => %{}},
          {:ok, %{"tools" => tools}, _resp} <-
-           post_rpc(base_url, list_body, session_headers(session_id)) do
+           post_rpc(base_url, list_body, session_headers(session_id), opts) do
       {:ok, session_id, tools}
     else
       {:error, reason} -> {:error, reason}
@@ -550,15 +578,15 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
     end
   end
 
-  defp post_rpc(base_url, body, headers) do
+  defp post_rpc(base_url, body, headers, opts) do
     {url, transport_headers} = HttpTransport.prepare(base_url)
     headers = transport_headers ++ headers
 
     case Req.post(url,
            json: body,
            headers: headers,
-           receive_timeout: HttpTransport.receive_timeout(),
-           connect_options: HttpTransport.connect_options()
+           receive_timeout: HttpTransport.receive_timeout(opts),
+           connect_options: HttpTransport.connect_options(opts)
          ) do
       {:ok, %Req.Response{status: status, body: %{"result" => result}} = resp}
       when status in 200..299 ->

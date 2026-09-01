@@ -39,6 +39,9 @@ Dashboard → **Servers** → *Register*. Give a name and either a base URL
 - Registration is persisted; the server is re-handshaked on every proxy restart.
   An upstream that's unreachable at boot is logged and skipped (the record is
   kept) and shows as unreachable on `/health/ready`.
+- Optional per-server **Timeout (ms)** and **Skip TLS verify** fields override the
+  proxy-wide defaults for just that server — leave both blank to inherit them.
+  Skip TLS verify only for a self-signed dev/test upstream you trust.
 
 ## Classify tools
 

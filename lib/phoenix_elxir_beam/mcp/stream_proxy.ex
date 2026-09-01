@@ -80,8 +80,8 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     case Req.post(url,
            json: body,
            headers: transport_headers ++ session_headers,
-           receive_timeout: HttpTransport.receive_timeout(),
-           connect_options: HttpTransport.connect_options(),
+           receive_timeout: HttpTransport.receive_timeout(server),
+           connect_options: HttpTransport.connect_options(server),
            into: into
          ) do
       {:ok, resp} ->

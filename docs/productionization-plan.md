@@ -201,17 +201,25 @@ M1–M4 are written against the real shape once, not adapted twice.
   swept periodically. `Plugs.RateLimit` (after `ApiKeyAuth`, keyed on the authenticated
   `key_id`) → `429` + `Retry-After` over budget (config `window_ms` / `max_per_window`).
 - **Upstream `:http`** — TLS verification is on by default (Req/Finch against the system CA
-  store); `HttpTransport.connect_options/0` exposes a `config :upstream_tls_verify, false`
-  opt-out for one self-signed dev server, threaded through `discover` / `StreamProxy` /
-  `forward_to_upstream`. A single `receive_timeout` constant lives in `HttpTransport`.
+  store); `HttpTransport.connect_options/1` exposes a `config :upstream_tls_verify, false`
+  proxy-wide opt-out, threaded through `discover` / `StreamProxy` / `forward_to_upstream`.
+- **Per-server `timeout_ms` / `tls_verify` — done** (follow-up, closed, waited on M2.2's
+  durable `ServerRegistry` as planned): `ServerRegistration` gained nullable `timeout_ms` /
+  `tls_verify` columns; `register_server/4`'s new `opts` sets them at registration, they
+  round-trip through `ServerStore` and a restart, and every upstream call site
+  (`discover`/`post_rpc`, `ProxyController.forward_to_upstream`, `StreamProxy.run`) reads
+  them off the server record via `HttpTransport.receive_timeout/1` /
+  `connect_options/1` — `nil` (the default) inherits the proxy-wide default exactly as
+  before. `Health.probe/1` takes the `tls_verify` override but deliberately keeps its own
+  fixed, short probe timeout — a readiness check shouldn't wait as long as a tool call is
+  allowed to. Dashboard register-server form gained matching optional fields.
 - **TLS termination** — `runtime.exs` gains an env-driven `https` listener
   (`SSL_CERT_PATH` / `SSL_KEY_PATH`, `cipher_suite: :strong`); the reference Compose setup
   puts a reverse proxy in front instead. `prod.exs` `force_ssl: [hsts: true, …]` with
   `/health` and loopback excluded.
-- **Deferred:** per-server `timeout_ms` / `tls_verify` in the registration record (waits on
-  M2.2's durable `ServerRegistry`); retry-with-jitter (a POST retry can double-execute a
-  `tools/call` — needs per-method safety classification first); explicit Finch pool tuning
-  (Req's default pool is adequate at single-node scale).
+- **Deferred:** retry-with-jitter (a POST retry can double-execute a `tools/call` — needs
+  per-method safety classification first); explicit Finch pool tuning (Req's default pool is
+  adequate at single-node scale).
 - **Acceptance:** `rate_limiter_test` + `proxy_controller_test` — a 1.2 MB body → `413`
   before parsing; a key over a 2/window budget → `429` + `Retry-After ≥ 1`; separate keys
   have separate budgets; a new window resets.
@@ -587,7 +595,8 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
   narrow piece that was actually worth doing — `MCP.HoldStore` + boot-time
   `HoldRegistry.reap_orphans/0`, closing the silent-orphan audit gap without pretending a
   blocked HTTP request can resume across a restart.
-- Per-server `timeout_ms` / `tls_verify` in the registration record (M1.5).
+- ~~Per-server `timeout_ms` / `tls_verify` in the registration record~~ — **done** (M1.5).
+  See the M1.5 section above.
 - Downstream SSE passthrough + progress-notification relay (M1.3).
 - Injection ruleset: paraphrase / multilingual / obfuscation coverage; grow the corpus (M4.3).
 - Grafana dashboard JSON checked in; Loki/promtail overlay (M3.2).

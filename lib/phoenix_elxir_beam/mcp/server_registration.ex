@@ -18,6 +18,11 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistration do
     field :args, {:array, :string}, default: []
     field :command_label, :string
     field :tool_state, :map, default: %{}
+    # Per-server overrides of the global receive-timeout / TLS-verify
+    # defaults (M1.5 follow-up). nil = inherit the proxy-wide default; only
+    # meaningful for :http (:stdio makes no HTTP calls).
+    field :timeout_ms, :integer
+    field :tls_verify, :boolean
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -34,9 +39,12 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistration do
       :command,
       :args,
       :command_label,
-      :tool_state
+      :tool_state,
+      :timeout_ms,
+      :tls_verify
     ])
     |> validate_required([:id, :name, :transport])
     |> validate_inclusion(:transport, ["http", "stdio"])
+    |> validate_number(:timeout_ms, greater_than: 0)
   end
 end

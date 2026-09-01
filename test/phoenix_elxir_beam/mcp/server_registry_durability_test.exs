@@ -20,15 +20,19 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryDurabilityTest do
     :ok
   end
 
-  test "an http server and its operator tags come back after a restart" do
+  test "an http server, its operator tags, and its timeout_ms/tls_verify overrides come back after a restart" do
     base_url = PhoenixElxirBeam.MCPHTTPTestServer.start!()
 
     {:ok, server} =
       ServerRegistry.register_server(
         "dur-http-#{System.unique_integer([:positive])}",
         base_url,
+        [timeout_ms: 9_000, tls_verify: false],
         @name
       )
+
+    assert server.timeout_ms == 9_000
+    assert server.tls_verify == false
 
     {:ok, _} = ServerRegistry.set_tool_tags(server.id, "read_secrets", [:sensitive_read], @name)
 
@@ -36,6 +40,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryDurabilityTest do
     row = Repo.get(ServerRegistration, server.id)
     assert row.transport == "http"
     assert row.base_url == base_url
+    assert row.timeout_ms == 9_000
+    assert row.tls_verify == false
     assert row.tool_state["read_secrets"]["tags"] == ["sensitive_read"]
 
     restart_reg()
@@ -43,6 +49,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryDurabilityTest do
     restored = ServerRegistry.get_server(server.id, @name)
     assert restored.name == server.name
     assert restored.base_url == base_url
+    assert restored.timeout_ms == 9_000
+    assert restored.tls_verify == false
     assert Enum.find(restored.tools, &(&1.name == "read_secrets")).tags == [:sensitive_read]
   end
 
@@ -71,7 +79,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryDurabilityTest do
 
   test "remove_server deletes the persisted row" do
     base_url = PhoenixElxirBeam.MCPHTTPTestServer.start!()
-    {:ok, server} = ServerRegistry.register_server("dur-rm", base_url, @name)
+    {:ok, server} = ServerRegistry.register_server("dur-rm", base_url, [], @name)
     assert Repo.get(ServerRegistration, server.id)
 
     :ok = ServerRegistry.remove_server(server.id, @name)

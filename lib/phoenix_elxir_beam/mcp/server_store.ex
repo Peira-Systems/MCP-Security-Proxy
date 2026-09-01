@@ -40,14 +40,27 @@ defmodule PhoenixElxirBeam.MCP.ServerStore do
       command: server[:command],
       args: server[:args] || [],
       command_label: server[:command_label],
-      tool_state: tool_state(server[:tools] || [])
+      tool_state: tool_state(server[:tools] || []),
+      timeout_ms: server[:timeout_ms],
+      tls_verify: server[:tls_verify]
     }
 
     %ServerRegistration{}
     |> ServerRegistration.changeset(attrs)
     |> Repo.insert(
       on_conflict:
-        {:replace, [:name, :base_url, :command, :args, :command_label, :tool_state, :updated_at]},
+        {:replace,
+         [
+           :name,
+           :base_url,
+           :command,
+           :args,
+           :command_label,
+           :tool_state,
+           :timeout_ms,
+           :tls_verify,
+           :updated_at
+         ]},
       conflict_target: :id
     )
 

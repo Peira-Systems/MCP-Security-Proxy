@@ -142,15 +142,19 @@ defmodule PhoenixElxirBeam.MCP.Health do
 
   defp probe(%{transport: :stdio}), do: :down
 
-  defp probe(%{transport: :http, base_url: base_url}) do
-    {url, headers} = HttpTransport.prepare(base_url)
+  defp probe(%{transport: :http} = server) do
+    {url, headers} = HttpTransport.prepare(server.base_url)
 
+    # @probe_timeout_ms stays fixed regardless of a server's own timeout_ms
+    # override — a readiness probe should stay fast, not wait as long as a
+    # tool call is allowed to. tls_verify still applies: a probe against a
+    # self-signed dev server shouldn't itself report unreachable.
     case Req.request(
            method: :get,
            url: url,
            headers: headers,
            receive_timeout: @probe_timeout_ms,
-           connect_options: HttpTransport.connect_options(),
+           connect_options: HttpTransport.connect_options(server),
            retry: false
          ) do
       # Any HTTP answer means the socket + server are up; MCP servers commonly

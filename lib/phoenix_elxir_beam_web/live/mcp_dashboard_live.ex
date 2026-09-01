@@ -293,17 +293,21 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, refresh_history(assign(socket, :history_page, page))}
   end
 
-  def handle_event("register_server", %{"name" => name, "base_url" => base_url}, socket) do
+  def handle_event("register_server", %{"name" => name, "base_url" => base_url} = params, socket) do
     name = String.trim(name)
     base_url = String.trim(base_url)
 
     if name == "" or base_url == "" do
       {:noreply, put_flash(socket, :error, "Name and base URL are both required")}
     else
+      opts = registration_opts(params)
       liveview = self()
 
       Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-        send(liveview, {:server_registered, ServerRegistry.register_server(name, base_url)})
+        send(
+          liveview,
+          {:server_registered, ServerRegistry.register_server(name, base_url, opts)}
+        )
       end)
 
       {:noreply, socket |> assign(:registering, true) |> clear_flash()}
@@ -603,6 +607,26 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     |> assign(:history_result, EventLog.list(filters))
     |> assign(:server_options, EventLog.distinct_server_ids())
   end
+
+  # Optional per-server overrides from the register-server form (M1.5
+  # follow-up). Blank/absent = inherit the proxy-wide default.
+  defp registration_opts(params) do
+    []
+    |> put_timeout_ms(params["timeout_ms"])
+    |> put_skip_tls_verify(params["skip_tls_verify"])
+  end
+
+  defp put_timeout_ms(opts, str) when is_binary(str) do
+    case Integer.parse(String.trim(str)) do
+      {ms, _} when ms > 0 -> Keyword.put(opts, :timeout_ms, ms)
+      _ -> opts
+    end
+  end
+
+  defp put_timeout_ms(opts, _), do: opts
+
+  defp put_skip_tls_verify(opts, "true"), do: Keyword.put(opts, :tls_verify, false)
+  defp put_skip_tls_verify(opts, _), do: opts
 
   defp start_rehandshake(socket, server_id) do
     liveview = self()

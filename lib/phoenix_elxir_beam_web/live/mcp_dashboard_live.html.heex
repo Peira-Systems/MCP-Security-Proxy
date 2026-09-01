@@ -957,6 +957,27 @@
           placeholder="http://localhost:9000/mcp"
           class="input input-bordered input-sm min-w-[16rem] flex-1"
         />
+        <input
+          id="register-server-timeout"
+          type="number"
+          min="1"
+          name="timeout_ms"
+          placeholder="Timeout (ms)"
+          title="Per-server upstream receive timeout — blank inherits the proxy default"
+          class="input input-bordered input-sm w-32"
+        />
+        <label
+          class="flex items-center gap-1.5 text-xs text-base-content/60"
+          title="Skip TLS certificate verification for this server only"
+        >
+          <input
+            id="register-server-skip-tls-verify"
+            type="checkbox"
+            name="skip_tls_verify"
+            value="true"
+            class="checkbox checkbox-xs"
+          /> Skip TLS verify
+        </label>
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
           {if @registering, do: "Registering…", else: "Register"}
         </button>
@@ -1002,6 +1023,12 @@
             </button>
             <span :if={server[:last_handshake_at]} class="text-xs text-base-content/40">
               last handshake {format_time(server.last_handshake_at)}
+            </span>
+            <span :if={server[:timeout_ms]} class="text-xs text-base-content/40">
+              timeout {server.timeout_ms}ms
+            </span>
+            <span :if={server[:tls_verify] == false} class="text-xs text-warning">
+              TLS verify off
             </span>
             <button
               type="button"

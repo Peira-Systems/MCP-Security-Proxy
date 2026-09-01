@@ -568,8 +568,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     case Req.post(url,
            json: body,
            headers: headers,
-           receive_timeout: HttpTransport.receive_timeout(),
-           connect_options: HttpTransport.connect_options()
+           receive_timeout: HttpTransport.receive_timeout(server),
+           connect_options: HttpTransport.connect_options(server)
          ) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
       _ -> {:error, "upstream real server error"}
