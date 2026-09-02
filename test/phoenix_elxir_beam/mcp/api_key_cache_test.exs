@@ -41,4 +41,19 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyCacheTest do
 
     assert {:ok, %{marker: :second}} = ApiKeyCache.get(id, ttl_ms: 10_000)
   end
+
+  test "invalidate's delayed second eviction closes a stale write that lands after the immediate one" do
+    id = key_id()
+
+    # Simulates the race this exists to close: a concurrent authenticate/1
+    # call that already read the row from Postgres calls put/2 with a
+    # now-stale value *after* the immediate delete below has already run
+    # (docs -- ApiKeyCache moduledoc).
+    :ok = ApiKeyCache.invalidate(id, delay_ms: 15)
+    :ok = ApiKeyCache.put(id, %{marker: :stale_write_after_invalidate})
+    assert {:ok, _} = ApiKeyCache.get(id, ttl_ms: 60_000)
+
+    Process.sleep(30)
+    assert :miss = ApiKeyCache.get(id, ttl_ms: 60_000)
+  end
 end

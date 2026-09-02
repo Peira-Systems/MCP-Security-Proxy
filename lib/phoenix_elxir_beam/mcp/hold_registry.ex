@@ -24,7 +24,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{HoldStore, PolicyEngine}
+  alias PhoenixElxirBeam.MCP.{HoldStore, PolicyEngine, PolicyStore}
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:holds"
@@ -70,7 +70,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   end
 
   defp reap_one(row, policy_engine) do
-    tags = Enum.map(row.tags, &to_tag/1)
+    tags = Enum.map(row.tags, &PolicyStore.to_tag/1)
 
     {:block, _event} =
       PolicyEngine.finalize_hold(
@@ -91,12 +91,6 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   rescue
     error ->
       Logger.warning("HoldRegistry: reap of #{row.hold_id} failed: #{Exception.message(error)}")
-  end
-
-  defp to_tag(tag) when is_binary(tag) do
-    String.to_existing_atom(tag)
-  rescue
-    ArgumentError -> tag
   end
 
   # -- server --------------------------------------------------------------

@@ -17,6 +17,8 @@ defmodule PhoenixElxirBeam.MCP.RateLimiter do
 
   use GenServer
 
+  alias PhoenixElxirBeam.MCP.ModuleConfig
+
   @table __MODULE__
   @default_window_ms 1_000
   @default_max_per_window 20
@@ -32,8 +34,11 @@ defmodule PhoenixElxirBeam.MCP.RateLimiter do
   """
   @spec check(String.t(), keyword()) :: :ok | {:error, pos_integer()}
   def check(key_id, opts \\ []) do
-    window_ms = opts[:window_ms] || config(:window_ms, @default_window_ms)
-    max = opts[:max_per_window] || config(:max_per_window, @default_max_per_window)
+    window_ms = opts[:window_ms] || ModuleConfig.get(__MODULE__, :window_ms, @default_window_ms)
+
+    max =
+      opts[:max_per_window] ||
+        ModuleConfig.get(__MODULE__, :max_per_window, @default_max_per_window)
 
     now = System.system_time(:millisecond)
     window = div(now, window_ms)
@@ -64,7 +69,7 @@ defmodule PhoenixElxirBeam.MCP.RateLimiter do
 
   @impl true
   def handle_info(:sweep, state) do
-    window_ms = config(:window_ms, @default_window_ms)
+    window_ms = ModuleConfig.get(__MODULE__, :window_ms, @default_window_ms)
     keep_from = div(System.system_time(:millisecond), window_ms) - 1
 
     :ets.select_delete(@table, [{{{:_, :"$1"}, :_}, [{:<, :"$1", keep_from}], [true]}])
@@ -73,10 +78,4 @@ defmodule PhoenixElxirBeam.MCP.RateLimiter do
   end
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_every_ms)
-
-  defp config(key, default) do
-    :phoenix_elxir_beam
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(key, default)
-  end
 end

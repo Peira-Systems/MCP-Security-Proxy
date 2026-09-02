@@ -91,7 +91,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyStore do
   defp jsonable(v) when is_atom(v) and not is_boolean(v) and not is_nil(v), do: Atom.to_string(v)
   defp jsonable(v), do: v
 
-  defp to_tag(tag) when is_binary(tag) do
+  @doc "Converts a persisted string tag back to its atom, if that atom already exists (else back verbatim)."
+  @spec to_tag(String.t()) :: atom() | String.t()
+  def to_tag(tag) when is_binary(tag) do
     String.to_existing_atom(tag)
   rescue
     ArgumentError -> tag

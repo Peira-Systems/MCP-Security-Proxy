@@ -16,12 +16,23 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyCache do
   call `invalidate/1` directly, so a revocation or grant change is visible on
   the very next request rather than waiting out the TTL — the TTL only bounds
   staleness for a key nobody explicitly changed (e.g. `last_used_at` drift).
+
+  `invalidate/1` also closes a narrower race: a request that already read
+  the row from Postgres — via `ApiKey.verify_from_db/2`, concurrently with a
+  revoke — can still call `put/2` with that now-stale value *after* the
+  immediate delete below has run, re-caching a revoked key for up to
+  `ttl_ms`. A second, delayed eviction (`double_invalidate_delay_ms`,
+  default 2s — comfortably longer than a realistic DB round-trip) closes
+  that window without needing to serialize reads against writes.
   """
 
   use GenServer
 
+  alias PhoenixElxirBeam.MCP.ModuleConfig
+
   @table __MODULE__
   @default_ttl_ms 5_000
+  @default_double_invalidate_delay_ms 2_000
   @sweep_every_ms 60_000
   # entries older than this (well past any sane ttl_ms) are swept even if
   # never read again, so a churn of one-off keys doesn't grow the table
@@ -35,7 +46,7 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyCache do
   @doc "Cached key for `key_id`, if present and within `ttl_ms`."
   @spec get(String.t(), keyword()) :: {:ok, struct()} | :miss
   def get(key_id, opts \\ []) do
-    ttl_ms = opts[:ttl_ms] || config(:ttl_ms, @default_ttl_ms)
+    ttl_ms = opts[:ttl_ms] || ModuleConfig.get(__MODULE__, :ttl_ms, @default_ttl_ms)
 
     case :ets.lookup(@table, key_id) do
       [{^key_id, key, inserted_at}] ->
@@ -57,10 +68,27 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyCache do
     :ok
   end
 
-  @doc "Evicts `key_id`, if cached. Called on revoke/grant changes."
-  @spec invalidate(String.t()) :: :ok
-  def invalidate(key_id) do
+  @doc """
+  Evicts `key_id`, if cached, and schedules a second eviction shortly after
+  (see the moduledoc — closes a write-through race with a concurrent
+  `ApiKey.verify_from_db/2`). Called on revoke/grant changes. `opts[:delay_ms]`
+  overrides the configured delay (tests only — real callers use the default).
+  """
+  @spec invalidate(String.t(), keyword()) :: :ok
+  def invalidate(key_id, opts \\ []) do
     :ets.delete(@table, key_id)
+
+    Process.send_after(
+      __MODULE__,
+      {:invalidate_again, key_id},
+      opts[:delay_ms] ||
+        ModuleConfig.get(
+          __MODULE__,
+          :double_invalidate_delay_ms,
+          @default_double_invalidate_delay_ms
+        )
+    )
+
     :ok
   end
 
@@ -88,11 +116,11 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyCache do
     {:noreply, state}
   end
 
-  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_every_ms)
-
-  defp config(key, default) do
-    :phoenix_elxir_beam
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(key, default)
+  @impl true
+  def handle_info({:invalidate_again, key_id}, state) do
+    :ets.delete(@table, key_id)
+    {:noreply, state}
   end
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_every_ms)
 end

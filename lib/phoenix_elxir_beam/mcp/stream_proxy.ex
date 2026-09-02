@@ -30,10 +30,19 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
   actual tool result is never relayed early — it still goes through the full
   `chunk` + `post_call` scan/redaction pipeline exactly as before and is
   written as the terminal SSE frame (or, on `:cut`/`:error`, a terminal SSE
-  error frame) only once that decision is made. Progress notifications carry
-  no tool-result content, so relaying them ahead of that decision doesn't
-  open a new exfiltration path — only the final frame does, and it is still
-  fully gated.
+  error frame) only once that decision is made.
+
+  A progress notification is only ever relayed for a chunk of raw bytes
+  *after* that same chunk has cleared the `chunk` phase (`feed/3` runs
+  `run_chunk_phase/2` before `relay_progress/2`, and only relays if `status`
+  is still `:streaming` afterward) — a `chunk`-phase `deny` on a chunk
+  withholds everything in it, progress notifications included, exactly like
+  it withholds tool-result content. This matters because the `chunk` phase
+  is not just a byte-count budget: whatever policy plugins are configured
+  for it see the notification's raw bytes (including any free-form
+  `params.message` an upstream sets) before any part of it can reach the
+  client, so a compromised upstream can't use a progress notification as an
+  unscanned side channel for its result content.
 
   `run/4` returns its ordinary result (unchanged) when `opts[:conn]` is
   omitted; when given, it returns `{result, relay_conn}` — `relay_conn` is
@@ -153,27 +162,34 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   defp feed(%{status: :streaming} = st, data, is_sse) do
     st = %{st | buffer: st.buffer <> data, bytes: st.bytes + byte_size(data)}
-    st = if is_sse and st.relay?, do: relay_progress(st, data), else: st
 
-    cond do
-      st.status != :streaming ->
-        st
+    st =
+      cond do
+        System.monotonic_time(:millisecond) > st.deadline ->
+          %{st | status: :error, reason: "upstream stream exceeded its deadline"}
 
-      System.monotonic_time(:millisecond) > st.deadline ->
-        %{st | status: :error, reason: "upstream stream exceeded its deadline"}
+        st.bytes > st.max_buffer ->
+          %{
+            st
+            | status: :error,
+              reason: "upstream response exceeded the #{st.max_buffer}-byte ceiling"
+          }
 
-      st.bytes > st.max_buffer ->
-        %{
+        st.entries == [] ->
           st
-          | status: :error,
-            reason: "upstream response exceeded the #{st.max_buffer}-byte ceiling"
-        }
 
-      st.entries == [] ->
-        st
+        true ->
+          run_chunk_phase(st, data)
+      end
 
-      true ->
-        run_chunk_phase(st, data)
+    # Only relay this chunk's progress notification(s) once the chunk phase
+    # has cleared this same data — see the moduledoc. `st.downstream` (not
+    # just `st.relay?`) is checked here too so the frame-parsing work below
+    # is skipped entirely for a client that never asked for relay.
+    if is_sse and st.relay? and not is_nil(st.downstream) and st.status == :streaming do
+      relay_progress(st, data)
+    else
+      st
     end
   end
 
@@ -211,11 +227,21 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   # -- downstream progress relay ----------------------------------------
 
+  # A single SSE frame pathologically fragmented across many tiny chunks
+  # without ever completing (a blank line never arrives) would otherwise
+  # make `extract_sse_frames/1` re-scan an ever-growing `sse_pending` on
+  # every one of those chunks. Real progress notifications are small; cap
+  # how much unterminated data we'll keep trying to complete and drop it
+  # past that — a safe failure mode (the notification, if there was one,
+  # just doesn't relay; the final result is unaffected either way).
+  @max_pending_sse_bytes 65_536
+
   # Extracts complete SSE frames (records end at a blank line) from
   # `st.sse_pending <> data`, relays any `notifications/progress` message
   # found in each, and keeps whatever's left of a not-yet-complete frame.
   defp relay_progress(st, data) do
     {frames, rest} = extract_sse_frames(st.sse_pending <> data)
+    rest = if byte_size(rest) > @max_pending_sse_bytes, do: "", else: rest
     st = %{st | sse_pending: rest}
     Enum.reduce(frames, st, &relay_frame/2)
   end
@@ -235,12 +261,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   defp progress_message(frame) do
     frame
-    |> String.split(~r/\r?\n/)
-    |> Enum.flat_map(fn
-      "data: " <> rest -> [rest]
-      "data:" <> rest -> [String.trim_leading(rest)]
-      _ -> []
-    end)
+    |> data_lines()
     |> Enum.find_value(:error, fn line ->
       case Jason.decode(line) do
         {:ok, %{"method" => "notifications/progress"} = msg} -> {:ok, msg}
@@ -266,7 +287,9 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     |> Plug.Conn.send_chunked(200)
   end
 
-  defp sse_data(msg), do: "data: #{Jason.encode!(msg)}\n\n"
+  @doc "Formats `msg` as one SSE `data:` record — the wire shape used for both a relayed progress notification and a terminal frame (`PhoenixElxirBeamWeb.MCP.ProxyController.deliver/3`)."
+  @spec sse_data(map()) :: String.t()
+  def sse_data(msg), do: "data: #{Jason.encode!(msg)}\n\n"
 
   # -- terminal --------------------------------------------------------
 
@@ -322,9 +345,14 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     |> Enum.any?(&String.contains?(&1, "text/event-stream"))
   end
 
-  defp sse_data_frames(buffer) do
-    buffer
-    |> String.split("\n")
+  defp sse_data_frames(buffer), do: data_lines(buffer)
+
+  # Shared by `progress_message/1` (one already-isolated frame) and
+  # `sse_data_frames/1` (a whole raw buffer, possibly several frames) — the
+  # `data:` line format is the same either way.
+  defp data_lines(text) do
+    text
+    |> String.split(~r/\r?\n/)
     |> Enum.flat_map(fn
       "data: " <> rest -> [rest]
       "data:" <> rest -> [String.trim_leading(rest)]

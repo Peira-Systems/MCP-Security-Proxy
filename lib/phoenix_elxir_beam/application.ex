@@ -51,11 +51,17 @@ defmodule PhoenixElxirBeam.Application do
       # lifetime never resolved — HoldRegistry itself boots empty every
       # time, so this is what closes the audit gap a restart would
       # otherwise leave (docs/productionization-plan.md M2.2 follow-up).
-      # Must follow PolicyEngine, which it calls into.
+      # Must follow PolicyEngine, which it calls into, and must *finish*
+      # strictly before Endpoint starts serving — unlike the Task-based
+      # one-shots above, this runs synchronously in `start/2` (returning
+      # `:ignore`, a valid "no child process needed" child-spec result) so
+      # the supervisor's own sequential child-start blocks on it. A
+      # brand-new hold parked the instant Endpoint opens must never land in
+      # the same snapshot this reap already read as "leftover from before".
       %{
         id: :hold_reap,
-        start: {Task, :start_link, [&reap_orphan_holds/0]},
-        restart: :transient
+        start: {__MODULE__, :hold_reap_child, []},
+        restart: :temporary
       },
       # Scheduled audit-chain tamper-evidence check + off-DB checkpoints.
       PhoenixElxirBeam.MCP.AuditIntegrity,
@@ -93,12 +99,26 @@ defmodule PhoenixElxirBeam.Application do
       :ok
   end
 
-  defp reap_orphan_holds do
+  @doc false
+  # Child-spec start function for :hold_reap — runs synchronously (see the
+  # comment at its call site) and returns `:ignore`, since there is no
+  # process to keep around once the reap has run.
+  def hold_reap_child do
     PhoenixElxirBeam.MCP.HoldRegistry.reap_orphans()
+    :ignore
   rescue
     error ->
       require Logger
-      Logger.warning("hold reap skipped: #{Exception.message(error)}")
-      :ok
+      message = Exception.message(error)
+      Logger.warning("hold reap skipped: #{message}")
+
+      PhoenixElxirBeam.MCP.Alerts.emit(
+        :hold_reap_failed,
+        :warning,
+        "orphaned-hold reap at boot failed: #{message} — any hold left over " <>
+          "from a previous restart stays unresolved until the next boot"
+      )
+
+      :ignore
   end
 end

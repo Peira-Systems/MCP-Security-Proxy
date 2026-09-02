@@ -380,10 +380,14 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   end
 
   # Metadata reads (tools/list, resources/list, …): forward verbatim, no scan.
+  # Never relays (no scan means no content to defer a decision on), but
+  # still goes through `measured_upstream/2` for telemetry, so it returns
+  # the same `{legacy_result, relay_conn}` wrapper `fetch_streamed/4` does —
+  # `relay_conn` is always `nil` here.
   defp forward(conn, server_id, body, id) do
     case upstream_request(server_id, body) do
-      {:ok, resp_body} -> json(conn, resp_body)
-      {:error, message} -> upstream_error(conn, id, message)
+      {{:ok, resp_body}, _relay_conn} -> json(conn, resp_body)
+      {{:error, message}, _relay_conn} -> upstream_error(conn, id, message)
     end
   end
 
@@ -510,7 +514,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   defp deliver(conn, nil, body), do: json(conn, body)
 
   defp deliver(_conn, relay_conn, body) do
-    case Plug.Conn.chunk(relay_conn, "data: #{Jason.encode!(body)}\n\n") do
+    case Plug.Conn.chunk(relay_conn, StreamProxy.sse_data(body)) do
       {:ok, conn} -> conn
       {:error, _} -> relay_conn
     end
@@ -591,17 +595,20 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     end
   end
 
+  # Always returns the `{legacy_result, relay_conn}` wrapper `measured_upstream/2`
+  # now uniformly expects from every callback it wraps — `relay_conn` is
+  # always `nil` here (no scan, so nothing to relay ahead of a decision).
   defp upstream_request(server_id, body) do
     case ServerRegistry.get_server(server_id) do
-      nil -> {:error, no_server_message(server_id)}
+      nil -> {{:error, no_server_message(server_id)}, nil}
       server -> measured_upstream(server.transport, fn -> forward_to_upstream(server, body) end)
     end
   end
 
   defp forward_to_upstream(%{transport: :stdio, pid: pid}, body) do
     case StdioServer.request(pid, body) do
-      {:ok, resp_body} -> {:ok, resp_body}
-      {:error, _reason} -> {:error, "upstream real server error"}
+      {:ok, resp_body} -> {{:ok, resp_body}, nil}
+      {:error, _reason} -> {{:error, "upstream real server error"}, nil}
     end
   end
 
@@ -610,15 +617,18 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
     {url, transport_headers} = HttpTransport.prepare(server.base_url)
     headers = transport_headers ++ session_headers
 
-    case Req.post(url,
-           json: body,
-           headers: headers,
-           receive_timeout: HttpTransport.receive_timeout(server),
-           connect_options: HttpTransport.connect_options(server)
-         ) do
-      {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
-      _ -> {:error, "upstream real server error"}
-    end
+    result =
+      case Req.post(url,
+             json: body,
+             headers: headers,
+             receive_timeout: HttpTransport.receive_timeout(server),
+             connect_options: HttpTransport.connect_options(server)
+           ) do
+        {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
+        _ -> {:error, "upstream real server error"}
+      end
+
+    {result, nil}
   end
 
   # -- helpers ----------------------------------------------------------

@@ -70,14 +70,27 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
     },
     %{
       "name" => "progress_then_cut",
-      "description" => "A progress notification alone big enough to trip StreamGuard",
+      "description" => "A safe progress frame, then a padded one that trips StreamGuard",
       "inputSchema" => %{"type" => "object", "properties" => %{}},
-      # Same transport as progress_export, but its one padded progress frame
-      # alone exceeds config/test.exs's 500-byte StreamGuard budget -- so the
-      # chunk-phase deny fires *after* relay has already started. Exercises
-      # `deliver/3`'s relay-active :cut path.
+      # First frame is small and relays safely; the second, padded one pushes
+      # the running total over config/test.exs's 500-byte StreamGuard budget
+      # -- so the chunk-phase deny fires on a *later* chunk, after relay has
+      # already started. Exercises `deliver/3`'s relay-active :cut path.
       "sse" => true,
       "cut" => true
+    },
+    %{
+      "name" => "cut_before_relay",
+      "description" => "One oversized progress frame that trips StreamGuard on its own",
+      "inputSchema" => %{"type" => "object", "properties" => %{}},
+      # A single frame, padded so it alone exceeds the 500-byte budget --
+      # the chunk phase must deny it before StreamProxy ever gets a chance
+      # to relay it (feed/3 relays a chunk's progress notification only
+      # *after* that chunk clears the chunk phase). Proves a chunk that
+      # trips the budget is never relayed, whatever it contains.
+      "sse" => true,
+      "cut" => true,
+      "immediate" => true
     }
   ]
 
@@ -164,19 +177,30 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
 
   # Answers over text/event-stream: either two notifications/progress frames
   # (no `id` — they're notifications, not responses) then the final result
-  # frame, or (for the "cut" tool) one deliberately oversized progress frame
-  # that trips StreamGuard before any result is ever sent.
+  # frame, or (for the "cut" tool) a small progress frame that safely relays
+  # (well under StreamGuard's test budget alone), *then* a second, padded
+  # one that pushes the running total over budget — the cut has to land on
+  # this second, later chunk, after relay is already active, for the test
+  # to exercise the relay-active :cut path rather than the never-relayed one.
   defp send_sse_response(conn, %{"params" => %{"name" => name}, "id" => id}) do
     tool = Enum.find(@tools, &(&1["name"] == name))
     conn = conn |> put_resp_content_type("text/event-stream") |> send_chunked(200)
 
-    if tool["cut"] do
-      send_sse_frames(conn, [progress_frame(id, 1, String.duplicate("x", 600))])
-    else
-      result =
-        Jason.encode!(ok(id, %{"content" => [%{"type" => "text", "text" => tool["response"]}]}))
+    cond do
+      tool["immediate"] ->
+        send_sse_frames(conn, [progress_frame(id, 1, String.duplicate("x", 600))])
 
-      send_sse_frames(conn, [progress_frame(id, 33), progress_frame(id, 66), result])
+      tool["cut"] ->
+        send_sse_frames(conn, [
+          progress_frame(id, 1),
+          progress_frame(id, 2, String.duplicate("x", 500))
+        ])
+
+      true ->
+        result =
+          Jason.encode!(ok(id, %{"content" => [%{"type" => "text", "text" => tool["response"]}]}))
+
+        send_sse_frames(conn, [progress_frame(id, 33), progress_frame(id, 66), result])
     end
   end
 

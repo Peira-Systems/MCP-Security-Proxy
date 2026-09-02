@@ -136,15 +136,32 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyStreamingTest do
     session_id = handshake(token, sid)
     conn = tool_call_accepting_sse(token, session_id, sid, "progress_then_cut")
 
-    # relay was already engaged by the oversized progress frame, so the cut
-    # must be delivered as a terminal SSE frame, not a fresh json/2 response
-    # (which would crash on an already-:chunked conn).
+    # the first (small) progress frame relayed safely before the second,
+    # padded one pushed the running total over budget, so the cut must be
+    # delivered as a terminal SSE frame, not a fresh json/2 response (which
+    # would crash on an already-:chunked conn).
     assert ["text/event-stream" <> _] = get_resp_header(conn, "content-type")
 
     assert [%{"method" => "notifications/progress"}, %{"error" => %{"code" => -32002}} = last] =
              sse_frames(conn)
 
     assert last["error"]["message"] =~ "budget"
+  end
+
+  test "a progress notification packaged in the same chunk that trips StreamGuard is never relayed",
+       %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call_accepting_sse(token, session_id, sid, "cut_before_relay")
+
+    # the chunk phase runs (and denies) before StreamProxy ever relays that
+    # chunk's progress notification -- nothing was ever sent to the client,
+    # so this falls back to a plain JSON response exactly like a non-relayed
+    # cut, not a terminal SSE frame. This is the direct regression test for
+    # the fix: a chunk that trips the budget must never reach the client,
+    # progress notifications included, however small the window.
+    assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+    assert %{"error" => %{"code" => -32002, "message" => message}} = json_response(conn, 200)
+    assert message =~ "budget"
   end
 
   test "StreamGuard cutting a non-relayed stream is unaffected by this change", %{

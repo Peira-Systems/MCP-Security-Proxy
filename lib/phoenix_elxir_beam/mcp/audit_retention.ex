@@ -26,7 +26,7 @@ defmodule PhoenixElxirBeam.MCP.AuditRetention do
   import Ecto.Query
   require Logger
 
-  alias PhoenixElxirBeam.MCP.PolicyEvent
+  alias PhoenixElxirBeam.MCP.{ModuleConfig, PolicyEvent}
   alias PhoenixElxirBeam.Repo
 
   @doc """
@@ -64,7 +64,5 @@ defmodule PhoenixElxirBeam.MCP.AuditRetention do
     PolicyEvent |> where([e], e.hash == ^hash) |> select([e], e.id) |> Repo.one()
   end
 
-  defp retention_days do
-    :phoenix_elxir_beam |> Application.get_env(__MODULE__, []) |> Keyword.get(:retention_days)
-  end
+  defp retention_days, do: ModuleConfig.get(__MODULE__, :retention_days)
 end

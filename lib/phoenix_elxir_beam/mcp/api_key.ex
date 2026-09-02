@@ -102,13 +102,25 @@ defmodule PhoenixElxirBeam.MCP.ApiKey do
         {:error, :disabled}
 
       %ApiKey{} = key ->
-        # last_used_at is touched here, on the DB round-trip, rather than on
-        # every cache hit — its granularity becomes ~ttl_ms under load, which
-        # is plenty for the dashboard display and avoids reintroducing a
+        # The row is cached regardless of whether *this* request's secret
+        # turns out to be right — that's what lets a later, correct attempt
+        # against the same key_id skip the DB. last_used_at only touches on
+        # an actual successful auth (matching the pre-cache behavior); a
+        # wrong-secret attempt must not make the key look actively used.
+        # It's touched here, on the DB round-trip, rather than on every
+        # cache hit — its granularity becomes ~ttl_ms under load, which is
+        # plenty for the dashboard display and avoids reintroducing a
         # per-request write on the path this cache exists to shorten.
-        touch_last_used(key)
         ApiKeyCache.put(key_id, key)
-        check_secret(key, secret)
+
+        case check_secret(key, secret) do
+          {:ok, _} = ok ->
+            touch_last_used(key)
+            ok
+
+          error ->
+            error
+        end
     end
   end
 

@@ -261,6 +261,35 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert "list_files" in Enum.map(tools, & &1["name"])
   end
 
+  test "a :forward call (tools/list) reports its real telemetry outcome, not always :ok", %{
+    sid: sid,
+    token: token
+  } do
+    test_pid = self()
+    handler_id = "forward-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:mcp, :upstream, :request, :stop],
+      fn _event, _measurements, metadata, _config -> send(test_pid, {:telemetry, metadata}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    session_id = handshake(token, sid)
+
+    assert %{"result" => _} =
+             method_call(token, session_id, sid, "tools/list", %{}) |> json_response(200)
+
+    # Regression for `measured_upstream/2`'s destructure once silently
+    # binding `outcome` to a bare atom for every :forward-disposition call
+    # (forward/4 -> upstream_request/2), always reporting :ok regardless of
+    # what actually happened. This only proves the success path still wires
+    # correctly through the now-uniform {legacy_result, relay_conn} shape.
+    assert_receive {:telemetry, %{outcome: :ok, transport: :stdio}}
+  end
+
   test "resources/read content is scanned and taints the session", %{sid: sid, token: token} do
     session_id = handshake(token, sid)
 

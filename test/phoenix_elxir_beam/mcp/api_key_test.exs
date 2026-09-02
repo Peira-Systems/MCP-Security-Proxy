@@ -1,7 +1,7 @@
 defmodule PhoenixElxirBeam.MCP.ApiKeyTest do
   use PhoenixElxirBeam.DataCase, async: true
 
-  alias PhoenixElxirBeam.MCP.ApiKey
+  alias PhoenixElxirBeam.MCP.{ApiKey, ApiKeyCache}
 
   defp issue(attrs \\ %{}) do
     {:ok, key, token} =
@@ -28,6 +28,24 @@ defmodule PhoenixElxirBeam.MCP.ApiKeyTest do
     assert {:error, :unknown_key} = ApiKey.authenticate("mcpk_nope.whatever")
     assert {:error, :malformed} = ApiKey.authenticate("no-dot")
     assert {:error, :malformed} = ApiKey.authenticate(nil)
+  end
+
+  test "last_used_at only updates on a successful authentication, not a failed one" do
+    {key, token} = issue()
+    assert Repo.get(ApiKey, key.id).last_used_at == nil
+
+    assert {:error, :bad_secret} = ApiKey.authenticate(key.key_id <> ".wrong")
+    assert Repo.get(ApiKey, key.id).last_used_at == nil
+
+    # touch_last_used only ever runs on the DB (cache-miss) path -- a real
+    # cache hit here would legitimately also skip the write (see the
+    # ApiKey moduledoc), which would make this assert nil regardless of the
+    # fix under test. Force the next call back through the DB path so this
+    # actually isolates "does a *successful* DB-path auth still touch it".
+    :ok = ApiKeyCache.invalidate(key.key_id)
+
+    assert {:ok, _} = ApiKey.authenticate(token)
+    assert Repo.get(ApiKey, key.id).last_used_at != nil
   end
 
   test "a revoked key no longer authenticates" do
