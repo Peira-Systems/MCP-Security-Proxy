@@ -27,6 +27,7 @@ import re
 import sys
 import json
 import os
+import unicodedata
 
 # The ruleset path may be passed as argv[1] (so it is covered by the sidecar's
 # provenance pin, M3.5); otherwise it sits next to this file.
@@ -82,7 +83,14 @@ RULES, RULESET_VERSION = load_rules()
 
 def scan_text(text):
     """Returns a list of {id, category, severity, confidence, evidence} hits."""
-    text = text or ""
+    # NFKC-normalize before matching: folds Unicode *compatibility* variants
+    # (fullwidth/halfwidth forms, certain ligatures) down to their ordinary
+    # ASCII/Latin equivalents, so e.g. fullwidth "ｉｇｎｏｒｅ" matches the
+    # same rule as "ignore" without every pattern needing a fullwidth
+    # alternative. It does NOT fold cross-script homoglyphs (Cyrillic "о" has
+    # no compatibility decomposition to Latin "o") or reverse other encodings
+    # (base64, reversed text) -- those remain a documented ruleset limit.
+    text = unicodedata.normalize("NFKC", text or "")
     hits = []
     for rule in RULES:
         m = rule["re"].search(text)

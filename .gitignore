@@ -59,3 +59,7 @@ npm-debug.log
 # Dialyzer PLT files (rebuilt from deps; cached in CI).
 /priv/plts/
 
+# Python bytecode cache for the sidecar plugins (priv/plugins/*.py).
+__pycache__/
+*.pyc
+

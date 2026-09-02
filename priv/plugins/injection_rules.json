@@ -1,12 +1,12 @@
 {
-  "version": "1.0.0",
-  "updated": "2026-08-31",
+  "version": "1.1.0",
+  "updated": "2026-09-02",
   "notes": "Maintained ruleset for prompt-injection / tool-poisoning detection (M4.3). Patterns are Python `re`, matched case-insensitively with DOTALL. Keep patterns tight enough that the benign corpus (priv/plugins/corpus/) stays under the false-positive budget in score_injection.py.",
   "rules": [
     {
       "id": "override-ignore-previous",
       "category": "instruction_override",
-      "pattern": "\\b(ignore|disregard|forget|override)\\b[^.\\n]{0,40}\\b(previous|prior|above|earlier|preceding|all)\\b[^.\\n]{0,30}\\b(instruction|instructions|prompt|prompts|message|messages|context|rule|rules|direction|directions)\\b",
+      "pattern": "\\b(ignore|disregard|forget|override)\\b(?:[^.\\n]|\\n(?!\\s*\\n)){0,40}\\b(previous|prior|above|earlier|preceding|all)\\b(?:[^.\\n]|\\n(?!\\s*\\n)){0,30}\\b(instruction|instructions|prompt|prompts|message|messages|context|rule|rules|direction|directions)\\b",
       "severity": "critical",
       "confidence": 0.95
     },
