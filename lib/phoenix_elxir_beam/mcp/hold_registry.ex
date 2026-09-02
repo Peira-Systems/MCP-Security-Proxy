@@ -91,6 +91,12 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   rescue
     error ->
       Logger.warning("HoldRegistry: reap of #{row.hold_id} failed: #{Exception.message(error)}")
+  catch
+    # finalize_hold/6 is a bare GenServer.call — a timeout under boot-time DB
+    # pressure (exactly when there's most likely to be something to reap)
+    # exits rather than raises, and `rescue` alone would let it escape.
+    :exit, reason ->
+      Logger.warning("HoldRegistry: reap of #{row.hold_id} timed out: #{inspect(reason)}")
   end
 
   # -- server --------------------------------------------------------------

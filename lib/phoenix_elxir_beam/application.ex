@@ -107,18 +107,27 @@ defmodule PhoenixElxirBeam.Application do
     PhoenixElxirBeam.MCP.HoldRegistry.reap_orphans()
     :ignore
   rescue
-    error ->
-      require Logger
-      message = Exception.message(error)
-      Logger.warning("hold reap skipped: #{message}")
+    error -> hold_reap_failed(Exception.message(error))
+  catch
+    # This runs synchronously as part of the supervisor's own child-start
+    # sequence (see the comment at its call site) — an uncaught exit here
+    # doesn't just skip a hold, it fails the whole boot. reap_one/2 already
+    # catches a timed-out finalize_hold/6 per row; this is the outer net for
+    # anything else on this path that can exit rather than raise.
+    :exit, reason -> hold_reap_failed(inspect(reason))
+  end
 
-      PhoenixElxirBeam.MCP.Alerts.emit(
-        :hold_reap_failed,
-        :warning,
-        "orphaned-hold reap at boot failed: #{message} — any hold left over " <>
-          "from a previous restart stays unresolved until the next boot"
-      )
+  defp hold_reap_failed(detail) do
+    require Logger
+    Logger.warning("hold reap skipped: #{detail}")
 
-      :ignore
+    PhoenixElxirBeam.MCP.Alerts.emit(
+      :hold_reap_failed,
+      :warning,
+      "orphaned-hold reap at boot failed: #{detail} — any hold left over " <>
+        "from a previous restart stays unresolved until the next boot"
+    )
+
+    :ignore
   end
 end

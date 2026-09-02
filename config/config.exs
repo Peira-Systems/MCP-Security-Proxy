@@ -37,7 +37,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditIntegrity, interval_ms: 900_000
 
 # Opt-in pruning of policy_events rows older than N days, anchored so it
-# never touches a row an ongoing verify_since/2 chain check still needs
+# never touches a row an ongoing verify_chain/0 chain check still needs
 # (docs/deployment.md#retention--backups). Off (nil) by default -- the log
 # grows unbounded until an operator sets AUDIT_RETENTION_DAYS.
 config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditRetention, retention_days: nil

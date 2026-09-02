@@ -71,4 +71,21 @@ defmodule PhoenixElxirBeam.MCP.HoldReapTest do
     assert HoldStore.all() == []
     assert :ok = HoldRegistry.reap_orphans(engine)
   end
+
+  test "an unreachable policy_engine during reap is caught, not left to crash the caller" do
+    h = leftover_hold()
+    :ok = HoldStore.persist(h)
+
+    # finalize_hold/6 is a bare GenServer.call -- calling a name nothing is
+    # registered under exits with {:noproc, ...}, the same class of failure
+    # as a real call timeout under boot-time DB pressure. `rescue` alone
+    # does not catch an exit; this proves the `catch :exit` fix does. Since
+    # this runs synchronously as part of the supervisor's own boot sequence
+    # (Application.hold_reap_child/0), an uncaught exit here would fail the
+    # whole application start, not just skip one hold.
+    assert :ok = HoldRegistry.reap_orphans(:this_policy_engine_does_not_exist)
+
+    # left behind, not resolved -- picked up by the next boot's reap instead.
+    assert Repo.get(PendingHold, h.id)
+  end
 end
