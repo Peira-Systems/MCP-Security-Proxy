@@ -16,11 +16,14 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   Three properties this engine is deliberately built around, since it sits
   as a policy decision point in a live request path:
 
-    * Session lookups fail closed. `record_call/5` never treats a
-      session_id it has no record of as a fresh, clean session — that
-      would let lost state (a restart) or a caller that bypassed
+    * Session lookups fail closed. State is a write-through Postgres-backed
+      cache (`PhoenixElxirBeam.MCP.PolicyStore`): a `record_call/5` for a
+      session not in memory first tries to rehydrate it from the DB, so a
+      session survives a restart with its accumulated tags + taint. Only a
+      session unknown to *both* the cache and Postgres is a block, not a
+      skip — that would otherwise let a caller that bypassed
       `ensure_session/2` silently re-open a session an earlier call had
-      already tainted. A lookup miss is a block, not a skip.
+      already tainted.
     * Every verdict is receipted, allows included, not just blocks —
       otherwise "no record" and "recorded allow" are indistinguishable.
       Receipts fan out to every registered `auditSink`
@@ -35,11 +38,16 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, HoldRegistry, Pipeline}
+  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, HoldRegistry, Pipeline, PolicyStore}
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:events"
+
+  # Periodic cleanup of orphaned `policy_sessions` rows (SessionStore's GC
+  # normally deletes them via `drop_session/2`; this is the backstop).
+  @sweep_every_ms 60 * 60_000
+  @session_max_age_s 24 * 3600
 
   @unknown_session_reason "blocked: no session state on record for this session id"
   @missing_session_reason "blocked: no session id presented"
@@ -102,12 +110,26 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @doc """
+  Discards all per-session state (tags, taint provenance, call log) for
+  `session_id`. Called by `PhoenixElxirBeam.MCP.SessionStore` on session
+  teardown so policy state does not outlive the MCP session that created it.
+  A later `record_call/5` for the same id then fails closed as an unknown
+  session, which is the intended posture.
+  """
+  def drop_session(session_id, name \\ __MODULE__) do
+    GenServer.call(name, {:drop_session, session_id})
+  end
+
+  @doc """
   Resolves a previously `:hold`-ed call once the operator (or the timeout)
   has decided. `:approved` accumulates the call's tags and receipts an `:ok`
-  event; `:denied` receipts a `:blocked` event.
+  event; `:denied` receipts a `:blocked` event. `:orphaned` is the same
+  fail-closed shape as `:denied`, distinguished only by its reason — it's
+  `HoldRegistry.reap_orphans/0`'s outcome for a hold a previous process
+  lifetime never resolved (a restart, deploy, or crash interrupted it).
   """
   def finalize_hold(session_id, server_id, tool_name, tags, outcome, name \\ __MODULE__)
-      when outcome in [:approved, :denied] do
+      when outcome in [:approved, :denied, :orphaned] do
     GenServer.call(name, {:finalize_hold, session_id, server_id, tool_name, tags, outcome})
   end
 
@@ -154,11 +176,38 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     )
   end
 
+  @doc """
+  Receipts a `:policy_change` event — an operator changed runtime policy
+  (plugin toggle/reorder, tag assignment, quarantine clear). Routed through
+  this GenServer so it lands on the same serial hash chain as verdicts
+  (`PhoenixElxirBeam.MCP.PolicyChange`). `change` carries `:actor`, `:kind`,
+  `:target`, `:before`, `:after`, `:summary`.
+  """
+  def record_policy_change(change, name \\ __MODULE__) do
+    GenServer.call(name, {:record_policy_change, change})
+  end
+
   # Server callbacks
 
   @impl true
   def init(%{registry: registry, hold_registry: hold_registry}) do
+    Process.send_after(self(), :sweep, @sweep_every_ms)
     {:ok, %{sessions: %{}, registry: registry, hold_registry: hold_registry}}
+  end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    try do
+      n = PolicyStore.sweep(@session_max_age_s)
+      if n > 0, do: Logger.info("PolicyEngine: swept #{n} stale policy_sessions row(s)")
+    rescue
+      error -> Logger.warning("PolicyEngine: session sweep failed: #{inspect(error)}")
+    catch
+      :exit, _ -> :ok
+    end
+
+    Process.send_after(self(), :sweep, @sweep_every_ms)
+    {:noreply, state}
   end
 
   @impl true
@@ -172,6 +221,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         call_log: [],
         call_count: 0
       })
+
+    persist_session(state, session_id)
 
     event = %Event{
       id: generate_id(),
@@ -194,20 +245,28 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   def handle_call({:ensure_session, session_id, agent_id}, _from, state) do
-    state =
-      case Map.get(state.sessions, session_id) do
-        nil ->
-          put_in(state.sessions[session_id], %{
-            scenario: nil,
-            tags: MapSet.new(),
-            taint: [],
-            agent_id: agent_id,
-            call_log: [],
-            call_count: 0
-          })
+    {existing, state} = cache_session(state, session_id)
 
-        %{agent_id: nil} = existing when not is_nil(agent_id) ->
-          put_in(state.sessions[session_id], %{existing | agent_id: agent_id})
+    state =
+      case existing do
+        nil ->
+          state =
+            put_in(state.sessions[session_id], %{
+              scenario: nil,
+              tags: MapSet.new(),
+              taint: [],
+              agent_id: agent_id,
+              call_log: [],
+              call_count: 0
+            })
+
+          persist_session(state, session_id)
+          state
+
+        %{agent_id: nil} when not is_nil(agent_id) ->
+          state = put_in(state.sessions[session_id].agent_id, agent_id)
+          persist_session(state, session_id)
+          state
 
         _existing ->
           state
@@ -223,14 +282,45 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     {:reply, {:block, event}, state}
   end
 
+  def handle_call({:record_policy_change, change}, _from, state) do
+    event = %Event{
+      id: generate_id(),
+      session_id: nil,
+      scenario: nil,
+      server_id: change[:server_id],
+      tool_name: nil,
+      tags: [],
+      status: :policy_change,
+      reason: change.summary,
+      timestamp: DateTime.utc_now()
+    }
+
+    # `before` / `after` must already be JSON-safe (bool / string / list) — the
+    # caller (PhoenixElxirBeam.MCP.PolicyChange) guarantees that.
+    decision = %{
+      plugin: change.actor,
+      verdict: :policy_change,
+      reason: change.summary,
+      kind: to_string(change.kind),
+      target: to_string(change.target),
+      before: change.before,
+      after: change.after
+    }
+
+    receipt(event, state, decisions: [decision])
+    {:reply, {:ok, event.id}, state}
+  end
+
   def handle_call(
         {:record_response_scan, session_id, server_id, tool_name, findings, withheld,
          taint_sources},
         _from,
         state
       ) do
+    {_session, state} = cache_session(state, session_id)
     scenario = get_in(state.sessions, [session_id, :scenario])
     state = accumulate_taint(state, session_id, taint_sources)
+    persist_session(state, session_id)
 
     {status, reason} =
       if withheld, do: {:blocked, withheld}, else: {:ok, nil}
@@ -258,7 +348,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   def handle_call({:record_call, session_id, server_id, tool_name, tags, arguments}, _from, state) do
-    case Map.get(state.sessions, session_id) do
+    {cached, state} = cache_session(state, session_id)
+
+    case cached do
       nil ->
         event =
           blocked_event(session_id, nil, server_id, tool_name, tags, @unknown_session_reason)
@@ -312,6 +404,19 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   end
 
   @impl true
+  def handle_call({:drop_session, session_id}, _from, state) do
+    try do
+      PolicyStore.delete(session_id)
+    rescue
+      _ -> :ok
+    catch
+      :exit, _ -> :ok
+    end
+
+    {:reply, :ok, %{state | sessions: Map.delete(state.sessions, session_id)}}
+  end
+
+  @impl true
   def handle_call({:complete_session, session_id}, _from, state) do
     scenario = get_in(state.sessions, [session_id, :scenario])
 
@@ -329,20 +434,28 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
   @impl true
   def handle_call({:finalize_hold, session_id, server_id, tool_name, tags, outcome}, _from, state) do
+    {_session, state} = cache_session(state, session_id)
     scenario = get_in(state.sessions, [session_id, :scenario])
 
     {reply_verdict, status, reason, state} =
       case outcome do
         :approved ->
           state =
-            if Map.has_key?(state.sessions, session_id),
-              do: accumulate_tags(state, session_id, tags),
-              else: state
+            if Map.has_key?(state.sessions, session_id) do
+              state = accumulate_tags(state, session_id, tags)
+              persist_session(state, session_id)
+              state
+            else
+              state
+            end
 
           {:allow, :ok, nil, state}
 
         :denied ->
           {:block, :blocked, "network egress denied by operator", state}
+
+        :orphaned ->
+          {:block, :blocked, "held call orphaned by a proxy restart", state}
       end
 
     event = %Event{
@@ -394,8 +507,81 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     end
   end
 
-  defp taint_key(%{secret: secret}) when is_binary(secret), do: {:secret, secret}
-  defp taint_key(source), do: {source[:origin_tool], source[:finding_type]}
+  defp taint_key(source) do
+    case tval(source, :markers) do
+      [_ | _] = markers -> {:markers, Enum.sort(markers)}
+      _ -> {tval(source, :origin_tool), tval(source, :finding_type)}
+    end
+  end
+
+  defp tval(m, k) when is_map(m), do: Map.get(m, k) || Map.get(m, to_string(k))
+
+  # In-memory cache first; on a miss, hydrate from Postgres (a session that
+  # survived a restart). Returns `{session_map | nil, state}` with the cache
+  # populated on a hit.
+  defp cache_session(state, session_id) do
+    case Map.get(state.sessions, session_id) do
+      nil ->
+        case load_session(session_id) do
+          nil -> {nil, state}
+          loaded -> {loaded, put_in(state.sessions[session_id], loaded)}
+        end
+
+      session ->
+        {session, state}
+    end
+  end
+
+  defp load_session(session_id) do
+    case PolicyStore.load(session_id) do
+      nil ->
+        nil
+
+      %{tags: tags, taint: taint, agent_id: agent_id, call_count: cc} ->
+        %{
+          scenario: nil,
+          tags: tags,
+          taint: taint,
+          agent_id: agent_id,
+          call_log: [],
+          call_count: cc
+        }
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  # Write-through. Fail-soft: a persist failure is logged, not raised — a
+  # crash here would drop every in-flight session's cache, a worse outcome
+  # than a rare lost accumulation.
+  defp persist_session(state, session_id) do
+    case Map.get(state.sessions, session_id) do
+      nil ->
+        :ok
+
+      session ->
+        try do
+          PolicyStore.persist(session_id, session)
+        rescue
+          error in [DBConnection.OwnershipError] ->
+            Logger.debug("PolicyEngine: no DB connection to persist session #{session_id}")
+            {:error, error}
+
+          error ->
+            Logger.error(
+              "PolicyEngine: failed to persist session #{session_id}: #{inspect(error)}"
+            )
+
+            {:error, error}
+        catch
+          :exit, _ -> :ok
+        end
+    end
+
+    :ok
+  end
 
   defp reply_verdict(
          {session, session_id, server_id, tool_name, tags},
@@ -417,6 +603,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       timestamp: DateTime.utc_now()
     }
 
+    persist_session(state, session_id)
     receipt(event, state, opts)
     {:reply, {if(status == :ok, do: :allow, else: :block), event}, state}
   end
@@ -451,6 +638,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       timestamp: DateTime.utc_now()
     }
 
+    persist_session(state, session_id)
     receipt(event, state, opts)
     {:reply, {:hold, hold_id, hold.timeout_ms, event}, state}
   end

@@ -8,107 +8,59 @@
         <h1 class="text-base font-semibold tracking-tight">MCP Security Proxy</h1>
       </div>
 
-      <div class="flex items-center gap-1.5 text-sm">
-        <span :if={@running} class="inline-flex items-center gap-1.5 font-medium text-primary">
-          <span class="size-2 animate-pulse rounded-full bg-primary"></span>
-          running {@scenario && "(#{@scenario})"}
-        </span>
-        <span :if={!@running} class="inline-flex items-center gap-1.5 text-base-content/50">
-          <span class="size-2 rounded-full bg-base-content/30"></span> idle
-        </span>
-      </div>
+      <span class="text-sm text-base-content/50">
+        {length(@real_servers)} server(s) · {@session_count} session(s) · {length(@plugins)} plugin(s)
+      </span>
 
-      <div class="ml-auto flex items-center gap-2">
-        <button
-          id="run-benign-btn"
-          type="button"
-          phx-click="run_benign"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run benign session
-        </button>
-        <button
-          id="run-attack-btn"
-          type="button"
-          phx-click="run_attack"
-          disabled={@running}
-          class="btn btn-primary btn-sm"
-        >
-          Run attack simulation
-        </button>
-        <button
-          id="run-untagged-exfil-btn"
-          type="button"
-          phx-click="run_untagged_exfil"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run untagged exfil
-        </button>
-        <button
-          id="run-restricted-agent-btn"
-          type="button"
-          phx-click="run_restricted_agent"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run restricted agent
-        </button>
-        <button
-          id="run-secret-arg-exfil-btn"
-          type="button"
-          phx-click="run_secret_arg_exfil"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run secret-in-arg exfil
-        </button>
-        <button
-          id="run-bulk-exfil-btn"
-          type="button"
-          phx-click="run_bulk_exfil"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run bulk exfil
-        </button>
-        <button
-          id="run-response-injection-btn"
-          type="button"
-          phx-click="run_response_injection"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run response injection
-        </button>
-        <button
-          id="run-rapid-probing-btn"
-          type="button"
-          phx-click="run_rapid_probing"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run rapid probing
-        </button>
-        <button
-          id="run-stream-exfil-btn"
-          type="button"
-          phx-click="run_stream_exfil"
-          disabled={@running}
-          class="btn btn-outline btn-sm"
-        >
-          Run stream exfil
-        </button>
-        <button
-          id="run-rug-pull-btn"
-          type="button"
-          phx-click="run_rug_pull_demo"
-          disabled={@registering}
-          class="btn btn-outline btn-sm"
-        >
-          Run rug-pull demo
-        </button>
+      <span
+        :if={@integrity == :ok}
+        class="ml-auto inline-flex items-center gap-1.5 text-xs text-success"
+      >
+        <span class="size-2 rounded-full bg-success"></span> audit chain verified
+      </span>
+
+      <span class={[
+        "inline-flex items-center gap-2 text-xs text-base-content/60",
+        @integrity != :ok && "ml-auto"
+      ]}>
+        {@current_user.email}
+        <span class="rounded-full bg-base-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
+          {@current_user.role}
+        </span>
+        <.link href={~p"/logout"} method="delete" class="link link-hover">log out</.link>
+      </span>
+    </div>
+
+    <div
+      :if={match?({:broken, _}, @integrity)}
+      class="flex flex-wrap items-center gap-3 rounded-box border border-error bg-error/15 px-4 py-3"
+    >
+      <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-error/25 text-error">
+        ⚠
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-error">Audit chain integrity check FAILED</div>
+        <div class="text-xs text-base-content/70">{elem(@integrity, 1)}</div>
+      </div>
+    </div>
+
+    <div
+      :if={@alerts != []}
+      class="rounded-box border border-warning/50 bg-warning/10 px-4 py-3 space-y-1"
+    >
+      <div class="text-sm font-semibold text-warning">
+        Operational alerts ({length(@alerts)})
+      </div>
+      <div :for={alert <- Enum.take(@alerts, 5)} class="text-xs text-base-content/70">
+        <span class={[
+          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+          alert.severity == :critical && "bg-error/20 text-error",
+          alert.severity == :warning && "bg-warning/20 text-warning"
+        ]}>
+          {alert.key}
+        </span>
+        {alert.detail}
+        <span class="text-base-content/40">· {Calendar.strftime(alert.at, "%H:%M:%S")}</span>
       </div>
     </div>
 
@@ -243,7 +195,7 @@
               </text>
             </g>
 
-            <%= for %{id: server_id} <- @graph do %>
+            <%= for %{id: server_id, name: server_name} <- @graph do %>
               <% {sx, sy} = @positions["server-" <> server_id] %>
               <g
                 id={"node-server-" <> server_id}
@@ -286,7 +238,7 @@
                   dy="4"
                   class="fill-base-content text-[11px] font-semibold"
                 >
-                  {server_id}
+                  {server_name}
                 </text>
               </g>
             <% end %>
@@ -587,7 +539,7 @@
               id="mcp-event-feed-empty"
               class="hidden only:block px-3 py-6 text-center text-neutral-content/40"
             >
-              No events yet — run a scenario to see tool calls appear here.
+              No events yet — make a tool call through the proxy to see it here.
             </div>
             <div
               :for={{dom_id, event} <- @streams.events}
@@ -770,7 +722,10 @@
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Plugins</h2>
         <span class="text-xs text-base-content/40">
-          {length(@plugins)} registered — the proxy pipeline; in-process Elixir modules and out-of-process sidecars
+          {length(@plugins)} registered — the proxy pipeline, in evaluation order
+        </span>
+        <span :if={not @can_operate} class="ml-auto text-[10px] text-base-content/40">
+          read-only (operator role required to change)
         </span>
       </div>
       <div class="divide-y divide-base-300/60">
@@ -800,7 +755,7 @@
           <span
             :if={plugin.health}
             class={[
-              "ml-auto rounded-full px-2 py-0.5 text-[10px]",
+              "rounded-full px-2 py-0.5 text-[10px]",
               case plugin.health do
                 :ready -> "bg-success/15 text-success"
                 :circuit_open -> "bg-warning/20 text-warning"
@@ -810,10 +765,167 @@
           >
             {plugin.health}
           </span>
+
+          <div :if={@can_operate} class="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs px-1"
+              phx-click="move_plugin"
+              phx-value-name={plugin.name}
+              phx-value-dir="up"
+              title="move earlier"
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs px-1"
+              phx-click="move_plugin"
+              phx-value-name={plugin.name}
+              phx-value-dir="down"
+              title="move later"
+            >
+              ▼
+            </button>
+            <button
+              type="button"
+              class={["btn btn-xs", if(plugin.enabled, do: "btn-ghost", else: "btn-primary")]}
+              phx-click="toggle_plugin"
+              phx-value-name={plugin.name}
+              phx-value-enabled={to_string(!plugin.enabled)}
+            >
+              {if plugin.enabled, do: "disable", else: "enable"}
+            </button>
+          </div>
         </div>
         <div :if={@plugins == []} class="px-4 py-3 text-center text-sm text-base-content/50">
           No plugins registered.
         </div>
+      </div>
+    </div>
+
+    <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Policy changes</h2>
+        <span class="text-xs text-base-content/40">
+          runtime changes, recorded on the audit hash chain
+        </span>
+      </div>
+      <div class="divide-y divide-base-300/60">
+        <div
+          :for={change <- @policy_changes}
+          class="flex flex-wrap items-center gap-2 px-4 py-2 text-xs"
+        >
+          <span class="text-base-content/40">{format_time(change.at)}</span>
+          <span class="rounded-full bg-base-200 px-1.5 py-0.5 text-[10px] font-semibold">
+            {change.kind}
+          </span>
+          <span class="min-w-0 flex-1 text-base-content/80">{change.summary}</span>
+          <button
+            :if={@can_operate and change.kind in ["plugin_enabled", "plugin_order"]}
+            type="button"
+            class="btn btn-ghost btn-xs"
+            phx-click="revert_policy_change"
+            phx-value-event_id={change.event_id}
+          >
+            revert
+          </button>
+        </div>
+        <div
+          :if={@policy_changes == []}
+          class="px-4 py-3 text-center text-sm text-base-content/50"
+        >
+          No runtime policy changes yet.
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
+        <h2 class="text-sm font-semibold">Client keys</h2>
+        <span class="text-xs text-base-content/40">
+          {length(@api_keys)} — API keys downstream MCP clients authenticate with
+        </span>
+      </div>
+
+      <div
+        :if={@new_token}
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 bg-success/10 px-4 py-2.5 text-sm"
+      >
+        <span class="font-semibold text-success">New token (shown once):</span>
+        <code phx-no-curly-interpolation class="rounded bg-base-300 px-2 py-0.5 font-mono text-xs">
+          {@new_token}
+        </code>
+        <button type="button" phx-click="dismiss_token" class="btn btn-ghost btn-xs ml-auto">
+          dismiss
+        </button>
+      </div>
+
+      <.form
+        for={to_form(%{})}
+        id="issue-key-form"
+        phx-submit="issue_key"
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-2.5"
+      >
+        <input
+          type="text"
+          name="principal"
+          placeholder="Principal (e.g. acme-prod)"
+          class="input input-bordered input-sm w-44"
+        />
+        <input
+          type="text"
+          name="agent_id"
+          placeholder="agent://acme-prod"
+          class="input input-bordered input-sm w-44"
+        />
+        <label class="flex items-center gap-1 text-xs">
+          <input type="checkbox" name="all_servers" value="true" class="checkbox checkbox-xs" />
+          all servers
+        </label>
+        <label :for={s <- @real_servers} class="flex items-center gap-1 text-xs">
+          <input type="checkbox" name={"servers[#{s.id}]"} value="1" class="checkbox checkbox-xs" />
+          {s.name}
+        </label>
+        <button type="submit" class="btn btn-primary btn-sm">Issue key</button>
+      </.form>
+
+      <div :if={@api_keys == []} class="p-4 text-center text-sm text-base-content/50">
+        No client keys issued yet.
+      </div>
+
+      <div
+        :for={key <- @api_keys}
+        class="flex flex-wrap items-center gap-2 border-t border-base-300 px-4 py-2 text-sm first:border-t-0"
+      >
+        <span class="font-mono text-xs">{key.key_id}</span>
+        <span class="font-semibold">{key.principal}</span>
+        <span class="text-xs text-base-content/50">{key.agent_id}</span>
+        <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] text-base-content/60">
+          {if key.all_servers,
+            do: "all servers",
+            else: "#{length(key.granted_server_ids)} server(s)"}
+        </span>
+        <span
+          :if={key.disabled_at}
+          class="rounded-full bg-error/20 px-2 py-0.5 text-[10px] font-semibold text-error"
+        >
+          revoked
+        </span>
+        <span class="text-[10px] text-base-content/40">
+          {if key.last_used_at,
+            do: "last used #{format_datetime(key.last_used_at)}",
+            else: "never used"}
+        </span>
+        <button
+          :if={!key.disabled_at}
+          type="button"
+          phx-click="revoke_key"
+          phx-value-key_id={key.key_id}
+          class="btn btn-ghost btn-xs text-error ml-auto"
+        >
+          Revoke
+        </button>
       </div>
     </div>
 
@@ -845,34 +957,30 @@
           placeholder="http://localhost:9000/mcp"
           class="input input-bordered input-sm min-w-[16rem] flex-1"
         />
+        <input
+          id="register-server-timeout"
+          type="number"
+          min="1"
+          name="timeout_ms"
+          placeholder="Timeout (ms)"
+          title="Per-server upstream receive timeout — blank inherits the proxy default"
+          class="input input-bordered input-sm w-32"
+        />
+        <label
+          class="flex items-center gap-1.5 text-xs text-base-content/60"
+          title="Skip TLS certificate verification for this server only"
+        >
+          <input
+            id="register-server-skip-tls-verify"
+            type="checkbox"
+            name="skip_tls_verify"
+            value="true"
+            class="checkbox checkbox-xs"
+          /> Skip TLS verify
+        </label>
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
           {if @registering, do: "Registering…", else: "Register"}
         </button>
-        <span class="text-xs text-base-content/40">or spawn:</span>
-        <button
-          type="button"
-          phx-click="register_stdio_preset"
-          phx-value-preset="filesystem"
-          disabled={@registering}
-          class="btn btn-outline btn-xs"
-        >
-          + filesystem
-        </button>
-        <button
-          type="button"
-          phx-click="register_stdio_preset"
-          phx-value-preset="fetch"
-          disabled={@registering}
-          class="btn btn-outline btn-xs"
-        >
-          + fetch
-        </button>
-        <span class="ml-auto flex items-center gap-1.5 text-xs text-base-content/40">
-          session <span class="font-mono">{@manual_session_id}</span>
-          <button type="button" phx-click="new_manual_session" class="btn btn-ghost btn-xs">
-            new
-          </button>
-        </span>
       </.form>
 
       <div
@@ -913,18 +1021,14 @@
             >
               Re-handshake
             </button>
-            <button
-              :if={mock_server_id(server)}
-              type="button"
-              phx-click="simulate_drift"
-              phx-value-server_id={server.id}
-              disabled={@registering}
-              class="btn btn-ghost btn-xs text-warning"
-            >
-              ☣ Simulate drift
-            </button>
             <span :if={server[:last_handshake_at]} class="text-xs text-base-content/40">
               last handshake {format_time(server.last_handshake_at)}
+            </span>
+            <span :if={server[:timeout_ms]} class="text-xs text-base-content/40">
+              timeout {server.timeout_ms}ms
+            </span>
+            <span :if={server[:tls_verify] == false} class="text-xs text-warning">
+              TLS verify off
             </span>
             <button
               type="button"
@@ -975,6 +1079,29 @@
               >
                 quarantined
               </span>
+              <span
+                :if={tool.tags == []}
+                class="rounded-full bg-base-content/10 px-2 py-0.5 text-[10px] font-semibold text-base-content/50"
+              >
+                unclassified
+              </span>
+              <button
+                :if={
+                  tool.tags == [] and Map.get(tool, :suggested_tags, []) != [] and @can_operate
+                }
+                type="button"
+                phx-click="apply_suggested_tags"
+                phx-value-server_id={server.id}
+                phx-value-tool_name={tool.name}
+                class="rounded-full bg-info/20 px-2 py-0.5 text-[10px] font-medium text-info hover:bg-info/30"
+                title={"suggested: #{Enum.join(Map.get(tool, :suggested_tags, []), ", ")}"}
+              >
+                apply suggested: {Enum.map_join(
+                  Map.get(tool, :suggested_tags, []),
+                  ", ",
+                  &to_string/1
+                )}
+              </button>
               <span class="text-xs text-base-content/60">{tool.description}</span>
               <span class="ml-auto flex items-center gap-1.5">
                 <button

@@ -19,13 +19,14 @@ defmodule PhoenixElxirBeam.MCP.Event do
     findings: []
   ]
 
-  @type status :: :session_start | :ok | :blocked | :held | :session_complete
+  @type status ::
+          :session_start | :ok | :blocked | :held | :session_complete | :policy_change
 
   @type t :: %__MODULE__{
           id: String.t(),
-          session_id: String.t(),
+          session_id: String.t() | nil,
           agent_id: String.t() | nil,
-          scenario: atom(),
+          scenario: atom() | nil,
           server_id: String.t() | nil,
           tool_name: String.t() | nil,
           tags: [atom()],

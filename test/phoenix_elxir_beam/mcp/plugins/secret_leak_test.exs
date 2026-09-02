@@ -1,7 +1,7 @@
 defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeakTest do
   use ExUnit.Case, async: true
 
-  alias PhoenixElxirBeam.MCP.CallContext
+  alias PhoenixElxirBeam.MCP.{CallContext, TaintMarker}
   alias PhoenixElxirBeam.MCP.Plugins.SecretLeak
 
   defp ctx(text_parts) do
@@ -50,7 +50,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeakTest do
     refute Map.has_key?(decision.mutations, :add_taint_sources)
   end
 
-  test "a hit proposes a taint source with the raw secret and a redacted hint" do
+  test "a hit proposes a taint source with HMAC markers (not the raw secret) and a hint" do
     assert {:ok, [_ | _], decision} =
              SecretLeak.scan(:post_call, ctx(["API_KEY=sk-demo-FAKE1234 trailing"]))
 
@@ -58,19 +58,26 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeakTest do
     assert source.origin_tool == "read_secrets"
     assert source.finding_type == "secret_leak"
     assert %DateTime{} = source.at
-    assert source.secret == "API_KEY=sk-demo-FAKE1234"
-    assert source.hint != source.secret
+    refute Map.has_key?(source, :secret)
+    assert source.hint != "API_KEY=sk-demo-FAKE1234"
     refute source.hint =~ "FAKE1234"
+
+    # the markers are exactly the ones TaintMarker would produce for this secret
+    expected = TaintMarker.markers_for_secret("s1", "API_KEY=sk-demo-FAKE1234")
+    assert Enum.sort(source.markers) == Enum.sort(expected)
   end
 
   test "distinct secrets in one response each get their own taint source" do
     text = "AKIAIOSFODNN7EXAMPLE and also token: abcdefgh12345678"
     assert {:ok, _findings, decision} = SecretLeak.scan(:post_call, ctx([text]))
 
-    secrets = Enum.map(decision.mutations.add_taint_sources, & &1.secret)
-    assert "AKIAIOSFODNN7EXAMPLE" in secrets
-    assert length(secrets) == length(Enum.uniq(secrets))
-    assert length(secrets) >= 2
+    sources = decision.mutations.add_taint_sources
+    aws = TaintMarker.markers_for_secret("s1", "AKIAIOSFODNN7EXAMPLE")
+    assert Enum.any?(sources, fn s -> Enum.sort(s.markers) == Enum.sort(aws) end)
+
+    all_markers = Enum.flat_map(sources, & &1.markers)
+    assert length(all_markers) == length(Enum.uniq(all_markers))
+    assert length(sources) >= 2
   end
 
   test "manifest declares a non-blocking post_call scanner" do

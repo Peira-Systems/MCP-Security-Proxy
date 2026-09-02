@@ -4,7 +4,8 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   operator approves or denies them (`docs/plugin-protocol.md` §9.4).
 
     * `park/2` — from `PolicyEngine`: registers the hold, starts the
-      `timeout_ms` timer, broadcasts `{:hold_pending, hold}` on `"mcp:holds"`.
+      `timeout_ms` timer, broadcasts `{:hold_pending, hold}` on `"mcp:holds"`,
+      and write-through persists it via `PhoenixElxirBeam.MCP.HoldStore`.
       Returns the `hold_id` immediately (does not block).
     * `await/3` — from the `ProxyController` request process: blocks until the
       hold resolves, then returns `{:ok, :approved | :denied}`. Returns
@@ -12,11 +13,18 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
     * `resolve/3` — from the dashboard LiveView: `:approve` / `:deny`.
     * the timer firing resolves with the spec's `on_timeout`.
 
-  The registry is pure: it never calls `PolicyEngine`. The controller drives
-  `PolicyEngine.finalize_hold/6` off the `await/3` result.
+  The registry itself is in-memory and pure: it never calls `PolicyEngine`
+  directly for a live hold. The controller drives `PolicyEngine.finalize_hold/6`
+  off the `await/3` result. `reap_orphans/0` is the exception — it runs once
+  at boot to finalize holds a previous process lifetime never resolved; see
+  its doc and `HoldStore` for why persisting a *pending* hold is worthwhile
+  even though nothing about resuming the wait itself is (M2.2 follow-up).
   """
 
   use GenServer
+  require Logger
+
+  alias PhoenixElxirBeam.MCP.{HoldStore, PolicyEngine, PolicyStore}
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:holds"
@@ -47,6 +55,50 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   @spec pending(GenServer.server()) :: [map()]
   def pending(server \\ __MODULE__), do: GenServer.call(server, :pending)
 
+  @doc """
+  Finalizes, as `:orphaned`, every hold `HoldStore` still has a row for.
+  Meant to run exactly once, early at boot (before the endpoint is serving
+  and so before any new hold can be parked) — every row found is therefore
+  a leftover from a previous process lifetime that never resolved. Requires
+  `policy_engine` to already be running. Best-effort per row; one bad row
+  does not stop the rest from being reaped.
+  """
+  @spec reap_orphans(GenServer.server()) :: :ok
+  def reap_orphans(policy_engine \\ PolicyEngine) do
+    HoldStore.all() |> Enum.each(&reap_one(&1, policy_engine))
+    :ok
+  end
+
+  defp reap_one(row, policy_engine) do
+    tags = Enum.map(row.tags, &PolicyStore.to_tag/1)
+
+    {:block, _event} =
+      PolicyEngine.finalize_hold(
+        row.session_id,
+        row.server_id,
+        row.tool_name,
+        tags,
+        :orphaned,
+        policy_engine
+      )
+
+    HoldStore.resolve(row.hold_id)
+
+    Logger.info(
+      "mcp.hold orphaned id=#{row.hold_id} session=#{row.session_id} " <>
+        "server=#{row.server_id} tool=#{row.tool_name} (interrupted by a restart)"
+    )
+  rescue
+    error ->
+      Logger.warning("HoldRegistry: reap of #{row.hold_id} failed: #{Exception.message(error)}")
+  catch
+    # finalize_hold/6 is a bare GenServer.call — a timeout under boot-time DB
+    # pressure (exactly when there's most likely to be something to reap)
+    # exits rather than raises, and `rescue` alone would let it escape.
+    :exit, reason ->
+      Logger.warning("HoldRegistry: reap of #{row.hold_id} timed out: #{inspect(reason)}")
+  end
+
   # -- server --------------------------------------------------------------
 
   @impl true
@@ -65,6 +117,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
       session_id: spec[:session_id],
       server_id: spec[:server_id],
       tool_name: spec[:tool_name],
+      tags: spec[:tags] || [],
       timeout_ms: timeout_ms,
       created_at: DateTime.utc_now(),
       on_timeout: spec.on_timeout,
@@ -73,6 +126,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
       resolution: nil
     }
 
+    HoldStore.persist(hold)
     broadcast({:hold_pending, public(hold)})
     {:reply, id, put_in(state.holds[id], hold)}
   end
@@ -124,6 +178,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   defp finalize(state, hold, resolution) do
     if hold.timer, do: Process.cancel_timer(hold.timer)
     if hold.waiter, do: GenServer.reply(hold.waiter, {:ok, resolution})
+    HoldStore.resolve(hold.id)
     broadcast({:hold_resolved, hold.id, resolution})
     %{state | holds: Map.delete(state.holds, hold.id)}
   end

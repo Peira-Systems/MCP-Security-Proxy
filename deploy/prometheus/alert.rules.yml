@@ -1,0 +1,96 @@
+groups:
+  - name: mcp-security-proxy
+    rules:
+      # The app stopped responding to scrapes.
+      - alert: ProxyDown
+        expr: up{job="mcp-security-proxy"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MCP Security Proxy is not being scraped"
+          description: "Prometheus cannot scrape app:4000/metrics for 1m."
+
+      # Any operational alert the app raised (MCP.Alerts): audit-chain
+      # verification failure, a fail_open plugin firing open, a sidecar circuit
+      # breaker opening, an upstream going unreachable.
+      - alert: ProxyOperationalAlert
+        expr: increase(mcp_alert_count[5m]) > 0
+        labels:
+          severity: "{{ $labels.severity }}"
+        annotations:
+          summary: "Proxy raised a {{ $labels.key }} alert"
+          description: "mcp_alert_count increased for key={{ $labels.key }} severity={{ $labels.severity }}."
+
+      # A sidecar plugin's circuit breaker tripped (subset of the above, called
+      # out for routing).
+      - alert: SidecarCircuitOpen
+        expr: increase(mcp_alert_count{key="sidecar_circuit_open"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A sidecar plugin circuit breaker opened"
+
+      # Audit-chain verification failed (M2.3).
+      - alert: AuditChainBroken
+        expr: increase(mcp_alert_count{key="audit_integrity"}[20m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit hash chain failed verification"
+          description: "Investigate immediately — see docs/observability.md."
+
+      # Plugins timing out / crashing rather than returning a verdict.
+      - alert: PluginErrorsElevated
+        expr: |
+          sum(rate(mcp_plugin_run_stop_duration_count{outcome=~"timeout|crash|bad_return"}[5m])) by (plugin)
+            > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Plugin {{ $labels.plugin }} is failing to evaluate"
+          description: ">0.2/s timeouts/crashes/bad-returns over 10m."
+
+      # Upstream MCP server error rate.
+      - alert: UpstreamErrorRateHigh
+        expr: |
+          sum(rate(mcp_upstream_request_stop_duration_count{outcome="error"}[5m]))
+            /
+          clamp_min(sum(rate(mcp_upstream_request_stop_duration_count[5m])), 0.001)
+            > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10% of upstream requests are failing"
+
+      # Registered upstream(s) failed the readiness probe / boot restore.
+      - alert: UpstreamsUnreachable
+        expr: mcp_servers_unreachable > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} registered upstream(s) unreachable"
+
+      # Request-path phase latency budget (see docs/latency-budget.md, M3.3).
+      - alert: PipelineLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(mcp_pipeline_run_stop_duration_bucket{phase="pre_call"}[5m])) by (le))
+            > 50
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "pre_call pipeline p99 over 50ms for 15m"
+
+      # Session table growing without bound (leak / no GC).
+      - alert: SessionTableGrowth
+        expr: mcp_sessions_count > 1000 and deriv(mcp_sessions_count[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Live MCP session count high and still climbing"

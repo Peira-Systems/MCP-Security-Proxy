@@ -8,17 +8,18 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
   (`PhoenixElxirBeam.MCP.Redaction`) to the response `content` before returning it.
 
   When it finds anything it also proposes `add_taint_sources` mutations — one
-  per distinct secret — carrying the raw matched string (`secret`, kept only
-  in the proxy's in-memory session state, never broadcast or persisted) and a
-  redacted `hint`. `PhoenixElxirBeam.MCP.Plugins.TaintGuard` uses the session
-  provenance to block later egress; `PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard`
-  uses the `secret` to catch the exact bytes reappearing in a later call's
-  arguments.
+  per distinct secret — carrying HMAC **taint markers**
+  (`PhoenixElxirBeam.MCP.TaintMarker`, M4.1) for the secret and its common
+  encodings, plus a redacted `hint`. The raw secret is never stored, broadcast,
+  or persisted. `PhoenixElxirBeam.MCP.Plugins.TaintGuard` uses the session
+  provenance to block later egress coarsely; `PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard`
+  matches the markers against a later call's arguments (defeating
+  base64 / hex / URL-encoding evasion).
   """
 
   @behaviour PhoenixElxirBeam.MCP.Plugin.Scanner
 
-  alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding}
+  alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding, TaintMarker}
   alias PhoenixElxirBeam.MCP.Plugin.Manifest
 
   @version "0.1.0"
@@ -70,12 +71,13 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
     {:ok, findings, %Decision{verdict: :annotate, mutations: mutations}}
   end
 
-  # One taint source per distinct secret found — each carries the raw match
-  # (for byte-level arg matching) and a redacted hint (for everything visible).
+  # One taint source per distinct secret found — each carries HMAC markers
+  # (never the raw secret) and a redacted hint.
   defp taint_mutation([], _ctx), do: %{}
 
   defp taint_mutation(redactions, %CallContext{call: call}) do
     origin = call[:tool_name] || call["toolName"] || "unknown"
+    session_id = call[:session_id] || call["sessionId"]
     now = DateTime.utc_now()
 
     sources =
@@ -87,12 +89,13 @@ defmodule PhoenixElxirBeam.MCP.Plugins.SecretLeak do
           origin_tool: origin,
           finding_type: "secret_leak",
           at: now,
-          secret: secret,
+          markers: TaintMarker.markers_for_secret(session_id, secret),
           hint: hint(secret)
         }
       end)
+      |> Enum.reject(&(&1.markers == []))
 
-    %{add_taint_sources: sources}
+    if sources == [], do: %{}, else: %{add_taint_sources: sources}
   end
 
   defp hint(s) when byte_size(s) > 12 do

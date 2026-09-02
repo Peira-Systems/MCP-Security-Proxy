@@ -1,7 +1,5 @@
 defmodule PhoenixElxirBeam.MCP.EventLogTest do
-  # SQLite has one file-wide write lock; these tests hammer inserts, so run
-  # them serially rather than fighting other async suites for the lock.
-  use PhoenixElxirBeam.DataCase, async: false
+  use PhoenixElxirBeam.DataCase, async: true
 
   import Ecto.Query
 

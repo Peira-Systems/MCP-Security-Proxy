@@ -7,8 +7,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     name = :"server_registry_#{System.unique_integer([:positive])}"
     start_supervised!({ServerRegistry, name: name})
 
-    port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
-    base_url = "http://127.0.0.1:#{port}/mcp/servers/files"
+    base_url = PhoenixElxirBeam.MCPHTTPTestServer.start!()
 
     %{name: name, base_url: base_url}
   end
@@ -17,7 +16,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     name: name,
     base_url: base_url
   } do
-    assert {:ok, server} = ServerRegistry.register_server("External files", base_url, name)
+    assert {:ok, server} = ServerRegistry.register_server("External files", base_url, [], name)
     assert server.name == "External files"
     assert server.base_url == base_url
 
@@ -26,7 +25,11 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
              "read_secrets",
              "read_config",
              "export_all",
-             "stream_export"
+             "post_webhook",
+             "big_export",
+             "progress_export",
+             "progress_then_cut",
+             "cut_before_relay"
            ]
 
     assert Enum.all?(server.tools, &(&1.tags == []))
@@ -37,13 +40,13 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
 
   test "registering an unreachable server returns an error", %{name: name} do
     assert {:error, reason} =
-             ServerRegistry.register_server("Nowhere", "http://127.0.0.1:1/mcp", name)
+             ServerRegistry.register_server("Nowhere", "http://127.0.0.1:1/mcp", [], name)
 
     assert is_binary(reason)
   end
 
   test "set_tool_tags updates a single tool's tags", %{name: name, base_url: base_url} do
-    {:ok, server} = ServerRegistry.register_server("External files", base_url, name)
+    {:ok, server} = ServerRegistry.register_server("External files", base_url, [], name)
 
     assert {:ok, updated} =
              ServerRegistry.set_tool_tags(server.id, "read_secrets", [:sensitive_read], name)
@@ -56,7 +59,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
   end
 
   test "remove_server deletes a registered server", %{name: name, base_url: base_url} do
-    {:ok, server} = ServerRegistry.register_server("External files", base_url, name)
+    {:ok, server} = ServerRegistry.register_server("External files", base_url, [], name)
     assert :ok = ServerRegistry.remove_server(server.id, name)
     assert ServerRegistry.get_server(server.id, name) == nil
     assert ServerRegistry.list_servers(name) == []
@@ -88,7 +91,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     name: name,
     base_url: base_url
   } do
-    {:ok, server} = ServerRegistry.register_server("Files", base_url, name)
+    {:ok, server} = ServerRegistry.register_server("Files", base_url, [], name)
 
     assert Enum.all?(server.tools, &match?("sha256:" <> _, &1.description_hash))
     assert server.findings == []
@@ -96,7 +99,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
   end
 
   test "re-handshake with no change reports no drift", %{name: name, base_url: base_url} do
-    {:ok, server} = ServerRegistry.register_server("Files", base_url, name)
+    {:ok, server} = ServerRegistry.register_server("Files", base_url, [], name)
     {:ok, re} = ServerRegistry.rehandshake(server.id, name)
 
     assert re.findings == []

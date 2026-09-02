@@ -1,11 +1,19 @@
 defmodule PhoenixElxirBeam.MCP.HoldRegistryTest do
+  # park/finalize now write through to HoldStore (Postgres) from the
+  # registry's own GenServer process — checkout + allow so that write is
+  # visible (and rolled back) within this test rather than erroring.
   use ExUnit.Case, async: true
 
-  alias PhoenixElxirBeam.MCP.HoldRegistry
+  alias PhoenixElxirBeam.MCP.{HoldRegistry, PendingHold}
+  alias PhoenixElxirBeam.Repo
 
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
+
     name = :"hold_registry_#{System.unique_integer([:positive])}"
-    start_supervised!({HoldRegistry, name: name}, id: name)
+    {:ok, pid} = start_supervised({HoldRegistry, name: name}, id: name)
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)
+
     Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, "mcp:holds")
     %{reg: name}
   end
@@ -31,6 +39,18 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistryTest do
 
     assert_receive {:hold_pending, %{id: ^id, prompt: "Approve?"}}
     assert [%{id: ^id}] = HoldRegistry.pending(reg)
+  end
+
+  test "park write-throughs to HoldStore; resolving deletes the row", %{reg: reg} do
+    id = HoldRegistry.park(spec(), reg)
+    assert %PendingHold{tool_name: "post_webhook"} = Repo.get(PendingHold, id)
+
+    task = Task.async(fn -> HoldRegistry.await(id, 5_000, reg) end)
+    Process.sleep(20)
+    :ok = HoldRegistry.resolve(id, :approve, reg)
+    Task.await(task)
+
+    refute Repo.get(PendingHold, id)
   end
 
   test "await blocks until resolve(:approve)", %{reg: reg} do

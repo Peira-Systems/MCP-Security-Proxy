@@ -47,16 +47,15 @@ npm-debug.log
 !.env.example
 *.pem
 
-# Local SQLite databases (dev/test) — migrations are checked in, the
-# data files are not.
-/priv/repo/*.db
-/priv/repo/*.db-shm
-/priv/repo/*.db-wal
+# Docker Compose secret files (M3.4d).
+/secrets/
 
-# Python venv for the real "mcp-server-fetch" stdio demo server.
+# Local Python venv (e.g. for the prompt-injection sidecar plugin's deps).
 /.venv/
 
-# Local npm install of the real "@modelcontextprotocol/server-filesystem"
-# stdio demo server.
-/priv/mcp_servers/node_modules/
+# Local audit-chain checkpoint file (M2.3).
+/priv/audit_checkpoints.log
+
+# Dialyzer PLT files (rebuilt from deps; cached in CI).
+/priv/plts/
 

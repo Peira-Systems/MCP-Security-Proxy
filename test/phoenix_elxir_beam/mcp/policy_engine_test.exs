@@ -246,7 +246,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     assert row.agent_id == "agent://ci-runner"
   end
 
-  test "a call whose argument carries a tracked secret is blocked byte-for-byte", %{name: name} do
+  test "a call whose argument carries a tracked secret is blocked by marker", %{name: name} do
     session_id = "session-secret-arg"
     :ok = PolicyEngine.start_session(session_id, :secret_arg_exfil, "agent://demo", name)
 
@@ -258,7 +258,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
       origin_tool: "read_secrets",
       finding_type: "secret_leak",
       at: DateTime.utc_now(),
-      secret: secret,
+      markers: PhoenixElxirBeam.MCP.TaintMarker.markers_for_secret(session_id, secret),
       hint: "API_K…24"
     }
 
@@ -285,7 +285,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
              )
 
     assert event.status == :blocked
-    assert event.reason =~ "argument contains a secret"
+    assert event.reason =~ "argument carries a secret"
 
     %{entries: entries} = EventLog.list(%{page_size: 100})
     row = Enum.find(entries, &(&1.event_id == event.id))

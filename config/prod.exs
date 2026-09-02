@@ -13,10 +13,15 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
 # Note `:force_ssl` is required to be set at compile-time.
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   force_ssl: [
+    hsts: true,
     rewrite_on: [:x_forwarded_proto],
+    # `/health/*` is polled by the container / an external monitor and
+    # `/metrics` scraped by Prometheus, both over plain HTTP on an internal
+    # network; every other request is redirected to HTTPS. (`Plug.SSL`
+    # `:exclude` matches `path_info` exactly, so each path is listed.)
     exclude: [
-      # paths: ["/health"],
-      hosts: ["localhost", "127.0.0.1"]
+      hosts: ["localhost", "127.0.0.1"],
+      paths: ["/health", "/health/live", "/health/ready", "/metrics"]
     ]
   ]
 
@@ -45,6 +50,10 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
          }
        ]
      }},
+    # Default-deny (M4.2): an untagged tool is held for operator sign-off. Set
+    # "off" if you would rather curate tags before enforcement, or "deny" for a
+    # hard refusal.
+    {PhoenixElxirBeam.MCP.Plugins.UnclassifiedGuard, config: %{"mode" => "hold"}},
     {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.BaselineGuard,
      config: %{
@@ -60,13 +69,26 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.StreamGuard, config: %{"max_bytes" => 1_200}},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},
     {PhoenixElxirBeam.MCP.Plugins.StructuredLogSink, []},
-    {:sidecar,
-     name: "prompt-injection-scanner",
-     transport: :stdio,
-     cmd: "python3",
-     args: [{:priv, "plugins/prompt_injection_scanner.py"}],
-     config: %{},
-     grants: %{block: true, mutate: [], network: false}}
+    {
+      :sidecar,
+      # Provenance pin (M3.5) — the sidecar refuses to start if its script or
+      # ruleset bytes change. Recompute both after editing either:
+      #   mix run --no-start -e 'p = &Application.app_dir(:phoenix_elxir_beam, "priv/plugins/#{&1}"); IO.puts PhoenixElxirBeam.MCP.Plugin.Provenance.code_digest("python3", [p.("prompt_injection_scanner.py"), p.("injection_rules.json")])'
+      # Add a `manifest:` entry too from the boot log to also pin its capabilities.
+      # `limits` = best-effort kernel resource caps (Linux, needs `prlimit`); the
+      # production-grade option is a container per sidecar — docs/plugin-supply-chain.md.
+      name: "prompt-injection-scanner",
+      transport: :stdio,
+      cmd: "python3",
+      args: [
+        {:priv, "plugins/prompt_injection_scanner.py"},
+        {:priv, "plugins/injection_rules.json"}
+      ],
+      config: %{},
+      grants: %{block: true, mutate: [], network: false},
+      pin: [code: "sha256:105af98b8d84dd06cac2c73ae82275f8a1f314cea9da6ed0027bd384e77ccdde"],
+      limits: [as_mb: 512, cpu_s: 30]
+    }
   ]
 
 # Runtime production configuration, including reading

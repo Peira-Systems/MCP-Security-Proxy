@@ -45,6 +45,9 @@ defmodule PhoenixElxirBeamWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    # Backstop body cap for every parsed request. The proxy endpoint has its
+    # own pre-parse limit in PhoenixElxirBeamWeb.Plugs.RequestLimits.
+    length: 2_000_000,
     json_decoder: Phoenix.json_library()
 
   plug Plug.MethodOverride

@@ -1,5 +1,5 @@
 defmodule PhoenixElxirBeam.MCP.Plugins.EventLogSinkTest do
-  use PhoenixElxirBeam.DataCase, async: false
+  use PhoenixElxirBeam.DataCase, async: true
 
   alias PhoenixElxirBeam.MCP.{AuditEvent, EventLog}
   alias PhoenixElxirBeam.MCP.Plugins.EventLogSink

@@ -1,9 +1,12 @@
 import Config
 
 config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
-  database: Path.expand("../priv/repo/dev.db", __DIR__),
-  journal_mode: :wal,
-  pool_size: 5,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: System.get_env("PGDATABASE", "phoenix_elxir_beam_dev"),
+  pool_size: 10,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
@@ -29,6 +32,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
          }
        ]
      }},
+    {PhoenixElxirBeam.MCP.Plugins.UnclassifiedGuard, config: %{"mode" => "off"}},
     {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.BaselineGuard,
      config: %{
@@ -48,7 +52,10 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
      name: "prompt-injection-scanner",
      transport: :stdio,
      cmd: "python",
-     args: [{:priv, "plugins/prompt_injection_scanner.py"}],
+     args: [
+       {:priv, "plugins/prompt_injection_scanner.py"},
+       {:priv, "plugins/injection_rules.json"}
+     ],
      config: %{},
      grants: %{block: true, mutate: [], network: false}}
   ]
@@ -62,7 +69,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("PORT", "4000"))],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

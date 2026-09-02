@@ -1,0 +1,161 @@
+{
+  "version": "1.0.0",
+  "updated": "2026-08-31",
+  "notes": "Maintained ruleset for prompt-injection / tool-poisoning detection (M4.3). Patterns are Python `re`, matched case-insensitively with DOTALL. Keep patterns tight enough that the benign corpus (priv/plugins/corpus/) stays under the false-positive budget in score_injection.py.",
+  "rules": [
+    {
+      "id": "override-ignore-previous",
+      "category": "instruction_override",
+      "pattern": "\\b(ignore|disregard|forget|override)\\b[^.\\n]{0,40}\\b(previous|prior|above|earlier|preceding|all)\\b[^.\\n]{0,30}\\b(instruction|instructions|prompt|prompts|message|messages|context|rule|rules|direction|directions)\\b",
+      "severity": "critical",
+      "confidence": 0.95
+    },
+    {
+      "id": "override-new-instructions",
+      "category": "instruction_override",
+      "pattern": "\\b(new|updated|revised|real|actual|true)\\s+(instructions?|system\\s+prompt|directives?|rules?)\\s*[:\\-]",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "override-you-are-now",
+      "category": "instruction_override",
+      "pattern": "\\byou\\s+are\\s+now\\b[^.\\n]{0,40}\\b(a|an|the|in)\\b[^.\\n]{0,40}\\b(mode|assistant|persona|character|dan|jailbreak|unrestricted|developer)\\b",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "override-act-as",
+      "category": "instruction_override",
+      "pattern": "\\b(act|behave|respond|pretend|roleplay)\\b[^.\\n]{0,15}\\b(as|to be|you\\s+are|you're)\\b[^.\\n]{0,50}\\b(unrestricted|uncensored|jailbroken|jailbreak|no\\s+restrictions?|without\\s+(guardrails?|restrictions?|limits?|filters?|rules)|dan|evil|rogue|amoral|no\\s+content\\s+policy)\\b",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "override-developer-mode",
+      "category": "instruction_override",
+      "pattern": "\\b(developer|debug|god|admin|sudo|root)\\s+mode\\s+(enabled|activated|on|unlock)",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "override-system-prompt-inline",
+      "category": "instruction_override",
+      "pattern": "(^|\\n)\\s*(system|assistant|developer)\\s*:\\s*\\S",
+      "severity": "medium",
+      "confidence": 0.6
+    },
+    {
+      "id": "secrecy-do-not-tell",
+      "category": "secrecy",
+      "pattern": "\\b(do\\s*not|don't|never)\\b[^.\\n]{0,30}\\b(tell|inform|notify|mention|reveal|disclose|show|alert)\\b[^.\\n]{0,20}\\b(the\\s+)?(user|human|operator|anyone)\\b",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "id": "secrecy-keep-between-us",
+      "category": "secrecy",
+      "pattern": "\\bkeep\\s+(this|it)\\b[^.\\n]{0,20}\\b(secret|confidential|between\\s+us|to\\s+yourself|hidden|private)\\b",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "secrecy-without-telling",
+      "category": "secrecy",
+      "pattern": "\\bwithout\\s+(telling|informing|notifying|alerting|asking)\\b[^.\\n]{0,20}\\b(the\\s+)?(user|human|operator|them)\\b",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "exfil-send-to-url",
+      "category": "exfiltration",
+      "pattern": "\\b(send|post|upload|transmit|forward|exfiltrate|leak|deliver)\\b[^.\\n]{0,60}\\b(to|at|via)\\b[^\\n]{0,20}(https?://|ftp://|[a-z0-9.-]+\\.(com|net|io|org|dev|xyz|ru|cn)\\b)",
+      "severity": "critical",
+      "confidence": 0.85
+    },
+    {
+      "id": "exfil-email-secrets",
+      "category": "exfiltration",
+      "pattern": "\\b(email|mail|send)\\b[^.\\n]{0,50}\\b(secret|secrets|credential|credentials|password|passwords|api\\s*key|token|private\\s*key|env|\\.env)\\b[^.\\n]{0,40}\\b(to|@)\\b",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "id": "exfil-read-ssh",
+      "category": "exfiltration",
+      "pattern": "\\b(read|cat|open|print|show|dump|exfiltrate|upload|send|forward|transmit|leak|copy)\\b[^.\\n]{0,40}(~/\\.ssh|/\\.ssh/|\\.aws/credentials|id_rsa|id_ed25519|authorized_keys|/etc/passwd|/etc/shadow)",
+      "severity": "critical",
+      "confidence": 0.95
+    },
+    {
+      "id": "exfil-read-env",
+      "category": "exfiltration",
+      "pattern": "\\b(read|cat|open|print|show|dump|include|load)\\b[^.\\n]{0,30}(\\.env\\b|environment\\s+variables?|process\\.env|os\\.environ|/proc/self/environ)",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "exfil-print-system-prompt",
+      "category": "exfiltration",
+      "pattern": "\\b(print|output|repeat|reveal|show|display|tell\\s+me|what\\s+(is|are))\\b[^.\\n]{0,30}\\b(your|the)\\b[^.\\n]{0,20}\\b(system\\s+prompt|initial\\s+instructions?|original\\s+instructions?|prompt|guidelines?|rules)\\b",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "exfil-aws-keys",
+      "category": "exfiltration",
+      "pattern": "\\b(AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|OPENAI_API_KEY|ANTHROPIC_API_KEY|GITHUB_TOKEN|DATABASE_URL)\\b",
+      "severity": "medium",
+      "confidence": 0.5
+    },
+    {
+      "id": "poison-important-tag",
+      "category": "tool_poisoning",
+      "pattern": "<\\s*important\\s*>|</\\s*important\\s*>|<\\s*system\\s*>|<\\s*secret\\s*>|\\[\\s*system\\s*\\]|\\[\\s*important\\s*\\]",
+      "severity": "critical",
+      "confidence": 0.9
+    },
+    {
+      "id": "poison-model-turn-markers",
+      "category": "tool_poisoning",
+      "pattern": "<\\|(im_start|im_end|system|assistant|user|endoftext)\\|>|\\[INST\\]|\\[/INST\\]|<<SYS>>|\\bH:\\s|\\bA:\\s",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "poison-comment-instruction",
+      "category": "tool_poisoning",
+      "pattern": "<!--[^>]{0,200}\\b(ignore|instruction|system|assistant|do not tell|execute|run|fetch|curl|send)\\b[^>]{0,200}-->",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "poison-zero-width",
+      "category": "tool_poisoning",
+      "pattern": "[\\u200b\\u200c\\u200d\\u2060\\ufeff]{3,}",
+      "severity": "medium",
+      "confidence": 0.6
+    },
+    {
+      "id": "poison-decode-and-execute",
+      "category": "tool_poisoning",
+      "pattern": "\\b(base64|hex|rot13|decode)\\b[^.\\n]{0,40}\\b(and|then)\\b[^.\\n]{0,20}\\b(execute|run|eval|follow|obey|do)\\b",
+      "severity": "high",
+      "confidence": 0.85
+    },
+    {
+      "id": "directive-imperative-to-assistant",
+      "category": "instruction_override",
+      "pattern": "\\b(you\\s+must|you\\s+should\\s+now|from\\s+now\\s+on\\s+you|the\\s+assistant\\s+must|assistant\\s+should)\\b[^.\\n]{0,60}\\b(ignore|bypass|disable|reveal|send|delete|execute|exfiltrate|leak)\\b",
+      "severity": "high",
+      "confidence": 0.8
+    },
+    {
+      "id": "directive-do-not-follow-safety",
+      "category": "instruction_override",
+      "pattern": "\\b(ignore|bypass|disable|turn\\s+off|do\\s+not\\s+follow)\\b[^.\\n]{0,30}\\b(safety|guardrails?|content\\s+policy|filter|restrictions?|guidelines?)\\b",
+      "severity": "critical",
+      "confidence": 0.9
+    }
+  ]
+}

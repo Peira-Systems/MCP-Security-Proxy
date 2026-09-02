@@ -26,6 +26,43 @@ defmodule PhoenixElxirBeam.MCP.HttpTransport do
 
   @accept "application/json, text/event-stream"
   @loopback_hosts ~w(localhost 127.0.0.1 ::1)
+  @receive_timeout_ms 15_000
+
+  @doc """
+  Per-request receive timeout for an upstream MCP call. `source` is a
+  registered server map (or anything else `Access`-compatible) whose
+  `:timeout_ms` overrides the proxy-wide default when set
+  (`docs/productionization-plan.md` M1.5 follow-up — per-server
+  `timeout_ms`). Omit `source`, or leave the field unset/`nil`, for the
+  default.
+  """
+  def receive_timeout(source \\ %{}) do
+    get(source, :timeout_ms) || @receive_timeout_ms
+  end
+
+  @doc """
+  Req `connect_options` for an upstream request. Req/Finch verify TLS against
+  the system CA store by default, so this returns `[]` normally.
+  `source`'s `:tls_verify` (a registered server map, typically), when set,
+  overrides `config :phoenix_elxir_beam, :upstream_tls_verify` for just that
+  server; falls back to the proxy-wide default otherwise.
+  """
+  def connect_options(source \\ %{}) do
+    verify? =
+      case get(source, :tls_verify) do
+        nil -> Application.get_env(:phoenix_elxir_beam, :upstream_tls_verify, true)
+        override -> override
+      end
+
+    if verify? do
+      []
+    else
+      [transport_opts: [verify: :verify_none]]
+    end
+  end
+
+  defp get(source, key) when is_map(source), do: Map.get(source, key)
+  defp get(source, key) when is_list(source), do: Keyword.get(source, key)
 
   @doc "Returns the `{url, headers}` to use for an MCP JSON-RPC POST to `base_url`."
   def prepare(base_url) do

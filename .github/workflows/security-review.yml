@@ -1,0 +1,38 @@
+name: Security review
+
+# Claude-driven security review of the diff, on PRs that touch the policy /
+# proxy core. Inert until an ANTHROPIC_API_KEY secret is set on the repo
+# (Settings -> Secrets and variables -> Actions) -- the review step is skipped
+# when the secret is absent, so forks and unconfigured clones stay green.
+
+on:
+  pull_request:
+    paths:
+      - "lib/phoenix_elxir_beam/mcp/**"
+      - "priv/plugins/**"
+      - "config/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for API key
+        id: gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: echo "enabled=${{ env.ANTHROPIC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-security-review@main
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          comment-pr: true
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -11,7 +11,18 @@ defmodule PhoenixElxirBeam.DataCase do
   using do
     quote do
       alias PhoenixElxirBeam.Repo
+
+      import PhoenixElxirBeam.DataCase, only: [errors_on: 1]
     end
+  end
+
+  @doc "Flattens a changeset's errors into `%{field => [messages]}`."
+  def errors_on(changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
+      Regex.replace(~r"%{(\w+)}", message, fn _, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
   end
 
   setup tags do

@@ -11,6 +11,37 @@ config :phoenix_elxir_beam,
   ecto_repos: [PhoenixElxirBeam.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Proxy endpoint hardening (M1.5).
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.RateLimiter,
+  window_ms: 1_000,
+  max_per_window: 20
+
+# HMAC key for taint markers (M4.1). Overridden in config/runtime.exs for prod
+# (TAINT_MARKER_KEY secret, or derived from SECRET_KEY_BASE). Markers are
+# session-scoped and opaque; a rotated key just re-bases in-flight sessions.
+config :phoenix_elxir_beam, :taint_marker_key, "dev-and-test-taint-marker-key-not-a-secret"
+
+config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Plugs.RequestLimits, max_body_bytes: 1_048_576
+
+# Verify TLS certificates when the proxy dials an upstream `:http` MCP server.
+# Set false only for a dev server with a self-signed cert.
+config :phoenix_elxir_beam, :upstream_tls_verify, true
+
+# Off-DB anchoring of the audit hash chain (M2.3). In prod the key comes
+# from AUDIT_CHECKPOINT_KEY and the path should be on a volume separate from
+# Postgres (config/runtime.exs).
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+  key: "dev-audit-checkpoint-key-not-for-production",
+  path: "priv/audit_checkpoints.log"
+
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditIntegrity, interval_ms: 900_000
+
+# Opt-in pruning of policy_events rows older than N days, anchored so it
+# never touches a row an ongoing verify_chain/0 chain check still needs
+# (docs/deployment.md#retention--backups). Off (nil) by default -- the log
+# grows unbounded until an operator sets AUDIT_RETENTION_DAYS.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditRetention, retention_days: nil
+
 # The MCP proxy plugin pipeline (`docs/plugin-protocol.md` §15) is configured
 # per-env in `config/{test,dev,prod}.exs` — each sets the full `plugins:` list
 # once. It is NOT set here: `Config` merges the keyword-shaped list by key, so

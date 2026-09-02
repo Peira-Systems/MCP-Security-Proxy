@@ -54,12 +54,86 @@ if config_env() == :dev do
 end
 
 if config_env() == :prod do
-  database_path = System.get_env("DATABASE_PATH") || "/data/phoenix_elxir_beam.db"
+  # Secrets are read from a Docker secret file at /run/secrets/<lower_name>
+  # when present (M3.4d — nothing sensitive in `docker inspect` / the host
+  # `.env`), falling back to the env var of the same name otherwise.
+  fetch_secret = fn name ->
+    path = "/run/secrets/" <> String.downcase(name)
+
+    case File.read(path) do
+      {:ok, contents} -> String.trim(contents)
+      _ -> System.get_env(name)
+    end
+  end
+
+  # Operator console auth is session/RBAC based (M3.4). On first boot, when the
+  # `users` table is empty, an admin is seeded from ADMIN_EMAIL / ADMIN_PASSWORD
+  # (see PhoenixElxirBeam.Accounts.seed_admin/0). Set both on the first deploy,
+  # then manage further accounts from the dashboard.
+
+  # Optional bearer token for GET /metrics (M3.2). Unset ⇒ the endpoint is
+  # open — only acceptable if it's unreachable from outside the scrape network.
+  case System.get_env("METRICS_TOKEN") do
+    token when is_binary(token) and token != "" ->
+      config :phoenix_elxir_beam, :metrics_token, token
+
+    _ ->
+      :ok
+  end
+
+  # Readiness (GET /health/ready) fails with 503 when a registered upstream is
+  # unreachable. Set READINESS_REQUIRE_UPSTREAMS=false to make upstream
+  # reachability advisory (DB-only readiness).
+  config :phoenix_elxir_beam, :readiness,
+    require_upstreams: System.get_env("READINESS_REQUIRE_UPSTREAMS", "true") != "false"
+
+  # Off-DB audit-chain checkpoint (M2.3). Put the file on a volume separate
+  # from Postgres. The key must be stable across deploys and NOT stored in
+  # the database — a rotated key invalidates older checkpoints.
+  config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+    key:
+      fetch_secret.("AUDIT_CHECKPOINT_KEY") ||
+        raise("AUDIT_CHECKPOINT_KEY is missing (env var or /run/secrets/audit_checkpoint_key)"),
+    path: System.get_env("AUDIT_CHECKPOINT_PATH") || "/checkpoints/audit.log"
+
+  # Opt-in policy_events retention (M2.3 follow-up). Unset/absent = off, the
+  # log grows unbounded (see docs/deployment.md#retention--backups). Only
+  # takes effect once at least two checkpoints have been written, since
+  # pruning is anchored to an already-verified checkpoint.
+  audit_retention_days =
+    case System.get_env("AUDIT_RETENTION_DAYS") do
+      nil -> nil
+      "" -> nil
+      str -> String.to_integer(str)
+    end
+
+  config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditRetention,
+    retention_days: audit_retention_days
+
+  # DATABASE_URL wins if set; otherwise build it from POSTGRES_* + the
+  # postgres_password secret (the compose default).
+  database_url =
+    System.get_env("DATABASE_URL") ||
+      (
+        pw =
+          fetch_secret.("POSTGRES_PASSWORD") ||
+            raise "no DATABASE_URL and no POSTGRES_PASSWORD (env var or /run/secrets/postgres_password)"
+
+        user = System.get_env("POSTGRES_USER", "mcp_proxy")
+        db = System.get_env("POSTGRES_DB", "mcp_proxy")
+        pg_host = System.get_env("POSTGRES_HOST", "postgres")
+        "postgres://#{user}:#{pw}@#{pg_host}:5432/#{db}"
+      )
 
   config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
-    database: database_path,
-    journal_mode: :wal,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
+    url: database_url,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    # Fail fast rather than pile requests up if the DB is unreachable — this
+    # is on the policy decision path.
+    queue_target: 200,
+    queue_interval: 1_000,
+    parameters: [statement_timeout: System.get_env("PG_STATEMENT_TIMEOUT_MS") || "15000"],
+    socket_options: if(System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: [])
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
@@ -67,17 +141,26 @@ if config_env() == :prod do
   # to check this value into version control, so we use an environment
   # variable instead.
   secret_key_base =
-    case System.get_env("SECRET_KEY_BASE") do
+    case fetch_secret.("SECRET_KEY_BASE") do
       value when is_binary(value) and byte_size(value) >= 64 ->
         value
 
       _ ->
         raise """
-        environment variable SECRET_KEY_BASE is missing or too short (must be
-        at least 64 bytes).
+        SECRET_KEY_BASE is missing or too short (must be at least 64 bytes) —
+        set the env var or /run/secrets/secret_key_base.
         You can generate one by calling: mix phx.gen.secret
         """
     end
+
+  # HMAC key for taint markers (M4.1). Its own secret if provided, else derived
+  # from SECRET_KEY_BASE so there is always a strong, deploy-stable key.
+  derived_taint_key =
+    :crypto.hash(:sha256, "taint-marker|" <> secret_key_base) |> Base.encode16(case: :lower)
+
+  config :phoenix_elxir_beam,
+         :taint_marker_key,
+         fetch_secret.("TAINT_MARKER_KEY") || derived_taint_key
 
   host = System.get_env("PHX_HOST") || "example.com"
 
@@ -93,13 +176,33 @@ if config_env() == :prod do
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      # Bind on all interfaces (IPv4 + IPv6).
+      ip: {0, 0, 0, 0, 0, 0, 0, 0},
+      port: String.to_integer(System.get_env("PORT", "4000")),
+      # Cap concurrent connections and header size (Bandit / Thousand Island
+      # defaults are already conservative; pinned here so hardening is visible
+      # in one place). The proxy body cap lives in Plugs.RequestLimits.
+      http_1_options: [max_header_length: 16_384],
+      thousand_island_options: [max_connections: 16_384]
     ],
     secret_key_base: secret_key_base
+
+  # TLS termination in the app container. The Docker Compose reference setup
+  # puts a reverse proxy (Caddy/nginx) in front for TLS instead; set these
+  # only when Bandit should terminate TLS directly.
+  case {System.get_env("SSL_CERT_PATH"), System.get_env("SSL_KEY_PATH")} do
+    {cert, key} when is_binary(cert) and is_binary(key) ->
+      config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
+        https: [
+          port: String.to_integer(System.get_env("SSL_PORT", "443")),
+          cipher_suite: :strong,
+          certfile: cert,
+          keyfile: key
+        ]
+
+    _ ->
+      :ok
+  end
 
   # ## SSL Support
   #

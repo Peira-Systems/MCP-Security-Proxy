@@ -16,6 +16,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
          }
        ]
      }},
+    {PhoenixElxirBeam.MCP.Plugins.UnclassifiedGuard, config: %{"mode" => "off"}},
     {PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.BaselineGuard,
      config: %{
@@ -32,23 +33,35 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}
   ]
 
-config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
-  database: Path.expand("../priv/repo/test.db", __DIR__),
-  pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2,
-  # SQLite serializes writers; with async tests each on its own sandbox
-  # connection, WAL + a generous busy timeout makes concurrent writes wait
-  # rather than raise "Database busy".
-  journal_mode: :wal,
-  busy_timeout: 5_000
+# Audit checkpoint file per test partition, under the OS tmp dir.
+config :phoenix_elxir_beam, PhoenixElxirBeam.MCP.AuditCheckpoint,
+  key: "test-audit-checkpoint-key",
+  path:
+    Path.join(
+      System.tmp_dir!(),
+      "mcp_audit_checkpoints#{System.get_env("MIX_TEST_PARTITION")}.log"
+    )
 
-# The MCP proxy controller forwards calls to the mock server over a real
-# loopback HTTP request (via Req), so the server must actually be running
-# during tests for that hop to succeed.
+config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: "phoenix_elxir_beam_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
+
+# The proxy controller tests drive real HTTP requests against the endpoint
+# (via Phoenix.ConnTest / Req), so the server must actually be running.
 config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "zeTuYfL8VcWlAQ7T/K6kG14U6cayBKJVm9zDPnfI2OKZoFE5GTH3vaZZjHAszdEi",
   server: true
+
+# The telemetry poller's upstream readiness probe makes outbound HTTP; keep it
+# out of the request path during tests (readiness is exercised directly via
+# MCP.Health / the health controller suite instead).
+config :phoenix_elxir_beam, :telemetry_probe_upstreams, false
 
 # In test we don't send emails
 config :phoenix_elxir_beam, PhoenixElxirBeam.Mailer, adapter: Swoosh.Adapters.Test

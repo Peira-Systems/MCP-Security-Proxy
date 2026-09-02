@@ -11,7 +11,21 @@ defmodule PhoenixElxirBeam.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: dialyzer()
+    ]
+  end
+
+  # PLT lives in a fixed, cacheable path so CI can restore it across runs
+  # (see .github/workflows/ci.yml). :mix and :ex_unit are pulled in so the
+  # aliases / test support compile clean under dialyzer. Default flag set —
+  # the fire-and-forget Task style in the dashboard trips :unmatched_returns
+  # by design, so that stricter flag is left off for now.
+  defp dialyzer do
+    [
+      plt_local_path: "priv/plts",
+      plt_core_path: "priv/plts",
+      plt_add_apps: [:mix, :ex_unit]
     ]
   end
 
@@ -43,7 +57,7 @@ defmodule PhoenixElxirBeam.MixProject do
       {:phoenix, "~> 1.8.9"},
       {:phoenix_html, "~> 4.1"},
       {:ecto_sql, "~> 3.13"},
-      {:ecto_sqlite3, "~> 0.19"},
+      {:postgrex, "~> 0.19"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
@@ -67,11 +81,15 @@ defmodule PhoenixElxirBeam.MixProject do
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
+      {:telemetry_metrics_prometheus_core, "~> 1.1"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:pbkdf2_elixir, "~> 2.2"},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -94,7 +112,18 @@ defmodule PhoenixElxirBeam.MixProject do
         "phx.digest"
       ],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
+      # The full gate CI runs on every PR. `deps.audit` + `dialyzer` on top of
+      # precommit; `format --check-formatted` instead of rewriting in place.
+      ci: [
+        "deps.unlock --check-unused",
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "deps.audit",
+        "hex.audit",
+        "test",
+        "dialyzer"
+      ]
     ]
   end
 end

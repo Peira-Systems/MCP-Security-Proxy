@@ -1,21 +1,23 @@
 defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @moduledoc """
-  Live dashboard visualizing MCP tool calls flowing through the policy
-  proxy: a small tool graph that lights up as calls are made and turns red
-  when a dangerous tool-chain is detected and blocked, a console-style
-  event log (live session feed, or the durable history browser), and
-  real-server registration/testing.
+  Live dashboard for the policy proxy: a tool graph that lights up as real
+  `tools/call`s flow through and turns red when a call is blocked, a
+  console-style event log (live feed or the durable history browser), the
+  plugin pipeline, and real-server registration / tag curation.
   """
 
   use PhoenixElxirBeamWeb, :live_view
 
+  alias PhoenixElxirBeam.Accounts
+
   alias PhoenixElxirBeam.MCP.{
-    Demo,
+    ApiKey,
+    AuditIntegrity,
     EventLog,
     HoldRegistry,
-    MockDrift,
+    PolicyChange,
     ServerRegistry,
-    ToolCatalog
+    SessionStore
   }
 
   alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
@@ -23,6 +25,9 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @topic "mcp:events"
   @servers_topic "mcp:servers"
   @holds_topic "mcp:holds"
+  @audit_topic "mcp:audit"
+  @alerts_topic "mcp:alerts"
+  @policy_topic "mcp:policy"
   @history_page_size 20
 
   @impl true
@@ -31,25 +36,23 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @servers_topic)
       Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @holds_topic)
-      # Sidecar plugins register a beat after boot and their health drifts;
-      # a light poll keeps the Plugins panel current.
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @audit_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @alerts_topic)
+      Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, @policy_topic)
+      # Sidecar plugin health drifts and MCP sessions come and go with no
+      # broadcast; a light poll keeps the Plugins panel + session count current.
       :timer.send_interval(5_000, :refresh_plugins)
     end
 
-    graph =
-      for server_id <- ToolCatalog.servers(),
-          do: %{id: server_id, tools: ToolCatalog.tools(server_id)}
+    graph = build_graph()
 
     socket =
       socket
       |> assign(:page_title, "MCP Dashboard")
       |> assign(:graph, graph)
       |> assign(:positions, layout_positions(graph))
-      |> assign(:running, false)
-      |> assign(:scenario, nil)
       |> assign(:real_servers, ServerRegistry.list_servers())
       |> assign(:registering, false)
-      |> assign(:manual_session_id, generate_manual_session_id())
       |> assign(:expanded_server_ids, MapSet.new())
       |> assign(:console_mode, "live")
       |> assign(:history_status, "all")
@@ -61,17 +64,33 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugin_rows())
+      |> assign(:can_operate, Accounts.role_at_least?(socket.assigns.current_user, :operator))
+      |> assign(:policy_changes, PolicyChange.recent(15))
+      |> assign(:session_count, safe_session_count())
+      |> assign(:integrity, safe_integrity())
+      |> assign(:alerts, safe_alerts())
+      |> assign(:api_keys, safe_api_keys())
+      |> assign(:new_token, nil)
       |> assign(:pending_holds, safe_pending_holds())
       |> stream(:events, [])
 
     {:ok, refresh_history(socket)}
   end
 
+  # The graph's server + tool nodes come from the live ServerRegistry —
+  # `%{id, name, tools}` per registered server.
+  defp build_graph do
+    for server <- ServerRegistry.list_servers() do
+      %{id: server.id, name: server.name, tools: server.tools}
+    end
+  end
+
+  defp graph_server_ids(graph), do: Enum.map(graph, & &1.id)
+
   # Fixed four-tier layout — agent, policy gate, server, tool — left to
-  # right. Positions are final, not a seed for client-side relaxation: the
-  # graph no longer jitters into place, it's laid out once here.
+  # right. Positions are final, not a seed for client-side relaxation.
   defp layout_positions(graph) do
-    server_count = length(graph)
+    server_count = max(length(graph), 1)
     server_spacing = 170
     first_server_y = 240 - server_spacing * (server_count - 1) / 2
 
@@ -94,62 +113,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   @impl true
-  def handle_event("run_benign", _params, socket) do
-    {:ok, _pid} = Demo.run_benign_session()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_attack", _params, socket) do
-    {:ok, _pid} = Demo.run_attack_simulation()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_untagged_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_untagged_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_restricted_agent", _params, socket) do
-    {:ok, _pid} = Demo.run_restricted_agent()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_secret_arg_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_secret_arg_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_bulk_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_bulk_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_response_injection", _params, socket) do
-    {:ok, _pid} = Demo.run_response_injection()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_rapid_probing", _params, socket) do
-    {:ok, _pid} = Demo.run_rapid_probing()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_stream_exfil", _params, socket) do
-    {:ok, _pid} = Demo.run_stream_exfil()
-    {:noreply, assign(socket, running: true)}
-  end
-
-  def handle_event("run_rug_pull_demo", _params, socket) do
-    {:ok, _pid} = Demo.run_rug_pull_demo()
-
-    {:noreply,
-     put_flash(
-       socket,
-       :info,
-       "Rug-pull demo: registering the files server, then poisoning + re-handshaking…"
-     )}
-  end
-
   def handle_event("set_console_mode", %{"mode" => mode}, socket)
       when mode in ["live", "history"] do
     socket = assign(socket, :console_mode, mode)
@@ -220,16 +183,104 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   def handle_event("verify_audit_chain", _params, socket) do
-    flash =
-      case EventLog.verify_chain() do
+    {level, msg, integrity} =
+      case AuditIntegrity.check_now() do
         :ok ->
-          {:info, "Audit chain intact — #{socket.assigns.history_result.total_count} event(s)"}
+          {:info, "Audit chain intact — #{socket.assigns.history_result.total_count} event(s)",
+           :ok}
 
-        {:error, %{event_id: event_id, occurred_at: at}} ->
-          {:error, "Audit chain BROKEN at event #{event_id} (#{format_datetime(at)})"}
+        {:broken, detail} ->
+          {:error, "Audit chain BROKEN: #{detail}", {:broken, detail}}
       end
 
-    {:noreply, put_flash(socket, elem(flash, 0), elem(flash, 1))}
+    {:noreply, socket |> assign(:integrity, integrity) |> put_flash(level, msg)}
+  end
+
+  def handle_event("toggle_plugin", %{"name" => name, "enabled" => enabled}, socket) do
+    with_operator(socket, fn user ->
+      want = enabled == "true"
+      current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+
+      if current && current.enabled != want do
+        result = if want, do: Registry.enable(name), else: Registry.disable(name)
+
+        if result == :ok do
+          PolicyChange.record(%{
+            kind: :plugin_enabled,
+            target: name,
+            actor: user.email,
+            before: current.enabled,
+            after: want
+          })
+        end
+      end
+
+      assign(socket, :plugins, plugin_rows())
+    end)
+  end
+
+  def handle_event("move_plugin", %{"name" => name, "dir" => dir}, socket)
+      when dir in ["up", "down"] do
+    with_operator(socket, fn user ->
+      names = Enum.map(socket.assigns.plugins, & &1.name)
+      idx = Enum.find_index(names, &(&1 == name))
+      swap = if dir == "up", do: idx && idx - 1, else: idx && idx + 1
+
+      if idx && swap && swap >= 0 && swap < length(names) do
+        reordered = names |> List.delete_at(idx) |> List.insert_at(swap, name)
+        :ok = Registry.reorder(reordered)
+
+        PolicyChange.record(%{
+          kind: :plugin_order,
+          target: name,
+          actor: user.email,
+          before: names,
+          after: reordered
+        })
+      end
+
+      assign(socket, :plugins, plugin_rows())
+    end)
+  end
+
+  def handle_event("revert_policy_change", %{"event_id" => event_id}, socket) do
+    with_operator(socket, fn user ->
+      case Enum.find(socket.assigns.policy_changes, &(&1.event_id == event_id)) do
+        %{kind: "plugin_enabled", target: name, before: before} ->
+          want = before in [true, "true"]
+          if want, do: Registry.enable(name), else: Registry.disable(name)
+
+          PolicyChange.record(%{
+            kind: :plugin_enabled,
+            target: name,
+            actor: user.email,
+            before: not want,
+            after: want,
+            summary:
+              "#{user.email} reverted #{event_id}: plugin #{name} " <>
+                "#{if want, do: "enabled", else: "disabled"}"
+          })
+
+          assign(socket, :plugins, plugin_rows())
+
+        %{kind: "plugin_order", before: before} when is_list(before) ->
+          :ok = Registry.reorder(before)
+
+          PolicyChange.record(%{
+            kind: :plugin_order,
+            target: "pipeline",
+            actor: user.email,
+            before: Enum.map(socket.assigns.plugins, & &1.name),
+            after: before,
+            summary: "#{user.email} reverted #{event_id}: pipeline order restored"
+          })
+
+          assign(socket, :plugins, plugin_rows())
+
+        _ ->
+          put_flash(socket, :error, "That change can't be reverted from here.")
+      end
+    end)
   end
 
   def handle_event("history_paginate", %{"page" => page}, socket) do
@@ -242,39 +293,24 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, refresh_history(assign(socket, :history_page, page))}
   end
 
-  def handle_event("register_server", %{"name" => name, "base_url" => base_url}, socket) do
+  def handle_event("register_server", %{"name" => name, "base_url" => base_url} = params, socket) do
     name = String.trim(name)
     base_url = String.trim(base_url)
 
     if name == "" or base_url == "" do
       {:noreply, put_flash(socket, :error, "Name and base URL are both required")}
     else
+      opts = registration_opts(params)
       liveview = self()
 
       Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-        send(liveview, {:server_registered, ServerRegistry.register_server(name, base_url)})
+        send(
+          liveview,
+          {:server_registered, ServerRegistry.register_server(name, base_url, opts)}
+        )
       end)
 
       {:noreply, socket |> assign(:registering, true) |> clear_flash()}
-    end
-  end
-
-  def handle_event("register_stdio_preset", %{"preset" => preset}, socket) do
-    liveview = self()
-
-    case stdio_preset(preset) do
-      {:ok, name, cmd, args} ->
-        Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-          send(
-            liveview,
-            {:server_registered, ServerRegistry.register_stdio_server(name, cmd, args)}
-          )
-        end)
-
-        {:noreply, socket |> assign(:registering, true) |> clear_flash()}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, reason)}
     end
   end
 
@@ -303,35 +339,29 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         %{"server_id" => server_id, "tool_name" => tool_name, "tag" => tag_str},
         socket
       ) do
-    tag = tag_atom(tag_str)
-    server = ServerRegistry.get_server(server_id)
-    tool = Enum.find(server.tools, &(&1.name == tool_name))
-    new_tags = if tag in tool.tags, do: List.delete(tool.tags, tag), else: [tag | tool.tags]
+    with_operator(socket, fn user ->
+      tag = tag_atom(tag_str)
+      server = ServerRegistry.get_server(server_id)
+      tool = Enum.find(server.tools, &(&1.name == tool_name))
+      new_tags = if tag in tool.tags, do: List.delete(tool.tags, tag), else: [tag | tool.tags]
 
-    {:ok, _server} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
-    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+      {:ok, _server} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
+
+      PolicyChange.record(%{
+        kind: :tool_tags,
+        target: "#{server_id}/#{tool_name}",
+        actor: user.email,
+        before: Enum.map(tool.tags, &to_string/1),
+        after: Enum.map(new_tags, &to_string/1),
+        server_id: server_id
+      })
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
   end
 
   def handle_event("rehandshake", %{"server_id" => server_id}, socket) do
     {:noreply, start_rehandshake(socket, server_id)}
-  end
-
-  def handle_event("simulate_drift", %{"server_id" => server_id}, socket) do
-    case socket.assigns.real_servers
-         |> Enum.find(&(&1.id == server_id))
-         |> mock_server_id() do
-      nil ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "This server isn't backed by a local mock — can't simulate drift."
-         )}
-
-      mock_id ->
-        MockDrift.poison(mock_id)
-        {:noreply, start_rehandshake(socket, server_id)}
-    end
   end
 
   def handle_event(
@@ -339,8 +369,48 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         %{"server_id" => server_id, "tool_name" => tool_name},
         socket
       ) do
-    {:ok, _server} = ServerRegistry.clear_tool_block(server_id, tool_name)
-    {:noreply, assign(socket, :real_servers, ServerRegistry.list_servers())}
+    with_operator(socket, fn user ->
+      {:ok, _server} = ServerRegistry.clear_tool_block(server_id, tool_name)
+
+      PolicyChange.record(%{
+        kind: :tool_quarantine,
+        target: "#{server_id}/#{tool_name}",
+        actor: user.email,
+        before: "quarantined",
+        after: "cleared",
+        server_id: server_id
+      })
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
+  end
+
+  def handle_event(
+        "apply_suggested_tags",
+        %{"server_id" => server_id, "tool_name" => tool_name},
+        socket
+      ) do
+    with_operator(socket, fn user ->
+      server = ServerRegistry.get_server(server_id)
+      tool = server && Enum.find(server.tools, &(&1.name == tool_name))
+      suggested = (tool && Map.get(tool, :suggested_tags, [])) || []
+
+      if tool && suggested != [] do
+        new_tags = Enum.uniq(tool.tags ++ suggested)
+        {:ok, _} = ServerRegistry.set_tool_tags(server_id, tool_name, new_tags)
+
+        PolicyChange.record(%{
+          kind: :tool_tags,
+          target: "#{server_id}/#{tool_name}",
+          actor: user.email,
+          before: Enum.map(tool.tags, &to_string/1),
+          after: Enum.map(new_tags, &to_string/1),
+          server_id: server_id
+        })
+      end
+
+      assign(socket, :real_servers, ServerRegistry.list_servers())
+    end)
   end
 
   def handle_event(
@@ -354,24 +424,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         _ -> %{}
       end
 
-    session_id = socket.assigns.manual_session_id
-
     Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
-      call_real_tool(server_id, tool_name, arguments, session_id)
+      call_real_tool(server_id, tool_name, arguments)
     end)
 
     {:noreply, socket}
   end
 
-  def handle_event("new_manual_session", _params, socket) do
-    {:noreply, assign(socket, :manual_session_id, generate_manual_session_id())}
-  end
-
   def handle_event("clear_feed", _params, socket) do
-    # The manual "Call tool" flow never emits a `:session_start` event (see
-    # `apply_event/2` below), so it never gets the clean-slate reset a demo
-    # run gets for free — this button is that reset, made explicit instead
-    # of implicit.
     {:noreply,
      socket
      |> stream(:events, [], reset: true)
@@ -384,22 +444,87 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:noreply, update(socket, :pending_holds, &Enum.reject(&1, fn h -> h.id == hold_id end))}
   end
 
+  def handle_event("issue_key", params, socket) do
+    principal = String.trim(params["principal"] || "")
+    agent_id = String.trim(params["agent_id"] || "")
+    all_servers = params["all_servers"] == "true"
+    server_ids = params |> Map.get("servers", %{}) |> Map.keys()
+
+    cond do
+      principal == "" or agent_id == "" ->
+        {:noreply, put_flash(socket, :error, "Principal and agent id are required")}
+
+      not all_servers and server_ids == [] ->
+        {:noreply, put_flash(socket, :error, "Grant at least one server, or check 'all servers'")}
+
+      true ->
+        case ApiKey.issue(%{
+               principal: principal,
+               agent_id: agent_id,
+               all_servers: all_servers,
+               granted_server_ids: server_ids
+             }) do
+          {:ok, _key, token} ->
+            {:noreply,
+             socket
+             |> assign(:api_keys, safe_api_keys())
+             |> assign(:new_token, token)
+             |> put_flash(:info, "Key issued — copy the token now, it won't be shown again")}
+
+          {:error, _cs} ->
+            {:noreply, put_flash(socket, :error, "Couldn't issue key")}
+        end
+    end
+  end
+
+  def handle_event("dismiss_token", _params, socket) do
+    {:noreply, assign(socket, :new_token, nil)}
+  end
+
+  def handle_event("revoke_key", %{"key_id" => key_id}, socket) do
+    ApiKey.revoke(key_id)
+    {:noreply, assign(socket, :api_keys, safe_api_keys())}
+  end
+
   @impl true
   def handle_info({:mcp_event, event}, socket) do
     {:noreply, apply_event(socket, event)}
   end
 
-  # Any ServerRegistry mutation (from this or another dashboard, or a demo
-  # task) — refetch the server list.
+  # Any ServerRegistry mutation (from this or another dashboard) — refetch
+  # the server list and rebuild the graph.
   def handle_info({:servers_changed}, socket) do
+    graph = build_graph()
+
     {:noreply,
      socket
+     |> assign(:graph, graph)
+     |> assign(:positions, layout_positions(graph))
      |> assign(:real_servers, ServerRegistry.list_servers())
      |> assign(:server_options, EventLog.distinct_server_ids())}
   end
 
+  def handle_info({:audit_integrity, :broken, detail}, socket) do
+    {:noreply, assign(socket, :integrity, {:broken, detail})}
+  end
+
+  def handle_info({:alert, alert}, socket) do
+    {:noreply, assign(socket, :alerts, Enum.take([alert | socket.assigns.alerts], 20))}
+  end
+
+  def handle_info({:policy_change, _change}, socket) do
+    {:noreply,
+     socket
+     |> assign(:policy_changes, PolicyChange.recent(15))
+     |> assign(:plugins, plugin_rows())}
+  end
+
   def handle_info(:refresh_plugins, socket) do
-    {:noreply, assign(socket, :plugins, plugin_rows())}
+    {:noreply,
+     socket
+     |> assign(:plugins, plugin_rows())
+     |> assign(:session_count, safe_session_count())
+     |> assign(:api_keys, safe_api_keys())}
   end
 
   def handle_info({:hold_pending, hold}, socket) do
@@ -407,7 +532,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       update(socket, :pending_holds, &[hold | Enum.reject(&1, fn h -> h.id == hold.id end)])
 
     socket =
-      if hold.server_id in ToolCatalog.servers() do
+      if hold.server_id in graph_server_ids(socket.assigns.graph) do
         push_event(socket, "mcp_graph_event", %{
           server_id: hold.server_id,
           tool_name: hold.tool_name,
@@ -483,6 +608,26 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     |> assign(:server_options, EventLog.distinct_server_ids())
   end
 
+  # Optional per-server overrides from the register-server form (M1.5
+  # follow-up). Blank/absent = inherit the proxy-wide default.
+  defp registration_opts(params) do
+    []
+    |> put_timeout_ms(params["timeout_ms"])
+    |> put_skip_tls_verify(params["skip_tls_verify"])
+  end
+
+  defp put_timeout_ms(opts, str) when is_binary(str) do
+    case Integer.parse(String.trim(str)) do
+      {ms, _} when ms > 0 -> Keyword.put(opts, :timeout_ms, ms)
+      _ -> opts
+    end
+  end
+
+  defp put_timeout_ms(opts, _), do: opts
+
+  defp put_skip_tls_verify(opts, "true"), do: Keyword.put(opts, :tls_verify, false)
+  defp put_skip_tls_verify(opts, _), do: opts
+
   defp start_rehandshake(socket, server_id) do
     liveview = self()
 
@@ -495,6 +640,53 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp safe_pending_holds do
     HoldRegistry.pending()
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp safe_session_count do
+    length(SessionStore.list())
+  rescue
+    _ -> 0
+  catch
+    :exit, _ -> 0
+  end
+
+  defp safe_api_keys do
+    ApiKey.list()
+  rescue
+    _ -> []
+  end
+
+  # `:ok` | `{:broken, detail}` | `:unknown`
+  defp safe_integrity do
+    case AuditIntegrity.status() do
+      %{last_check: %{result: :ok}} -> :ok
+      %{last_check: %{result: {:broken, detail}}} -> {:broken, detail}
+      _ -> :unknown
+    end
+  rescue
+    _ -> :unknown
+  catch
+    :exit, _ -> :unknown
+  end
+
+  # Runs `fun.(user)` only when the current user is at least an operator;
+  # otherwise flashes and returns the socket unchanged. `fun` returns a socket.
+  defp with_operator(socket, fun) do
+    user = socket.assigns.current_user
+
+    if user && Accounts.role_at_least?(user, :operator) do
+      {:noreply, fun.(user)}
+    else
+      {:noreply, put_flash(socket, :error, "That action requires the operator role.")}
+    end
+  end
+
+  defp safe_alerts do
+    PhoenixElxirBeam.MCP.Alerts.recent()
   rescue
     _ -> []
   catch
@@ -540,21 +732,6 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp plugin_note(_entry), do: nil
 
-  # The mock `server_id` (e.g. "files") behind a registered server whose
-  # base URL points at this app's own mock endpoint, or nil if it points
-  # elsewhere. Used to gate the "simulate drift" action.
-  defp mock_server_id(nil), do: nil
-  defp mock_server_id(%{base_url: base_url}), do: mock_server_id(base_url)
-
-  defp mock_server_id(base_url) when is_binary(base_url) do
-    case URI.parse(base_url) do
-      %URI{path: "/mcp/servers/" <> id} when id != "" -> id
-      _ -> nil
-    end
-  end
-
-  defp mock_server_id(_), do: nil
-
   defp parse_date("", _edge), do: nil
 
   defp parse_date(date_string, edge) do
@@ -568,168 +745,59 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end
   end
 
-  defp call_real_tool(server_id, tool_name, arguments, session_id) do
+  # Runs a full one-shot MCP session against the proxy — handshake, the tool
+  # call, teardown — exactly as an external client would, authenticating with
+  # the internal dashboard key. The proxy mints the session id; we read it
+  # back off the initialize response.
+  defp call_real_tool(server_id, tool_name, arguments) do
     port = PhoenixElxirBeamWeb.Endpoint.config(:http)[:port]
+    base = "http://127.0.0.1:#{port}/mcp/proxy/#{server_id}"
+    auth = [{"authorization", "Bearer #{ApiKey.dashboard_token()}"}]
 
-    body = %{
-      "jsonrpc" => "2.0",
-      "id" => System.unique_integer([:positive]),
-      "method" => "tools/call",
-      "params" => %{"name" => tool_name, "arguments" => arguments}
-    }
+    init =
+      Req.post(base,
+        headers: auth,
+        json: %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{
+            "protocolVersion" => "2025-06-18",
+            "clientInfo" => %{"name" => "dashboard", "version" => "1"}
+          }
+        }
+      )
 
-    Req.post("http://127.0.0.1:#{port}/mcp/proxy/#{server_id}",
-      json: body,
-      headers: [{"mcp-session-id", session_id}]
-    )
+    with {:ok, resp} <- init,
+         [session_id | _] <- Req.Response.get_header(resp, "mcp-session-id") do
+      headers = [{"mcp-session-id", session_id} | auth]
+
+      Req.post(base,
+        json: %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+        headers: headers
+      )
+
+      Req.post(base,
+        json: %{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{"name" => tool_name, "arguments" => arguments}
+        },
+        headers: headers
+      )
+
+      Req.delete(base, headers: headers)
+    end
   end
 
   defp tag_atom("sensitive_read"), do: :sensitive_read
   defp tag_atom("network_egress"), do: :network_egress
 
-  # Fixed commands, not user-supplied — the dashboard form only ever passes a
-  # preset key, never a raw command string, so there's no arbitrary-command
-  # injection surface here.
-  #
-  # Each preset can be overridden with an env var holding the full command line
-  # (`MCP_FILESYSTEM_CMD` / `MCP_FETCH_CMD`), which is how a containerized
-  # deployment points at servers baked into its own image. Without an override
-  # we fall back to the local-dev layout (a project-root `.venv` / a
-  # `priv/mcp_servers` npm install), probing both the POSIX (`bin/`) and
-  # Windows (`Scripts/`) venv layouts.
-  defp stdio_preset("filesystem") do
-    sandbox = sandbox_dir()
-
-    case env_cmd("MCP_FILESYSTEM_CMD") do
-      {:ok, cmd, args} ->
-        {:ok, "real-filesystem (stdio)", cmd, args ++ [sandbox]}
-
-      :none ->
-        node = System.find_executable("node")
-
-        entry =
-          Path.expand(
-            "priv/mcp_servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
-            File.cwd!()
-          )
-
-        cond do
-          is_nil(node) ->
-            {:error, preset_unavailable("filesystem", "node not found on PATH")}
-
-          not File.exists?(entry) ->
-            {:error,
-             preset_unavailable(
-               "filesystem",
-               "#{entry} not found — run: npm install --prefix priv/mcp_servers @modelcontextprotocol/server-filesystem"
-             )}
-
-          true ->
-            {:ok, "real-filesystem (stdio)", node, [entry, sandbox]}
-        end
-    end
-  end
-
-  defp stdio_preset("fetch") do
-    case env_cmd("MCP_FETCH_CMD") do
-      {:ok, cmd, args} ->
-        {:ok, "real-fetch (stdio)", cmd, args}
-
-      :none ->
-        case venv_python() do
-          {:ok, python} ->
-            {:ok, "real-fetch (stdio)", python, ["-m", "mcp_server_fetch"]}
-
-          :none ->
-            {:error,
-             preset_unavailable(
-               "fetch",
-               "no .venv found — run: python -m venv .venv && .venv/bin/python -m pip install mcp-server-fetch " <>
-                 "(.venv\\Scripts\\python on Windows)"
-             )}
-        end
-    end
-  end
-
-  # Splits an env-var command line on whitespace: `"python -m mcp_server_fetch"`
-  # -> `{:ok, "/usr/bin/python", ["-m", "mcp_server_fetch"]}`. Good enough for
-  # the fixed commands we expect here — no shell quoting is supported. The
-  # executable is resolved to an absolute path because `StdioServer` spawns it
-  # via `:spawn_executable`, which does not search `PATH`.
-  defp env_cmd(var) do
-    case System.get_env(var) do
-      value when is_binary(value) and value != "" ->
-        case String.split(value, ~r/\s+/, trim: true) do
-          [cmd | args] -> {:ok, resolve_executable(cmd), args}
-          [] -> :none
-        end
-
-      _ ->
-        :none
-    end
-  end
-
-  defp resolve_executable(cmd) do
-    expanded = Path.expand(cmd, File.cwd!())
-
-    cond do
-      Path.type(cmd) == :absolute -> cmd
-      File.regular?(expanded) -> expanded
-      true -> System.find_executable(cmd) || cmd
-    end
-  end
-
-  # The filesystem server's one allowed directory. In a release `priv` is under
-  # the versioned app dir (not the cwd), so resolve it through `app_dir/2` and
-  # only fall back to a cwd-relative path for `mix phx.server` dev.
-  defp sandbox_dir do
-    release_path = Application.app_dir(:phoenix_elxir_beam, "priv/mcp_sandbox")
-
-    if File.dir?(release_path) do
-      release_path
-    else
-      Path.expand("priv/mcp_sandbox", File.cwd!())
-    end
-  end
-
-  defp venv_python do
-    candidates =
-      [".venv/bin/python", ".venv/bin/python3", ".venv/Scripts/python.exe"]
-      |> Enum.map(&Path.expand(&1, File.cwd!()))
-
-    case Enum.find(candidates, &File.exists?/1) do
-      nil -> :none
-      python -> {:ok, python}
-    end
-  end
-
-  # In a packaged release (e.g. the Docker image) the local-dev toolchains
-  # aren't present; tell the operator to set the override rather than showing a
-  # path that only makes sense on a dev machine.
-  defp preset_unavailable(preset, detail) do
-    if System.get_env("RELEASE_NAME") do
-      "the '#{preset}' demo server isn't available in this deployment — " <>
-        "set MCP_#{String.upcase(preset)}_CMD to a command that launches it (#{detail})"
-    else
-      detail
-    end
-  end
-
-  defp generate_manual_session_id do
-    "manual-" <> (:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower))
-  end
-
-  defp apply_event(socket, %{status: :session_start} = event) do
-    socket
-    |> assign(scenario: event.scenario, running: true)
-    |> stream(:events, [event], reset: true)
-    |> push_event("mcp_graph_reset", %{})
-  end
-
   defp apply_event(socket, %{status: status} = event) when status in [:ok, :blocked] do
     socket = stream_insert(socket, :events, event, at: 0)
 
-    if event.server_id in ToolCatalog.servers() do
+    if event.server_id in graph_server_ids(socket.assigns.graph) do
       push_event(socket, "mcp_graph_event", %{
         server_id: event.server_id,
         tool_name: event.tool_name,
@@ -747,11 +815,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     stream_insert(socket, :events, event, at: 0)
   end
 
-  defp apply_event(socket, %{status: :session_complete} = event) do
-    socket
-    |> stream_insert(:events, event, at: 0)
-    |> assign(:running, false)
-  end
+  defp apply_event(socket, _event), do: socket
 
   defp format_time(%DateTime{} = ts) do
     Calendar.strftime(ts, "%H:%M:%S")
@@ -766,25 +830,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")
   end
 
-  defp status_label(:session_start), do: "started"
   defp status_label(:ok), do: "allowed"
   defp status_label(:blocked), do: "blocked"
   defp status_label(:held), do: "held"
-  defp status_label(:session_complete), do: "complete"
   defp status_label("ok"), do: "allowed"
   defp status_label("blocked"), do: "blocked"
   defp status_label("held"), do: "held"
-  defp status_label("session_start"), do: "started"
-  defp status_label("session_complete"), do: "complete"
   defp status_label(other), do: other
 
   defp console_status_class(status) when status in [:ok, "ok"], do: "text-success"
   defp console_status_class(status) when status in [:blocked, "blocked"], do: "text-error"
   defp console_status_class(status) when status in [:held, "held"], do: "text-warning"
-
-  defp console_status_class(status) when status in [:session_start, "session_start"],
-    do: "text-info"
-
   defp console_status_class(_), do: "text-base-content/50"
 
   defp sort_caret_class(sort_by, column) when sort_by == column, do: "text-primary"

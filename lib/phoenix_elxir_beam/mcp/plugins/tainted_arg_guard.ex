@@ -1,19 +1,21 @@
 defmodule PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard do
   @moduledoc """
-  Byte-level taint: blocks a `tools/call` whose **arguments** contain a
-  secret that a `post_call` scanner saw earlier in the same session
-  (`PhoenixElxirBeam.MCP.Plugins.SecretLeak` records the raw match in the
-  session's `taint.sources`, in memory only).
+  Marker-level taint: blocks a `tools/call` whose **arguments** carry a
+  secret that a `post_call` scanner saw earlier in the same session.
+  `PhoenixElxirBeam.MCP.Plugins.SecretLeak` records HMAC **taint markers**
+  (`PhoenixElxirBeam.MCP.TaintMarker`) for the secret and its common
+  encodings; this plugin tokenises the outbound arguments, marks each token
+  and its plausible decodings, and denies on any collision — so a base64- or
+  hex-encoded copy of the secret is caught, not just the raw bytes.
 
   Where `PhoenixElxirBeam.MCP.Plugins.TaintGuard` is coarse — *any* egress
-  once *any* secret has flowed — this is exact: it only fires when the
-  specific secret bytes reappear in an outbound call. It is scoped to no
-  tags, so it inspects every call's arguments, not just egress-tagged ones.
+  once *any* secret has flowed — this is targeted, and scoped to no tags so
+  it inspects every call's arguments, not just egress-tagged ones.
   """
 
   @behaviour PhoenixElxirBeam.MCP.Plugin.Policy
 
-  alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding}
+  alias PhoenixElxirBeam.MCP.{CallContext, Decision, Finding, TaintMarker}
   alias PhoenixElxirBeam.MCP.Plugin.Manifest
 
   @version "0.1.0"
@@ -39,46 +41,43 @@ defmodule PhoenixElxirBeam.MCP.Plugins.TaintedArgGuard do
 
   @impl true
   def evaluate(:pre_call, %CallContext{} = ctx) do
-    haystack = stringify(ctx.call[:arguments])
+    session_id = ctx.call[:session_id] || ctx.call["sessionId"]
+    candidates = TaintMarker.candidate_markers(session_id, ctx.call[:arguments])
 
     ctx
-    |> tracked_secrets()
-    |> Enum.find(fn %{secret: s} -> s != "" and String.contains?(haystack, s) end)
+    |> tracked_sources()
+    |> Enum.find(fn src ->
+      src |> markers_of() |> Enum.any?(&MapSet.member?(candidates, &1))
+    end)
     |> case do
       nil -> Decision.allow()
       source -> deny(source)
     end
   end
 
-  defp tracked_secrets(%CallContext{session: session}) do
-    session
-    |> get_in([:taint, :sources])
-    |> List.wrap()
-    |> Enum.filter(&is_binary(&1[:secret]))
+  defp tracked_sources(%CallContext{session: session}) do
+    session |> get_in([:taint, :sources]) |> List.wrap()
   end
 
-  defp deny(%{origin_tool: origin} = source) do
+  defp markers_of(source) do
+    (source[:markers] || source["markers"] || []) |> List.wrap()
+  end
+
+  defp deny(source) do
+    origin = source[:origin_tool] || source["origin_tool"] || "another tool"
+    hint = source[:hint] || source["hint"] || "‹secret›"
+
     reason =
-      "call blocked: an argument contains a secret this session read earlier via #{origin || "another tool"}"
+      "call blocked: an argument carries a secret this session read earlier via #{origin}"
 
     finding =
       Finding.new(%{
         type: "tainted_argument",
         severity: :critical,
-        title: "outbound argument carries a tracked secret (#{source[:hint] || "‹secret›"})",
+        title: "outbound argument carries a tracked secret (#{hint})",
         plugin: %{name: "tainted-arg-guard", version: @version}
       })
 
     %{Decision.deny(:critical, reason) | findings: [finding]}
-  end
-
-  defp stringify(nil), do: ""
-  defp stringify(bin) when is_binary(bin), do: bin
-
-  defp stringify(term) do
-    case Jason.encode(term) do
-      {:ok, json} -> json
-      _ -> inspect(term)
-    end
   end
 end
