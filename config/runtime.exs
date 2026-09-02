@@ -112,6 +112,14 @@ if config_env() == :prod do
 
   # DATABASE_URL wins if set; otherwise build it from POSTGRES_* + the
   # postgres_password secret (the compose default).
+  #
+  # The user/password/db segments are URL-encoded before interpolation: the
+  # compose file's own setup instructions generate the password with
+  # `openssl rand -base64 24`, whose alphabet includes `/` and `+` — a raw
+  # `/` in particular makes `URI.parse` mistake it for the authority/path
+  # boundary (splits the URL there, silently corrupting host/port/db), which
+  # is a URL-encoding bug, not a bad-password edge case: it reproduces for a
+  # meaningful fraction of freshly-generated passwords, not a rare one.
   database_url =
     System.get_env("DATABASE_URL") ||
       (
@@ -122,7 +130,8 @@ if config_env() == :prod do
         user = System.get_env("POSTGRES_USER", "mcp_proxy")
         db = System.get_env("POSTGRES_DB", "mcp_proxy")
         pg_host = System.get_env("POSTGRES_HOST", "postgres")
-        "postgres://#{user}:#{pw}@#{pg_host}:5432/#{db}"
+
+        "postgres://#{URI.encode_www_form(user)}:#{URI.encode_www_form(pw)}@#{pg_host}:5432/#{URI.encode_www_form(db)}"
       )
 
   config :phoenix_elxir_beam, PhoenixElxirBeam.Repo,
@@ -182,8 +191,13 @@ if config_env() == :prod do
       # Cap concurrent connections and header size (Bandit / Thousand Island
       # defaults are already conservative; pinned here so hardening is visible
       # in one place). The proxy body cap lives in Plugs.RequestLimits.
+      # NOTE: Thousand Island's option is `num_connections`, not
+      # `max_connections` -- the latter doesn't exist and fails Bandit's
+      # startup option validation, which crash-loops the whole release. This
+      # went undetected since neither `mix compile` nor CI's `MIX_ENV=prod
+      # mix compile` step actually starts the Endpoint under prod config.
       http_1_options: [max_header_length: 16_384],
-      thousand_island_options: [max_connections: 16_384]
+      thousand_island_options: [num_connections: 16_384]
     ],
     secret_key_base: secret_key_base
 
