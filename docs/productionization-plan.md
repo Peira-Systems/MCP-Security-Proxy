@@ -366,8 +366,16 @@ Plugin `Registry` toggle state → **M3.4** (bundled with its UI, already done).
   is left to log consumers / the Prometheus rules (locked decision).
 - Compose: `compose.observability.yml` overlay (prometheus + grafana),
   `deploy/prometheus/{prometheus.yml,alert.rules.yml}`, `deploy/grafana/provisioning/`.
-- **Deferred:** Grafana dashboard JSON not checked in; Loki/promtail overlay (structured
-  logs are SIEM-ready, shipping is deployment-specific); OTLP exporter (Prometheus chosen).
+- **Grafana dashboard + Loki/promtail overlay — done** (follow-up, closed):
+  `deploy/grafana/provisioning/dashboards/mcp-security-proxy.json` — 13 panels covering
+  every series in the table above plus Phoenix/VM metrics — is provisioned automatically
+  (file-backed provider, `deploy/grafana/provisioning/dashboards/dashboards.yml`). Verified
+  by actually bringing up prometheus+grafana+loki+promtail against a live Grafana 11.4.0 /
+  Loki 3.3.0 and reading the dashboard, targets, and shipped log lines back over their HTTP
+  APIs — no `mix test` coverage exists for this class of change, so this was the
+  verification. `compose.loki.yml` (optional overlay) adds `loki` + `promtail`;
+  `deploy/grafana/provisioning/datasources/loki.yml` provisions a matching Grafana
+  datasource. See `docs/observability.md`. OTLP exporter stays deferred (Prometheus chosen).
 - **Acceptance:** `metrics_controller_test` (`/metrics` renders the MCP series, token gate),
   `health_controller_test` (live 200 always; ready 200, and 503 with per-upstream detail
   when a stdio upstream is killed), `alerts_test`, `pipeline_telemetry_test` (phase +
@@ -599,4 +607,5 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
   See the M1.5 section above.
 - Downstream SSE passthrough + progress-notification relay (M1.3).
 - Injection ruleset: paraphrase / multilingual / obfuscation coverage; grow the corpus (M4.3).
-- Grafana dashboard JSON checked in; Loki/promtail overlay (M3.2).
+- ~~Grafana dashboard JSON checked in; Loki/promtail overlay~~ — **done** (M3.2). See the
+  M3.2 section above.

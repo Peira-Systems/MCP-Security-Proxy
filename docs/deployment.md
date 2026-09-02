@@ -80,10 +80,14 @@ docker compose -f docker-compose.yml -f compose.observability.yml up -d
 ```
 
 Adds Prometheus (:9090, scrapes `app:4000/metrics`, loads the alert rules) and
-Grafana (:3000). Point them at an existing stack instead by dropping the overlay
-and adding a scrape job — see [observability.md](observability.md). Ship the
-app's JSON logs (`mcp.alert …`, `mcp.audit.integrity …`, `StructuredLogSink`
-policy events) to your SIEM.
+Grafana (:3000, the **MCP Security Proxy** dashboard pre-provisioned). Point
+them at an existing stack instead by dropping the overlay and adding a scrape
+job — see [observability.md](observability.md). Optionally add
+`-f compose.loki.yml` for Loki + Promtail (ships every container's logs to
+Loki, labeled by compose service — a lighter-weight alternative to your SIEM
+for a single-node deploy). Either way, ship the app's JSON logs (`mcp.alert
+…`, `mcp.audit.integrity …`, `StructuredLogSink` policy events) to your SIEM
+for anything that needs to outlive the deployment.
 
 ## Sizing
 
@@ -95,6 +99,7 @@ sessions):
 | app | 1–2 vCPU | 512 MB–1 GB | BEAM; scales with concurrent sessions + sidecars. `POOL_SIZE` (default 10) bounds DB concurrency. |
 | postgres | 1 vCPU | 512 MB–1 GB + disk for `pg_data` | The audit log (`policy_events`) grows unbounded — see retention below. |
 | prometheus | 0.5 vCPU | 512 MB | 15-day retention in the overlay. |
+| loki + promtail | 0.5 vCPU combined | 512 MB combined | optional (`compose.loki.yml`); 7-day retention, filesystem storage. |
 | sidecars | 0.25 vCPU each | `as_mb` cap (prod: 512 MB) | one Python process for the injection scanner. |
 
 The policy pipeline adds **< 1 ms p99**; end-to-end latency is dominated by the

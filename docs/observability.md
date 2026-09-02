@@ -61,12 +61,45 @@ docker compose -f docker-compose.yml -f compose.observability.yml up -d
 ```
 
 Adds `prometheus` (:9090, scrapes `app:4000/metrics`, loads the alert rules) and
-`grafana` (:3000, Prometheus datasource pre-provisioned; set `GRAFANA_USER` /
-`GRAFANA_PASSWORD`). Already run a Prometheus? Skip the overlay and add a scrape
-job for `app:4000/metrics` — see [`deploy/prometheus/prometheus.yml`](../deploy/prometheus/prometheus.yml).
+`grafana` (:3000, Prometheus datasource + the **MCP Security Proxy** dashboard
+pre-provisioned; set `GRAFANA_USER` / `GRAFANA_PASSWORD`). Already run a
+Prometheus? Skip the overlay and add a scrape job for `app:4000/metrics` — see
+[`deploy/prometheus/prometheus.yml`](../deploy/prometheus/prometheus.yml).
+
+### Dashboard
+
+[`deploy/grafana/provisioning/dashboards/mcp-security-proxy.json`](../deploy/grafana/provisioning/dashboards/mcp-security-proxy.json)
+is provisioned automatically (file-backed, `allowUiUpdates: true` — edit it in
+the Grafana UI, or edit the JSON and it reloads within 30s). 13 panels:
+live-session / pending-hold / server-count stats, decision + alert rates,
+pipeline / upstream / HTTP endpoint latency (p50/p95/p99), per-plugin failure
+rate, upstream error rate, and BEAM VM memory + run-queue length — one panel
+per series in the table above, plus the standard Phoenix/VM metrics. Verified
+by actually provisioning it against a live Grafana 11.4.0 and querying
+`GET /api/dashboards/uid/mcp-security-proxy` back.
+
+### Logs (optional overlay)
+
+```bash
+docker compose -f docker-compose.yml -f compose.observability.yml -f compose.loki.yml up -d
+```
+
+Adds `loki` (:3100, filesystem storage, 7-day retention) and `promtail`
+(discovers every container on the host via the Docker socket and ships
+stdout/stderr to Loki, labeled `compose_service` / `compose_project` /
+`container` — filter to the app with `{compose_service="app"}` in Grafana
+Explore). A matching Loki datasource is provisioned into the same Grafana
+whenever `compose.observability.yml` is up; it just errors on query until
+this overlay is also running. See
+[`deploy/loki/loki-config.yml`](../deploy/loki/loki-config.yml) and
+[`deploy/promtail/promtail-config.yml`](../deploy/promtail/promtail-config.yml).
+Targets a Linux Docker host (the container-log mount path differs on Docker
+Desktop for Mac/Windows). This is log *shipping*, not the audit record — the
+hash-chained `policy_events` table is (`docs/deployment.md#retention--backups`).
 
 ## Not covered here
 
 Load/latency budget + the `mcp_pipeline_run_stop_duration` SLO is M3.3
 (`docs/latency-budget.md`). Per-alert operator response is the M4.4 runbook.
-Grafana dashboard JSON is not yet checked in.
+Alertmanager routing (email/Slack/PagerDuty) remains out of scope by design —
+see Alerts above.

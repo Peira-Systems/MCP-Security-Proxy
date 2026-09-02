@@ -1,0 +1,12 @@
+apiVersion: 1
+
+# Provisioned unconditionally alongside the Prometheus datasource (both live
+# in the same directory, mounted whenever compose.observability.yml is up).
+# It only resolves once compose.loki.yml is also running -- see that file.
+datasources:
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false

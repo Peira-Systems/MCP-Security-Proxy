@@ -1,0 +1,46 @@
+# Log aggregation overlay (M3.2 follow-up) -- Loki + Promtail. Additive to
+# compose.observability.yml, which must also be included so the same Grafana
+# instance gets both datasources. Use with:
+#
+#   docker compose -f docker-compose.yml -f compose.observability.yml -f compose.loki.yml up -d
+#
+# Promtail discovers every container on the host via the Docker socket
+# (docker_sd_configs) and ships their stdout/stderr to Loki, labeled by
+# compose project/service; Grafana gets a matching Loki datasource
+# provisioned alongside the existing Prometheus one automatically -- both
+# live under deploy/grafana/provisioning/datasources, mounted whenever the
+# observability overlay is up. Running compose.observability.yml without
+# this overlay just leaves the Loki datasource pointed at a service that
+# isn't running -- Grafana still starts fine, that datasource just errors on
+# query. See docs/observability.md.
+#
+# Promtail needs read access to the Docker socket to discover containers and
+# to /var/lib/docker/containers to read their JSON log files -- both mounted
+# read-only. This targets a Linux Docker host, matching the rest of the
+# deployment story (docs/deployment.md); the container log path differs on
+# Docker Desktop for Mac/Windows.
+
+services:
+  loki:
+    image: grafana/loki:3.3.0
+    volumes:
+      - ./deploy/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.3.0
+    volumes:
+      - ./deploy/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+volumes:
+  loki_data:
