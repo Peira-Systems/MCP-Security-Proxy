@@ -26,7 +26,9 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
              "read_config",
              "export_all",
              "post_webhook",
-             "big_export"
+             "big_export",
+             "progress_export",
+             "progress_then_cut"
            ]
 
     assert Enum.all?(server.tools, &(&1.tags == []))

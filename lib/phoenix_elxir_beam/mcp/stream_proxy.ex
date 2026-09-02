@@ -17,6 +17,41 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   `:stdio` upstreams are line-delimited request/response with no streaming
   transport — they use the buffered path in the controller, not this module.
+
+  ## Downstream SSE passthrough + progress relay (M1.3 follow-up)
+
+  When the caller passes `conn:` in `opts` and the upstream answers via
+  `text/event-stream`, every `notifications/progress` frame the upstream
+  sends *before* its final result is relayed **live** to the downstream
+  client — the proxy lazily upgrades that client's own response from a plain
+  buffered JSON reply to a chunked `text/event-stream` one the moment the
+  first progress notification arrives (never before; a call with no progress
+  notifications still gets today's exact single-JSON-response behavior). The
+  actual tool result is never relayed early — it still goes through the full
+  `chunk` + `post_call` scan/redaction pipeline exactly as before and is
+  written as the terminal SSE frame (or, on `:cut`/`:error`, a terminal SSE
+  error frame) only once that decision is made. Progress notifications carry
+  no tool-result content, so relaying them ahead of that decision doesn't
+  open a new exfiltration path — only the final frame does, and it is still
+  fully gated.
+
+  `run/4` returns its ordinary result (unchanged) when `opts[:conn]` is
+  omitted; when given, it returns `{result, relay_conn}` — `relay_conn` is
+  `nil` if no progress notification ever arrived (nothing was upgraded) or
+  the `:chunked` conn to write the terminal frame to via `Plug.Conn.chunk/2`
+  otherwise. See `PhoenixElxirBeamWeb.MCP.ProxyController.deliver/3`.
+
+  Known residual gap: if the *upstream* connection fails at the transport
+  level (not a decoded HTTP error — `Req.post` itself returning `{:error,
+  _}`) after some progress notifications were already relayed, `relay_conn`
+  comes back `nil` for that one response even though the downstream socket
+  has already been upgraded to chunked — `Req`'s error tuple doesn't carry
+  the accumulated private state back. The caller then falls back to its
+  normal (non-relay) error response, which can raise `Plug.Conn.
+  AlreadySentError` for that single request; Phoenix's own error handling
+  catches it (the request fails, the app does not crash). Narrow — requires
+  both relay-in-progress and a transport-level failure — and accepted rather
+  than adding process-scoped state to close it.
   """
 
   alias PhoenixElxirBeam.MCP.{CallContext, HttpTransport, Pipeline}
@@ -39,7 +74,8 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
   @doc """
   Runs `body` against `server` (a `:http` registered server), streaming the
-  reply. Returns:
+  reply. Returns `result()` — see the moduledoc — or, when `opts[:conn]` is
+  given, `{result(), Plug.Conn.t() | nil}`:
 
     * `{:ok, response_map, chunk_findings, chunk_taint_sources}` — the full
       JSON-RPC response, plus anything the chunk phase collected on the way;
@@ -48,12 +84,20 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     * `{:error, message}` — transport failure, timeout, buffer ceiling, or an
       unparseable / non-2xx reply.
   """
-  @spec run(map(), map(), call_meta(), keyword()) :: result()
+  @spec run(map(), map(), call_meta(), keyword()) :: result() | {result(), Plug.Conn.t() | nil}
   def run(server, body, call_meta, opts \\ []) do
     {url, transport_headers} = HttpTransport.prepare(server.base_url)
 
     session_headers =
       if server.session_id, do: [{"mcp-session-id", server.session_id}], else: []
+
+    # Whether to return the wrapped `{result, relay_conn}` shape is decided
+    # by whether the caller passed the `:conn` key at all — not by whether
+    # its value is non-nil. `ProxyController` always passes it (sometimes
+    # `nil`, when the client didn't ask for `text/event-stream`) because it
+    # always wants the wrapped shape back; a caller that omits `:conn`
+    # entirely (e.g. StreamProxyTest) gets today's plain, unwrapped result.
+    relay? = Keyword.has_key?(opts, :conn)
 
     state = %{
       status: :streaming,
@@ -68,11 +112,21 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
       request_id: body["id"],
       deadline:
         System.monotonic_time(:millisecond) + (opts[:deadline_ms] || @default_deadline_ms),
-      max_buffer: opts[:max_buffer_bytes] || @default_max_buffer_bytes
+      max_buffer: opts[:max_buffer_bytes] || @default_max_buffer_bytes,
+      # Downstream SSE relay (M1.3 follow-up). `relay?` records whether the
+      # caller wants relay-awareness at all (fixes the return shape);
+      # `downstream` is the original conn to lazily send_chunked/2 from;
+      # `relay_conn` becomes the chunked conn once the first progress
+      # notification is relayed, and is nil until then.
+      relay?: relay?,
+      downstream: opts[:conn],
+      relay_conn: nil,
+      sse_pending: ""
     }
 
     into = fn {:data, data}, {req, resp} ->
-      st = feed(resp.private[:stream_proxy] || state, data)
+      st = resp.private[:stream_proxy] || state
+      st = feed(st, data, sse?(resp))
       resp = Req.Response.put_private(resp, :stream_proxy, st)
       if st.status == :streaming, do: {:cont, {req, resp}}, else: {:halt, {req, resp}}
     end
@@ -88,19 +142,23 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
         finish(resp.private[:stream_proxy] || state, resp)
 
       {:error, %{reason: :timeout}} ->
-        {:error, "upstream stream timed out"}
+        wrap({:error, "upstream stream timed out"}, state)
 
       {:error, reason} ->
-        {:error, "upstream stream error: #{Exception.format(:error, reason)}"}
+        wrap({:error, "upstream stream error: #{Exception.format(:error, reason)}"}, state)
     end
   end
 
   # -- incremental read -------------------------------------------------
 
-  defp feed(%{status: :streaming} = st, data) do
+  defp feed(%{status: :streaming} = st, data, is_sse) do
     st = %{st | buffer: st.buffer <> data, bytes: st.bytes + byte_size(data)}
+    st = if is_sse and st.relay?, do: relay_progress(st, data), else: st
 
     cond do
+      st.status != :streaming ->
+        st
+
       System.monotonic_time(:millisecond) > st.deadline ->
         %{st | status: :error, reason: "upstream stream exceeded its deadline"}
 
@@ -119,7 +177,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     end
   end
 
-  defp feed(st, _data), do: st
+  defp feed(st, _data, _is_sse), do: st
 
   defp run_chunk_phase(st, data) do
     part = %{"type" => "text", "text" => data}
@@ -151,28 +209,90 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
     end
   end
 
+  # -- downstream progress relay ----------------------------------------
+
+  # Extracts complete SSE frames (records end at a blank line) from
+  # `st.sse_pending <> data`, relays any `notifications/progress` message
+  # found in each, and keeps whatever's left of a not-yet-complete frame.
+  defp relay_progress(st, data) do
+    {frames, rest} = extract_sse_frames(st.sse_pending <> data)
+    st = %{st | sse_pending: rest}
+    Enum.reduce(frames, st, &relay_frame/2)
+  end
+
+  defp extract_sse_frames(buffer) do
+    parts = String.split(buffer, ~r/\r?\n\r?\n/)
+    {complete, [incomplete]} = Enum.split(parts, -1)
+    {complete, incomplete}
+  end
+
+  defp relay_frame(frame, st) do
+    case progress_message(frame) do
+      {:ok, msg} -> emit_progress(st, msg)
+      :error -> st
+    end
+  end
+
+  defp progress_message(frame) do
+    frame
+    |> String.split(~r/\r?\n/)
+    |> Enum.flat_map(fn
+      "data: " <> rest -> [rest]
+      "data:" <> rest -> [String.trim_leading(rest)]
+      _ -> []
+    end)
+    |> Enum.find_value(:error, fn line ->
+      case Jason.decode(line) do
+        {:ok, %{"method" => "notifications/progress"} = msg} -> {:ok, msg}
+        _ -> nil
+      end
+    end)
+  end
+
+  defp emit_progress(%{downstream: nil} = st, _msg), do: st
+
+  defp emit_progress(st, msg) do
+    conn = st.relay_conn || start_sse(st.downstream)
+
+    case Plug.Conn.chunk(conn, sse_data(msg)) do
+      {:ok, conn} -> %{st | relay_conn: conn}
+      {:error, _} -> %{st | status: :error, reason: "downstream connection closed"}
+    end
+  end
+
+  defp start_sse(conn) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_chunked(200)
+  end
+
+  defp sse_data(msg), do: "data: #{Jason.encode!(msg)}\n\n"
+
   # -- terminal --------------------------------------------------------
 
   defp finish(%{status: :cut} = st, _resp) do
-    {:cut, st.reason, st.findings, st.taint, st.bytes}
+    wrap({:cut, st.reason, st.findings, st.taint, st.bytes}, st)
   end
 
   defp finish(%{status: :error} = st, _resp) do
-    {:error, st.reason}
+    wrap({:error, st.reason}, st)
   end
 
   defp finish(%{status: :streaming} = st, resp) do
     cond do
       resp.status not in 200..299 ->
-        {:error, "upstream responded with HTTP #{resp.status}"}
+        wrap({:error, "upstream responded with HTTP #{resp.status}"}, st)
 
       true ->
         case decode_body(resp, st.buffer, st.request_id) do
-          {:ok, response_map} -> {:ok, response_map, st.findings, st.taint}
-          :error -> {:error, "upstream returned an unparseable MCP response"}
+          {:ok, response_map} -> wrap({:ok, response_map, st.findings, st.taint}, st)
+          :error -> wrap({:error, "upstream returned an unparseable MCP response"}, st)
         end
     end
   end
+
+  defp wrap(result, %{relay?: false}), do: result
+  defp wrap(result, %{relay?: true, relay_conn: conn}), do: {result, conn}
 
   # `application/json` → the buffer is one JSON-RPC document.
   # `text/event-stream` → the buffer is SSE frames; pull the `data:` line

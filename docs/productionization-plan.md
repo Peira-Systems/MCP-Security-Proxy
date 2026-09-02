@@ -154,15 +154,35 @@ M1–M4 are written against the real shape once, not adapted twice.
 - **Files:** `MCP.StreamProxy`, `ProxyController.forward_and_scan` / `fetch_streamed`,
   `Pipeline.run_chunk` return shape (+ `pipeline_chunk_test`), `MCPHTTPTestServer` gained a
   chunked large-response tool.
-- **Not done (deferred):** downstream SSE passthrough and progress-notification relay — the
-  client still gets one JSON response (or one error), never a partial. Real MCP `tools/call`
-  results are not chunked at the content level, so incremental *inspection* + early cut is
-  the security-relevant part; downstream streaming + the standalone GET SSE endpoint are a
-  separate surface (revisit if a real client needs server→client messaging).
+- **Downstream SSE passthrough + progress-notification relay — done** (follow-up, closed):
+  when the client's `Accept` header includes `text/event-stream`, `StreamProxy` now relays
+  every `notifications/progress` frame the upstream sends **live**, lazily upgrading that
+  client's own response from a plain buffered JSON reply to a chunked `text/event-stream`
+  one the moment the *first* progress notification arrives — a call with no progress
+  notifications still gets exactly today's single-JSON-response behavior (verified: zero
+  existing tests needed behavior changes, since none set an `Accept` header). The actual
+  tool result is never relayed early — it still goes through the full `chunk` +
+  `post_call` scan/redaction pipeline exactly as before and is written as the terminal SSE
+  frame (or, on `:cut`/`:error`, a terminal SSE error frame) only once that decision is
+  made, so this doesn't open a new exfiltration path; only the final frame's *delivery
+  framing* changes. `StreamProxy.run/4`'s return shape is opt-in wrapped
+  (`{result, relay_conn}`) based on whether the caller passes the `:conn` key at all, not
+  its value — `ProxyController` always does (so it always gets the wrapped shape back);
+  `StreamProxyTest`'s direct calls don't, so they see the unwrapped shape unchanged.
+  `MCPHTTPTestServer` gained an SSE progress-notification tool + a deliberately-oversized
+  one to exercise the relay-active `:cut` path. One documented residual gap (a raw upstream
+  transport-level failure losing the accumulated relay conn — see `StreamProxy`'s
+  moduledoc); narrow, and the app doesn't crash, just that one request's error response.
+  The standalone GET SSE endpoint (server→client messaging outside a request/response) is
+  still a separate, out-of-scope surface.
 - **Acceptance:** `stream_proxy_test` + `proxy_streaming_test` — a small response reassembles
   and still runs `post_call`; `StreamGuard` (500-byte test budget) cuts a ~20 KB chunked
   response to `-32002` mid-transfer; the buffer ceiling stops a flood before any verdict;
-  the tool-chaining policy still fires across streamed calls.
+  the tool-chaining policy still fires across streamed calls; progress notifications relay
+  live ending in the scanned result; a call with no progress notifications stays plain JSON
+  even when the client accepts SSE; a client that doesn't accept SSE is never upgraded; a
+  chunk-phase cut after relay has started ends the stream with a terminal SSE error frame
+  instead of crashing; a non-relayed cut is unaffected. Suite 344 → 349, dialyzer clean.
 
 ### M1.4 — Authentication & authorization — **done** (`MCP.ApiKey`, `Plugs.ApiKeyAuth`)
 - **Downstream client auth: signed API keys.** `Authorization: Bearer mcpk_<id>.<secret>`;
@@ -605,7 +625,8 @@ M4.3, M4.4 ── no hard deps; M4.4 threat model best written after M1–M3
   blocked HTTP request can resume across a restart.
 - ~~Per-server `timeout_ms` / `tls_verify` in the registration record~~ — **done** (M1.5).
   See the M1.5 section above.
-- Downstream SSE passthrough + progress-notification relay (M1.3).
+- ~~Downstream SSE passthrough + progress-notification relay~~ — **done** (M1.3). See the
+  M1.3 section above.
 - Injection ruleset: paraphrase / multilingual / obfuscation coverage; grow the corpus (M4.3).
 - ~~Grafana dashboard JSON checked in; Loki/promtail overlay~~ — **done** (M3.2). See the
   M3.2 section above.

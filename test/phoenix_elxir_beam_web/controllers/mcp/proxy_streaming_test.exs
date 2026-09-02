@@ -71,4 +71,91 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyStreamingTest do
 
     assert %{"error" => %{"code" => -32001}} = json_response(egress, 200)
   end
+
+  # -- downstream SSE relay (M1.3 follow-up) -----------------------------
+
+  defp tool_call_accepting_sse(token, session_id, server_id, name) do
+    authed(token)
+    |> put_req_header("mcp-session-id", session_id)
+    |> put_req_header("accept", "application/json, text/event-stream")
+    |> proxy_post(server_id, rpc("tools/call", %{"name" => name, "arguments" => %{}}))
+  end
+
+  defp sse_frames(conn) do
+    conn.resp_body
+    |> String.split("\n\n", trim: true)
+    |> Enum.map(fn "data: " <> json -> Jason.decode!(json) end)
+  end
+
+  test "progress notifications relay live over a downstream SSE stream, ending in the scanned result",
+       %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call_accepting_sse(token, session_id, sid, "progress_export")
+
+    assert ["text/event-stream" <> _] = get_resp_header(conn, "content-type")
+
+    frames = sse_frames(conn)
+    progress = Enum.filter(frames, &(&1["method"] == "notifications/progress"))
+    assert length(progress) == 2
+    assert Enum.map(progress, & &1["params"]["progress"]) == [33, 66]
+
+    assert %{"result" => %{"content" => [%{"text" => "export complete (simulated)"}]}} =
+             List.last(frames)
+  end
+
+  test "a call with no progress notifications still gets a plain JSON response even when the client accepts SSE",
+       %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call_accepting_sse(token, session_id, sid, "list_files")
+
+    assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(conn, 200)
+    assert text =~ "directory listing"
+  end
+
+  test "a client that only accepts application/json never gets upgraded to SSE", %{
+    sid: sid,
+    token: token
+  } do
+    session_id = handshake(token, sid)
+
+    conn =
+      authed(token)
+      |> put_req_header("mcp-session-id", session_id)
+      |> put_req_header("accept", "application/json")
+      |> proxy_post(sid, rpc("tools/call", %{"name" => "progress_export", "arguments" => %{}}))
+
+    assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+
+    assert %{"result" => %{"content" => [%{"text" => "export complete (simulated)"}]}} =
+             json_response(conn, 200)
+  end
+
+  test "StreamGuard cutting an already-relayed stream ends it with a terminal SSE error frame",
+       %{sid: sid, token: token} do
+    session_id = handshake(token, sid)
+    conn = tool_call_accepting_sse(token, session_id, sid, "progress_then_cut")
+
+    # relay was already engaged by the oversized progress frame, so the cut
+    # must be delivered as a terminal SSE frame, not a fresh json/2 response
+    # (which would crash on an already-:chunked conn).
+    assert ["text/event-stream" <> _] = get_resp_header(conn, "content-type")
+
+    assert [%{"method" => "notifications/progress"}, %{"error" => %{"code" => -32002}} = last] =
+             sse_frames(conn)
+
+    assert last["error"]["message"] =~ "budget"
+  end
+
+  test "StreamGuard cutting a non-relayed stream is unaffected by this change", %{
+    sid: sid,
+    token: token
+  } do
+    session_id = handshake(token, sid)
+    conn = tool_call_accepting_sse(token, session_id, sid, "big_export")
+
+    assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+    assert %{"error" => %{"code" => -32002, "message" => message}} = json_response(conn, 200)
+    assert message =~ "budget"
+  end
 end

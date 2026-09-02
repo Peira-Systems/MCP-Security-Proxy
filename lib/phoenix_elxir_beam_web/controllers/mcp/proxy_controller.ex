@@ -24,6 +24,14 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   `chunk`-phase deny (`StreamGuard`) cuts a large exfiltration mid-transfer
   rather than after the whole payload has crossed. `:stdio` upstreams use
   the buffered path.
+
+  If the client accepts `text/event-stream` and the upstream sends
+  `notifications/progress` before its result, those are relayed live over a
+  downstream SSE response (`accepts_event_stream?/1`, `deliver/3`) — the
+  actual result is still fully scanned/redacted (or withheld) before it's
+  ever sent, exactly as without relay; only its delivery framing changes.
+  See `PhoenixElxirBeam.MCP.StreamProxy`'s moduledoc for the design and its
+  one documented residual gap.
   """
 
   use PhoenixElxirBeamWeb, :controller
@@ -55,6 +63,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   @response_withheld_code -32002
   @quarantined_code -32003
   @method_refused_code -32601
+  @upstream_error_code -32000
 
   # Newest first — `initialize` echoes the client's version if supported,
   # else offers the newest.
@@ -384,14 +393,22 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   # response) before replying. `scan_label` is what the audit row records the
   # scan against — the tool name for `tools/call`, the method itself for
   # `resources/read` etc.
+  #
+  # `relay` (M1.3 follow-up): if the downstream client accepts
+  # `text/event-stream`, its own conn is handed to `StreamProxy` so any
+  # `notifications/progress` the upstream sends gets relayed live — see
+  # `StreamProxy`'s moduledoc. `relay_conn` below is `nil` (nothing was
+  # relayed; deliver/3 replies with a plain `json/2` exactly as before) or
+  # the already-`:chunked` conn to write the terminal frame to.
   defp forward_and_scan(conn, server_id, session_id, method, scan_label, id, jsonrpc, rpc_params) do
     meta = %{session_id: session_id, server_id: server_id, tool_name: scan_label, method: method}
+    relay = if accepts_event_stream?(conn), do: conn
 
-    case fetch_streamed(server_id, envelope(jsonrpc, id, method, rpc_params), meta) do
-      {:error, message} ->
-        upstream_error(conn, id, message)
+    case fetch_streamed(server_id, envelope(jsonrpc, id, method, rpc_params), meta, relay) do
+      {{:error, message}, relay_conn} ->
+        deliver(conn, relay_conn, error("2.0", id, @upstream_error_code, message))
 
-      {:cut, reason, findings, taint_sources, bytes} ->
+      {{:cut, reason, findings, taint_sources, bytes}, relay_conn} ->
         PolicyEngine.record_response_scan(
           session_id,
           server_id,
@@ -401,15 +418,17 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           taint_sources
         )
 
-        json(conn, %{
-          "jsonrpc" => jsonrpc,
-          "id" => id,
-          "error" => %{"code" => @response_withheld_code, "message" => reason}
-        })
+        deliver(
+          conn,
+          relay_conn,
+          error(jsonrpc, id, @response_withheld_code, reason)
+        )
 
-      {:ok, %{"result" => result} = resp_body, chunk_findings, chunk_taint} when is_map(result) ->
+      {{:ok, %{"result" => result} = resp_body, chunk_findings, chunk_taint}, relay_conn}
+      when is_map(result) ->
         scan_response(
           conn,
+          relay_conn,
           server_id,
           session_id,
           method,
@@ -422,7 +441,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           chunk_taint
         )
 
-      {:ok, resp_body, chunk_findings, chunk_taint} ->
+      {{:ok, resp_body, chunk_findings, chunk_taint}, relay_conn} ->
         # Error result or an unexpected shape — nothing to scan, but still
         # receipt anything the chunk phase collected on the way.
         PolicyEngine.record_response_scan(
@@ -434,25 +453,29 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           chunk_taint
         )
 
-        json(conn, resp_body)
+        deliver(conn, relay_conn, resp_body)
     end
   end
 
   # `:http` upstreams stream through `StreamProxy` (incremental read + chunk
-  # phase); `:stdio` is line-delimited request/response with no streaming.
-  defp fetch_streamed(server_id, body, meta) do
+  # phase); `:stdio` is line-delimited request/response with no streaming
+  # (and so never relays progress). `relay` is the downstream conn to pass to
+  # `StreamProxy` for progress relay, or `nil` to skip it — either way the
+  # result comes back wrapped as `{legacy_result, relay_conn}` so the caller
+  # doesn't need to special-case transport.
+  defp fetch_streamed(server_id, body, meta, relay) do
     case ServerRegistry.get_server(server_id) do
       nil ->
-        {:error, no_server_message(server_id)}
+        {{:error, no_server_message(server_id)}, nil}
 
       %{transport: :http} = server ->
-        measured_upstream(:http, fn -> StreamProxy.run(server, body, meta) end)
+        measured_upstream(:http, fn -> StreamProxy.run(server, body, meta, conn: relay) end)
 
       %{transport: :stdio, pid: pid} ->
         measured_upstream(:stdio, fn ->
           case StdioServer.request(pid, body) do
-            {:ok, resp_body} -> {:ok, resp_body, [], []}
-            {:error, _reason} -> {:error, "upstream real server error"}
+            {:ok, resp_body} -> {{:ok, resp_body, [], []}, nil}
+            {:error, _reason} -> {{:error, "upstream real server error"}, nil}
           end
         end)
     end
@@ -462,14 +485,40 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   # (latency + ok/error rate per transport) — see PhoenixElxirBeam.MCP.Telemetry.
   defp measured_upstream(transport, fun) do
     Telemetry.span([:upstream, :request], %{transport: transport}, fn ->
-      result = fun.()
-      outcome = if match?({:error, _}, result), do: :error, else: :ok
+      {legacy_result, _relay_conn} = result = fun.()
+      outcome = if match?({:error, _}, legacy_result), do: :error, else: :ok
       {result, %{transport: transport, outcome: outcome}}
     end)
   end
 
+  # Whether the client's declared `Accept` header includes `text/event-stream`
+  # — the MCP Streamable HTTP transport requires every conforming client to
+  # send this, but a defensive check costs nothing and means an older/custom
+  # client that only declared `application/json` never gets upgraded to a
+  # response shape it didn't ask for.
+  defp accepts_event_stream?(conn) do
+    conn
+    |> get_req_header("accept")
+    |> Enum.any?(&String.contains?(&1, "text/event-stream"))
+  end
+
+  # Replies with a plain JSON response (unchanged from before M1.3's relay),
+  # or, if progress notifications were already relayed and `relay_conn` is
+  # the resulting `:chunked` conn, writes `body` as the terminal SSE frame
+  # and returns that conn — Phoenix considers a `:chunked` conn's response
+  # complete once the action returns it, no explicit close call needed.
+  defp deliver(conn, nil, body), do: json(conn, body)
+
+  defp deliver(_conn, relay_conn, body) do
+    case Plug.Conn.chunk(relay_conn, "data: #{Jason.encode!(body)}\n\n") do
+      {:ok, conn} -> conn
+      {:error, _} -> relay_conn
+    end
+  end
+
   defp scan_response(
          conn,
+         relay_conn,
          server_id,
          session_id,
          method,
@@ -492,7 +541,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           chunk_taint
         )
 
-        json(conn, resp_body)
+        deliver(conn, relay_conn, resp_body)
 
       {content, reinject} ->
         ctx =
@@ -524,11 +573,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               all_taint
             )
 
-            json(conn, %{
-              "jsonrpc" => jsonrpc,
-              "id" => id,
-              "error" => %{"code" => @response_withheld_code, "message" => reason}
-            })
+            deliver(conn, relay_conn, error(jsonrpc, id, @response_withheld_code, reason))
 
           :allow ->
             PolicyEngine.record_response_scan(
@@ -541,7 +586,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             )
 
             redacted = Redaction.apply(content, redactions)
-            json(conn, Map.put(resp_body, "result", reinject.(redacted)))
+            deliver(conn, relay_conn, Map.put(resp_body, "result", reinject.(redacted)))
         end
     end
   end
@@ -596,10 +641,6 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   end
 
   defp upstream_error(conn, id, message) do
-    json(conn, %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "error" => %{"code" => -32000, "message" => message}
-    })
+    json(conn, error("2.0", id, @upstream_error_code, message))
   end
 end

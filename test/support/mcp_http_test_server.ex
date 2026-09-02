@@ -57,6 +57,27 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
       # them so StreamGuard can cut it mid-stream.
       "response" => String.duplicate("user,email,role,region,last_login;", 600),
       "chunked" => true
+    },
+    %{
+      "name" => "progress_export",
+      "description" => "Export with progress notifications along the way",
+      "inputSchema" => %{"type" => "object", "properties" => %{}},
+      # Answered over text/event-stream: two notifications/progress frames,
+      # then the final result frame — exercises StreamProxy's downstream
+      # relay (M1.3 follow-up).
+      "response" => "export complete (simulated)",
+      "sse" => true
+    },
+    %{
+      "name" => "progress_then_cut",
+      "description" => "A progress notification alone big enough to trip StreamGuard",
+      "inputSchema" => %{"type" => "object", "properties" => %{}},
+      # Same transport as progress_export, but its one padded progress frame
+      # alone exceeds config/test.exs's 500-byte StreamGuard budget -- so the
+      # chunk-phase deny fires *after* relay has already started. Exercises
+      # `deliver/3`'s relay-active :cut path.
+      "sse" => true,
+      "cut" => true
     }
   ]
 
@@ -90,14 +111,19 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
     {:ok, body, conn} = read_body(conn)
     req = Jason.decode!(body)
 
-    if chunked_tool?(req) do
-      send_chunked_response(conn, req)
-    else
-      payload = respond(req["method"], req["params"] || %{}, req["id"])
+    cond do
+      chunked_tool?(req) ->
+        send_chunked_response(conn, req)
 
-      conn
-      |> put_resp_content_type("application/json")
-      |> send_resp(200, Jason.encode!(payload))
+      sse_tool?(req) ->
+        send_sse_response(conn, req)
+
+      true ->
+        payload = respond(req["method"], req["params"] || %{}, req["id"])
+
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(payload))
     end
   end
 
@@ -106,6 +132,12 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
   end
 
   defp chunked_tool?(_req), do: false
+
+  defp sse_tool?(%{"method" => "tools/call", "params" => %{"name" => name}}) do
+    match?(%{"sse" => true}, Enum.find(@tools, &(&1["name"] == name)))
+  end
+
+  defp sse_tool?(_req), do: false
 
   # Streams a valid JSON-RPC body out in 256-byte slices with a short pause
   # between them, so the proxy's incremental reader (and StreamGuard) see it
@@ -124,6 +156,46 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
       Process.sleep(2)
 
       case chunk(conn, slice) do
+        {:ok, conn} -> {:cont, conn}
+        {:error, _reason} -> {:halt, conn}
+      end
+    end)
+  end
+
+  # Answers over text/event-stream: either two notifications/progress frames
+  # (no `id` — they're notifications, not responses) then the final result
+  # frame, or (for the "cut" tool) one deliberately oversized progress frame
+  # that trips StreamGuard before any result is ever sent.
+  defp send_sse_response(conn, %{"params" => %{"name" => name}, "id" => id}) do
+    tool = Enum.find(@tools, &(&1["name"] == name))
+    conn = conn |> put_resp_content_type("text/event-stream") |> send_chunked(200)
+
+    if tool["cut"] do
+      send_sse_frames(conn, [progress_frame(id, 1, String.duplicate("x", 600))])
+    else
+      result =
+        Jason.encode!(ok(id, %{"content" => [%{"type" => "text", "text" => tool["response"]}]}))
+
+      send_sse_frames(conn, [progress_frame(id, 33), progress_frame(id, 66), result])
+    end
+  end
+
+  defp progress_frame(id, pct, message \\ nil) do
+    params = %{"progressToken" => "t-#{id}", "progress" => pct, "total" => 100}
+    params = if message, do: Map.put(params, "message", message), else: params
+
+    Jason.encode!(%{
+      "jsonrpc" => "2.0",
+      "method" => "notifications/progress",
+      "params" => params
+    })
+  end
+
+  defp send_sse_frames(conn, frames) do
+    Enum.reduce_while(frames, conn, fn frame, conn ->
+      Process.sleep(2)
+
+      case chunk(conn, "data: #{frame}\n\n") do
         {:ok, conn} -> {:cont, conn}
         {:error, _reason} -> {:halt, conn}
       end
