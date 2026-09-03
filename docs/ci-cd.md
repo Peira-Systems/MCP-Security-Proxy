@@ -14,15 +14,28 @@
 ## Runners
 
 Every workflow runs on a **self-hosted** runner (`runs-on: self-hosted`) — there
-are no GitHub-hosted runners in use. The runner needs: Docker (service containers
-for `ci.yml` / `load.yml`, image build for `release.yml`), outbound access to
-hex.pm and the GitHub-hosted action/tool downloads, and network reach to the
-registry. It's typically a single runner, so `ci.yml`'s `test` and `dialyzer`
-jobs serialize rather than run in parallel.
+are no GitHub-hosted runners in use. It's typically a single runner, so `ci.yml`'s
+`test` and `dialyzer` jobs serialize rather than run in parallel.
+
+Unlike GitHub's hosted images, a bare runner has to be provisioned. This one needs:
+
+- **Docker** — service containers (`ci.yml` / `load.yml` Postgres) and the image
+  build (`release.yml`).
+- **`unzip`, `zip`, `build-essential`, `curl`, `git`, `locales`** — `unzip` is
+  required by `erlef/setup-beam`; `build-essential` compiles native deps.
+- **Node.js** (with `node` on `PATH`) — `mix test` spawns the JS MCP stdio-server
+  fixtures under `test/support/fixtures/`.
+- **Python 3** — `ci.yml` runs `priv/plugins/score_injection.py`.
+- Outbound network to hex.pm, `github.com` (action/tool downloads), and the
+  image registry.
 
 `ci.yml` / `load.yml` set `env: ImageOS: ubuntu26` — self-hosted runners don't
 provide the `ImageOS` variable that `erlef/setup-beam` needs to select a prebuilt
 OTP/Elixir. Update that value if the runner's Ubuntu release changes.
+
+Cache keys include `runner.environment` so a self-hosted runner never restores a
+PLT / build cache saved by a GitHub-hosted run (the Dialyzer PLT bakes in
+absolute OTP paths that differ between the two).
 
 ## Registry
 

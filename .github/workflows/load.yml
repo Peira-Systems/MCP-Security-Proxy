@@ -68,8 +68,8 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-load-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-load-
+          key: ${{ runner.os }}-${{ runner.environment }}-mix-load-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.environment }}-mix-load-
 
       - run: mix deps.get
 
