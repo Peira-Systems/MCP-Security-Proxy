@@ -32,7 +32,9 @@ nodes.
 
 - Docker + Docker Compose v2.
 - A DNS name and TLS cert for the reverse proxy.
-- `ghcr.io/<owner>/<repo>` pull access (or build locally).
+- Pull access to `artifact-keeper.peirasystems.com/mcp-security-proxy` (HTTPS),
+  or build locally. If that registry uses a private CA, install the CA cert on
+  the node (`/etc/docker/certs.d/artifact-keeper.peirasystems.com/ca.crt`).
 
 ## Configuration
 

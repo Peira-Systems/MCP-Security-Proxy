@@ -126,7 +126,7 @@ log that still verifies internally).
 See [ci-cd.md](ci-cd.md). Short version, on the host:
 
 ```bash
-# docker-compose.yml points `app` at ghcr.io/<owner>/<repo>:<new-tag>
+# docker-compose.yml points `app` at artifact-keeper.peirasystems.com/mcp-security-proxy:<new-tag>
 docker compose pull app
 docker compose up -d app
 ```
