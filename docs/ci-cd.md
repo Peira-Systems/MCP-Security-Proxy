@@ -20,6 +20,10 @@ hex.pm and the GitHub-hosted action/tool downloads, and network reach to the
 registry. It's typically a single runner, so `ci.yml`'s `test` and `dialyzer`
 jobs serialize rather than run in parallel.
 
+`ci.yml` / `load.yml` set `env: ImageOS: ubuntu26` — self-hosted runners don't
+provide the `ImageOS` variable that `erlef/setup-beam` needs to select a prebuilt
+OTP/Elixir. Update that value if the runner's Ubuntu release changes.
+
 ## Registry
 
 `release.yml` pushes over HTTPS to `${REGISTRY_HOST}/mcp-security-proxy`.

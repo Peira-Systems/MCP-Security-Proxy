@@ -15,6 +15,9 @@ env:
   ELIXIR_VERSION: "1.17.3"
   OTP_VERSION: "27.1.2"
   MIX_ENV: test
+  # Self-hosted runners don't set ImageOS; erlef/setup-beam needs it to pick
+  # the prebuilt OTP/Elixir. Match the runner's Ubuntu release.
+  ImageOS: ubuntu26
 
 jobs:
   test:
