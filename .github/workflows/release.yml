@@ -2,36 +2,51 @@ name: Release image
 
 # Build and push the runtime image when a version tag is pushed:
 #   git tag v0.2.0 && git push origin v0.2.0
-# The image is published to the GitHub Container Registry for this repo:
-#   ghcr.io/<owner>/<repo>:v0.2.0  and  :latest
-# Deploying it onto the single node is a manual step on the host — see
+# It can also be run by hand from the Actions tab (workflow_dispatch) against
+# any ref — the image is then tagged only `:<short-sha>` (no `:latest`, which is
+# reserved for tag builds).
+#
+# The image is published to `${REGISTRY_HOST}/mcp-security-proxy` over HTTPS.
+# Configure it in the repo settings (Settings → Secrets and variables → Actions):
+#   - variable REGISTRY_HOST      e.g. artifact-keeper.peirasystems.com
+#   - secret   REGISTRY_USER
+#   - secret   REGISTRY_PASSWORD
+# Deploying the image onto the node is a manual step on the host — see
 # docs/ci-cd.md (deploy + rollback).
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE: ${{ vars.REGISTRY_HOST }}/mcp-security-proxy
 
 jobs:
   build-push:
-    runs-on: ubuntu-latest
+    # Self-hosted runner that can reach the registry host.
+    runs-on: self-hosted
     permissions:
       contents: read
-      packages: write
 
     steps:
+      - name: Check registry config
+        env:
+          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
+        run: |
+          test -n "$REGISTRY_HOST" \
+            || { echo "::error::repo variable REGISTRY_HOST is not set"; exit 1; }
+
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Log in to the registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ vars.REGISTRY_HOST }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Image metadata
         id: meta
@@ -41,7 +56,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
