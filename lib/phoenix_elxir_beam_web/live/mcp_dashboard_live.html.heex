@@ -738,6 +738,13 @@
             if(plugin.enabled, do: "bg-success", else: "bg-base-content/25")
           ]}></span>
           <span class="font-mono font-medium">{plugin.name}</span>
+          <button
+            type="button"
+            class="link link-hover text-xs text-primary"
+            onclick={"document.getElementById('plugin-info-#{plugin.name}').showModal()"}
+          >
+            details
+          </button>
           <span class="text-xs text-base-content/40">v{plugin.version}</span>
           <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] text-base-content/60">
             {plugin.kind}
@@ -797,6 +804,52 @@
               {if plugin.enabled, do: "disable", else: "enable"}
             </button>
           </div>
+
+          <dialog id={"plugin-info-" <> plugin.name} class="modal">
+            <div class="modal-box max-w-lg">
+              <button
+                type="button"
+                aria-label="Close"
+                class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+                onclick="this.closest('dialog').close()"
+              >
+                <.icon name="hero-x-mark" class="size-4" />
+              </button>
+
+              <h3 class="flex flex-wrap items-center gap-2 pr-8 font-mono text-base font-semibold">
+                {plugin.name}
+                <span class="text-xs font-normal text-base-content/40">v{plugin.version}</span>
+                <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] font-normal text-base-content/60">
+                  {plugin.kind}
+                </span>
+              </h3>
+
+              <p class="mt-3 whitespace-pre-line text-sm text-base-content/80">
+                {plugin.description}
+              </p>
+
+              <div class="modal-action">
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  data-copy-text={plugin.description}
+                  onclick="navigator.clipboard.writeText(this.dataset.copyText)"
+                >
+                  Copy text
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-primary"
+                  onclick="this.closest('dialog').close()"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <form method="dialog" class="modal-backdrop">
+              <button>close</button>
+            </form>
+          </dialog>
         </div>
         <div :if={@plugins == []} class="px-4 py-3 text-center text-sm text-base-content/50">
           No plugins registered.

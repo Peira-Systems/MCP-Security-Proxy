@@ -719,7 +719,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         source: source,
         enabled: entry.enabled,
         health: health,
-        note: plugin_note(entry)
+        note: plugin_note(entry),
+        description: plugin_description(entry.name)
       }
     end)
   rescue
@@ -731,6 +732,160 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   defp plugin_note(_entry), do: nil
+
+  # Detailed "what it does and how it works" copy for the Plugins panel's
+  # info popup. Distilled from each plugin module's own @moduledoc, so this
+  # is a summary for operators — the moduledoc stays the source of truth.
+  defp plugin_description("approval-gate") do
+    "Human-in-the-loop counterpart to chain-exfil: instead of hard-blocking " <>
+      "network egress after a sensitive read, it returns a \"hold\" verdict, " <>
+      "so the proxy parks the call and the dashboard shows an Approve / Deny " <>
+      "card. If the operator takes no action within the configured timeout " <>
+      "(config \"timeout_ms\", default 120s), the on-timeout action applies " <>
+      "(deny)."
+  end
+
+  defp plugin_description("baseline-guard") do
+    "Behavioural baselining: a pre-call policy that denies a call once the " <>
+      "session has made too many calls of a watched kind inside a short " <>
+      "window — e.g. reading secrets six times in ten seconds. It reads the " <>
+      "session's recent-calls window that the proxy threads into every " <>
+      "pre-call context, then applies its own window and threshold from " <>
+      "operator config: \"window_ms\" (look-back window), \"max_calls\" " <>
+      "(allowed within the window), and \"watch_tags\" (which call tags to " <>
+      "count). It's heuristic by nature, so it fails open on errors."
+  end
+
+  defp plugin_description("chain-exfil") do
+    "The original tool-chaining rule, as a policy plugin: a call tagged " <>
+      "network_egress is denied if and only if a sensitive_read occurred " <>
+      "earlier in the same session. Order matters — egress before any " <>
+      "sensitive read is allowed. Its manifest scopes it to " <>
+      "tool_tags: [network_egress], so the pipeline only consults it for " <>
+      "egress-tagged calls."
+  end
+
+  defp plugin_description("event-log") do
+    "The built-in audit sink: persists every audit event to the local, " <>
+      "hash-chained policy_events table. It runs alongside the " <>
+      "structured-log sink (JSON log lines for SIEM / OTel ingestion) — two " <>
+      "sinks, no core changes required, just two entries in the plugin list."
+  end
+
+  defp plugin_description("response-size-guard") do
+    "A post-call policy that withholds a tool response whose text content " <>
+      "exceeds a byte budget — a blunt bulk-exfiltration guard: a tool " <>
+      "asked to dump a whole table, directory, or file returns far more " <>
+      "than a normal call, and the proxy refuses to relay it (JSON-RPC " <>
+      "error -32002). The budget is configurable via config \"max_bytes\" " <>
+      "(default 4000)."
+  end
+
+  defp plugin_description("rug-pull") do
+    "Rug-pull / tool-drift detector: a discovery-phase scanner that pins " <>
+      "each tool's description hash at registration and, on every " <>
+      "re-handshake, flags any tool whose definition changed. This catches " <>
+      "the classic attack where a server passes review with a benign " <>
+      "tools/list, then later swaps in a poisoned description. A changed " <>
+      "hash on a previously-seen tool produces a rug_pull finding and a " <>
+      "quarantine update that holds the tool until an operator clears it; a " <>
+      "tool with no previous hash is treated as new, not drift."
+  end
+
+  defp plugin_description("rule-engine") do
+    "A policy plugin whose verdicts come from operator-written rules, not " <>
+      "code. Rules live in the plugin's config block and are evaluated in " <>
+      "order — the first rule whose match conditions are satisfied decides " <>
+      "the verdict; a rule with no predicates matches every call. Match " <>
+      "predicates (all must hold): agent / agent_prefix, tool / server, " <>
+      "tool_tags_any, after_sensitive_read, and if_tainted. Actions: deny, " <>
+      "allow (an explicit exception that short-circuits later rules), or " <>
+      "hold (with an optional timeout, default 120s). No matching rule " <>
+      "defaults to allow."
+  end
+
+  defp plugin_description("secret-leak") do
+    "A post-call scanner that finds credentials in a tool's response and " <>
+      "proposes redactions so the secret never reaches the agent — " <>
+      "advisory, not blocking: the proxy applies the redactions before " <>
+      "returning the response. When it finds something it also tags the " <>
+      "session with HMAC taint markers for the secret and its common " <>
+      "encodings (the raw secret itself is never stored or broadcast), plus " <>
+      "a redacted hint. taint-guard uses this to block later egress " <>
+      "coarsely; tainted-arg-guard matches the markers against later calls' " <>
+      "arguments to catch base64/hex/URL-encoded copies."
+  end
+
+  defp plugin_description("stream-guard") do
+    "The streaming counterpart to response-size-guard: a chunk-phase " <>
+      "policy that watches the running byte count of a streamed tool " <>
+      "response and denies once it passes a budget, telling the proxy to " <>
+      "cut the stream mid-flight. Chunks already delivered stay delivered, " <>
+      "so this is containment rather than prevention. The budget is " <>
+      "configurable via \"max_bytes\" (running total across delivered and " <>
+      "current chunk)."
+  end
+
+  defp plugin_description("structured-log") do
+    "A second audit sink, alongside event-log: emits every audit event as " <>
+      "a single-line JSON object on the logger at info level, prefixed " <>
+      "mcp.audit. A log shipper (Vector, Fluent Bit, the OTel Collector's " <>
+      "filelog receiver, a Splunk forwarder) tails stdout and forwards " <>
+      "these to a SIEM. The line carries verdict metadata only — never raw " <>
+      "finding evidence or the tracked secret."
+  end
+
+  defp plugin_description("taint-guard") do
+    "The provenance counterpart to chain-exfil: a call tagged " <>
+      "network_egress is denied when the session's taint list is " <>
+      "non-empty — i.e. a post-call scanner (secret-leak) has already seen " <>
+      "a secret flow through a response in this session. Where chain-exfil " <>
+      "keys off the operator's sensitive_read tag on the tool definition, " <>
+      "taint-guard keys off what actually came back over the wire, so it " <>
+      "catches exfil even when the leaking tool was never tagged."
+  end
+
+  defp plugin_description("tainted-arg-guard") do
+    "Marker-level taint enforcement: blocks a tools/call whose arguments " <>
+      "carry a secret that a post-call scanner saw earlier in the same " <>
+      "session. secret-leak records HMAC taint markers for the secret and " <>
+      "its common encodings; this plugin tokenises the outbound arguments, " <>
+      "marks each token and its plausible decodings, and denies on any " <>
+      "collision — so a base64- or hex-encoded copy of the secret is " <>
+      "caught, not just the raw bytes. Unlike taint-guard, it isn't scoped " <>
+      "to egress tags, so it inspects every call's arguments."
+  end
+
+  defp plugin_description("unclassified-guard") do
+    "Default-deny for unclassified tools. A freshly discovered tool starts " <>
+      "with no operator tags, so every tag-scoped policy (chain-exfil, " <>
+      "taint-guard, approval-gate, …) is inert on it — without this plugin, " <>
+      "an un-curated proxy is effectively allow-all. When enabled, a " <>
+      "tools/call to a tool the operator hasn't tagged is either denied " <>
+      "(JSON-RPC error -32001) or held for operator sign-off, depending on " <>
+      "config \"mode\" (off | deny | hold; default off, so it can ship " <>
+      "enabled-but-inert)."
+  end
+
+  defp plugin_description("prompt-injection-scanner") do
+    "The reference polyglot plugin: a Python sidecar, run out of process and " <>
+      "spoken to over the newline-delimited JSON-RPC Plugin Protocol, so the " <>
+      "proxy treats it exactly like an in-process Elixir plugin. Detection " <>
+      "is a maintained ruleset (injection_rules.json) — labelled regex rules " <>
+      "across instruction-override, secrecy, exfiltration, and " <>
+      "tool-poisoning categories; precision/recall against the labelled " <>
+      "corpus is measured and gated in CI. Two phases: discovery inspects " <>
+      "tool descriptions at server registration / re-handshake and, on a " <>
+      "hit, emits a prompt_injection finding and (with operator grant) a " <>
+      "tool-quarantine update; post_call inspects tool responses before the " <>
+      "agent sees them, reporting a hidden instruction and stripping it via " <>
+      "a redact-response mutation."
+  end
+
+  defp plugin_description(name) do
+    "No detailed description is registered for \"#{name}\" yet — see the " <>
+      "plugin's own module for what it does and how it works."
+  end
 
   defp parse_date("", _edge), do: nil
 
