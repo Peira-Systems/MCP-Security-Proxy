@@ -60,6 +60,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -68,3 +69,23 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Re-fetch every pushed tag from the registry and assert it resolves to the
+      # digest we just built — proves the push actually landed, not just that the
+      # client reported success.
+      - name: Verify pushed tags
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          EXPECTED: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "expected digest: $EXPECTED"
+          rc=0
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}') || { echo "::error::$tag — inspect failed"; rc=1; continue; }
+            if [ "$got" = "$EXPECTED" ]; then
+              echo "ok   $tag -> $got"
+            else
+              echo "::error::$tag -> $got (expected $EXPECTED)"; rc=1
+            fi
+          done
+          exit $rc
