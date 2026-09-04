@@ -49,7 +49,9 @@ Configure it under Settings → Secrets and variables → Actions:
 | Secret | `REGISTRY_PASSWORD` | registry password / token |
 
 The job fails fast if `REGISTRY_HOST` is unset; a bad or missing credential
-fails the login step with `unauthorized`.
+fails the login step with `unauthorized`. After the push, a **Verify pushed
+tags** step re-fetches every tag from the registry with `docker buildx imagetools
+inspect` and fails if any doesn't resolve to the digest just built.
 
 A red `mix test` or `mix dialyzer` blocks merge once branch protection requires
 the `CI` checks (Settings → Branches → require status checks: `compile · format ·
