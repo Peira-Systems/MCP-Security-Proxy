@@ -8,6 +8,8 @@ A LiveView dashboard visualizes traffic and lets an operator curate policy.
 See [`Project.md`](Project.md) for an overview and [`docs/adr/`](docs/adr) for
 the architecture and productionization decisions.
 
+**Start here:** [product guide](docs/product-guide.md) — deploy, configure, and use it end to end.
+
 **Docs:** [threat model](docs/threat-model.md) ·
 [deployment guide](docs/deployment.md) · [operator runbook](docs/runbook.md) ·
 [CI/CD](docs/ci-cd.md) · [observability](docs/observability.md) ·
