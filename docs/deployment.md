@@ -41,7 +41,8 @@ nodes.
 Two kinds of config:
 
 **`.env`** (non-secret — copy from `.env.example`): `PHX_HOST`, `ADMIN_EMAIL` /
-`ADMIN_PASSWORD` (first-run seed only), `POSTGRES_USER` / `POSTGRES_DB`, ports,
+`ADMIN_PASSWORD` (seeded on every boot if that email has no account yet;
+existing accounts are untouched), `POSTGRES_USER` / `POSTGRES_DB`, ports,
 `METRICS_TOKEN`, `READINESS_REQUIRE_UPSTREAMS`.
 
 **`secrets/*.txt`** (Docker secret files, gitignored, mounted at `/run/secrets/`):

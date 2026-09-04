@@ -252,9 +252,10 @@ curl -fsS http://localhost:4000/health/live      # 200 whenever the VM is up
 curl -fsS http://localhost:4000/health/ready     # 200 iff Postgres + upstreams OK
 ```
 
-On first boot, when the `users` table is empty, an admin is seeded from
-`ADMIN_EMAIL` / `ADMIN_PASSWORD`. Sign in at `https://<host>/login`, change the
-password, then follow [§6.1](#61-first-run-setup).
+On every boot, an admin is seeded from `ADMIN_EMAIL` / `ADMIN_PASSWORD` unless
+that email already has an account — existing accounts are never modified, so
+it's safe to leave both set across deploys. Sign in at `https://<host>/login`,
+change the password, then follow [§6.1](#61-first-run-setup).
 
 ### 4.5 Observability overlay (optional)
 
@@ -307,8 +308,8 @@ Details: [ci-cd.md](ci-cd.md), [runbook.md](runbook.md#deploy-a-new-version).
 |---|---|---|
 | `PHX_HOST` | `example.com` | Public hostname for URL generation. |
 | `PORT` | `4000` | Port the app listens on (host mapped 1:1 by compose). |
-| `ADMIN_EMAIL` | `admin@example.com` | First-run admin — seeded **only** while `users` is empty. |
-| `ADMIN_PASSWORD` | — | First-run admin password. Set on the first deploy. |
+| `ADMIN_EMAIL` | `admin@example.com` | Admin login seeded on **every** boot if this email has no account yet. Existing accounts (password, role) are never modified. |
+| `ADMIN_PASSWORD` | — | Password used only when seeding a new account for `ADMIN_EMAIL`. |
 | `POSTGRES_USER` | `mcp_proxy` | DB user; part of the built `DATABASE_URL`. |
 | `POSTGRES_DB` | `mcp_proxy` | DB name. |
 | `POSTGRES_HOST` | `postgres` | DB host (compose service name). |

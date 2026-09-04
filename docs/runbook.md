@@ -20,7 +20,9 @@ the deployment in [deployment.md](deployment.md) is up.
 ## First-run setup
 
 1. Deploy per [deployment.md](deployment.md). `ADMIN_EMAIL` / `ADMIN_PASSWORD`
-   in `.env` seed the first admin **only while the `users` table is empty**.
+   in `.env` seed an admin **on every boot, unless that email already has an
+   account** — existing accounts (including a renamed/demoted seed admin) are
+   never modified.
 2. Sign in at `https://<host>/login`. Change the password (Users panel), and
    create per-person accounts — `viewer` for read-only, `operator` for policy
    changes, `admin` for user + key management.

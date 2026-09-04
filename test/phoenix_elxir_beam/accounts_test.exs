@@ -71,7 +71,7 @@ defmodule PhoenixElxirBeam.AccountsTest do
   end
 
   describe "seed_admin/0" do
-    test "creates an admin from env only when the table is empty" do
+    test "creates an admin from env when that email has no account yet" do
       System.put_env("ADMIN_EMAIL", "boot-admin@example.test")
       System.put_env("ADMIN_PASSWORD", valid_password())
 
@@ -83,10 +83,51 @@ defmodule PhoenixElxirBeam.AccountsTest do
       assert :ok = Accounts.seed_admin()
       assert %User{role: :admin} = Accounts.get_user_by_email("boot-admin@example.test")
 
-      # second run is a no-op (table not empty)
+      # second run is a no-op (that email already has an account)
       count = Accounts.count_users()
       Accounts.seed_admin()
       assert Accounts.count_users() == count
+    end
+
+    test "still seeds the admin when other users already exist" do
+      {:ok, _other} =
+        Accounts.create_user(%{
+          email: "someone-else@example.test",
+          password: valid_password(),
+          role: :viewer
+        })
+
+      System.put_env("ADMIN_EMAIL", "boot-admin@example.test")
+      System.put_env("ADMIN_PASSWORD", valid_password())
+
+      on_exit(fn ->
+        System.delete_env("ADMIN_EMAIL")
+        System.delete_env("ADMIN_PASSWORD")
+      end)
+
+      assert :ok = Accounts.seed_admin()
+      assert %User{role: :admin} = Accounts.get_user_by_email("boot-admin@example.test")
+    end
+
+    test "does not touch an existing account with the seed email" do
+      {:ok, existing} =
+        Accounts.create_user(%{
+          email: "boot-admin@example.test",
+          password: valid_password(),
+          role: :viewer
+        })
+
+      System.put_env("ADMIN_EMAIL", "boot-admin@example.test")
+      System.put_env("ADMIN_PASSWORD", valid_password())
+
+      on_exit(fn ->
+        System.delete_env("ADMIN_EMAIL")
+        System.delete_env("ADMIN_PASSWORD")
+      end)
+
+      assert :ok = Accounts.seed_admin()
+      reloaded = Accounts.get_user!(existing.id)
+      assert reloaded.role == :viewer
     end
   end
 end

@@ -66,10 +66,11 @@ if config_env() == :prod do
     end
   end
 
-  # Operator console auth is session/RBAC based (M3.4). On first boot, when the
-  # `users` table is empty, an admin is seeded from ADMIN_EMAIL / ADMIN_PASSWORD
-  # (see PhoenixElxirBeam.Accounts.seed_admin/0). Set both on the first deploy,
-  # then manage further accounts from the dashboard.
+  # Operator console auth is session/RBAC based (M3.4). On every boot, an admin
+  # is seeded from ADMIN_EMAIL / ADMIN_PASSWORD unless that email already has
+  # an account (see PhoenixElxirBeam.Accounts.seed_admin/0) — existing accounts
+  # are never modified. Set both to guarantee an admin login exists; manage
+  # further accounts from the dashboard.
 
   # Optional bearer token for GET /metrics (M3.2). Unset ⇒ the endpoint is
   # open — only acceptable if it's unreachable from outside the scrape network.

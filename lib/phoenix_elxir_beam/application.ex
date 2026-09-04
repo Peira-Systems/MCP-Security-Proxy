@@ -22,8 +22,8 @@ defmodule PhoenixElxirBeam.Application do
         start: {Task, :start_link, [&ensure_dashboard_key/0]},
         restart: :transient
       },
-      # One-shot: seed the first operator admin from ADMIN_EMAIL / ADMIN_PASSWORD
-      # when the users table is empty (M3.4). No-op otherwise.
+      # One-shot: seed the operator admin from ADMIN_EMAIL / ADMIN_PASSWORD on
+      # every boot, unless that email already has an account (M3.4).
       %{
         id: :admin_seed,
         start: {Task, :start_link, [&PhoenixElxirBeam.Accounts.seed_admin/0]},

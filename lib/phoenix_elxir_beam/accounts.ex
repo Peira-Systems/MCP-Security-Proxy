@@ -2,9 +2,10 @@ defmodule PhoenixElxirBeam.Accounts do
   @moduledoc """
   Operator accounts for the dashboard / policy-management console (M3.4).
 
-  Admin-issued only — there is no public registration. A first-run admin is
-  seeded from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (see `Accounts.seed_admin/0`,
-  called at boot). Session auth is handled by `PhoenixElxirBeamWeb.UserAuth`.
+  Admin-issued only — there is no public registration. An admin is seeded
+  from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on every boot if that email doesn't
+  already have an account (see `Accounts.seed_admin/0`, called at boot).
+  Session auth is handled by `PhoenixElxirBeamWeb.UserAuth`.
   """
   import Ecto.Query
 
@@ -98,21 +99,25 @@ defmodule PhoenixElxirBeam.Accounts do
   ## Boot seed
 
   @doc """
-  Seeds the first admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` when the `users`
-  table is empty. A no-op once any user exists. Fail-soft.
+  Seeds an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on every boot, unless a
+  user with that email already exists. Does not touch the role or password of
+  an existing account — set both env vars once and they keep re-asserting the
+  account exists without overwriting anything an operator has since changed.
+  Fail-soft.
   """
   def seed_admin do
-    with 0 <- count_users(),
-         email when is_binary(email) <- System.get_env("ADMIN_EMAIL"),
-         password when is_binary(password) <- System.get_env("ADMIN_PASSWORD") do
+    with email when is_binary(email) <- System.get_env("ADMIN_EMAIL"),
+         password when is_binary(password) <- System.get_env("ADMIN_PASSWORD"),
+         nil <- get_user_by_email(email) do
       case create_user(%{email: email, password: password, role: :admin}) do
         {:ok, user} ->
-          Logger.info("Accounts: seeded initial admin #{user.email}")
+          Logger.info("Accounts: seeded admin #{user.email}")
 
         {:error, changeset} ->
           Logger.warning("Accounts: admin seed failed: #{inspect(changeset.errors)}")
       end
     else
+      %User{} -> :ok
       _ -> :ok
     end
   rescue

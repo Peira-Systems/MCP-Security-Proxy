@@ -50,7 +50,8 @@ openssl rand -base64 24 > secrets/postgres_password.txt
 docker compose up -d              # the app runs migrations on start
 ```
 
-First boot seeds an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; sign in at `/login`.
+Every boot seeds an admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` if that email
+doesn't already have an account; sign in at `/login`.
 
 Full topology, sizing, TLS, retention, and backups: [`docs/deployment.md`](docs/deployment.md).
 Day-to-day operation and incident response: [`docs/runbook.md`](docs/runbook.md).
