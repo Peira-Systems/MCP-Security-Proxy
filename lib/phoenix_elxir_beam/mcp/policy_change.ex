@@ -10,8 +10,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyChange do
   lands serially on the chain (`EventLog`), and a `{:policy_change, entry}`
   message is broadcast on `"mcp:policy"` for the dashboard's change log.
 
-  `before` / `after` must be JSON-safe (boolean, string, list of strings) so a
-  change can be replayed / reverted from the stored row alone.
+  `before` / `after` must be JSON-safe (boolean, string, list of strings, or a
+  JSON-safe map — e.g. a plugin's `config`) so a change can be replayed /
+  reverted from the stored row alone.
   """
 
   alias PhoenixElxirBeam.MCP.{EventLog, PolicyEngine}
@@ -19,7 +20,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyChange do
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:policy"
 
-  @type kind :: :plugin_enabled | :plugin_order | :tool_tags | :tool_quarantine
+  @type kind :: :plugin_enabled | :plugin_order | :plugin_config | :tool_tags | :tool_quarantine
 
   def topic, do: @topic
 
@@ -85,6 +86,10 @@ defmodule PhoenixElxirBeam.MCP.PolicyChange do
 
   defp summarize(:plugin_order, _target, actor, _b, after_val) when is_list(after_val) do
     "#{actor} reordered the plugin pipeline: #{Enum.join(after_val, " → ")}"
+  end
+
+  defp summarize(:plugin_config, target, actor, _before, _after) do
+    "#{actor} changed config for plugin #{target}"
   end
 
   defp summarize(:tool_tags, target, actor, before_val, after_val) do

@@ -7,13 +7,14 @@ defmodule PhoenixElxirBeam.MCP.Plugin.PluginState do
   schema "plugin_states" do
     field :enabled, :boolean, default: true
     field :position, :integer
+    field :config, :map
 
     timestamps(type: :utc_datetime_usec)
   end
 
   def changeset(state, attrs) do
     state
-    |> cast(attrs, [:name, :enabled, :position])
+    |> cast(attrs, [:name, :enabled, :position, :config])
     |> validate_required([:name])
   end
 end

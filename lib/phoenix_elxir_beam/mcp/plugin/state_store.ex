@@ -1,12 +1,14 @@
 defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   @moduledoc """
   Postgres persistence for the runtime-mutable bits of the plugin registry
-  (M3.4b): whether a plugin is enabled, and its position in the pipeline.
+  (M3.4b): whether a plugin is enabled, its position in the pipeline, and
+  (M4.4) an operator-edited config override.
 
   `PhoenixElxirBeam.MCP.Plugin.Registry` seeds entries from application config
   at boot, then overlays whatever is stored here — so an operator's
-  enable/disable/reorder survives a restart. Everything else about a plugin
-  (its manifest, capability, config) always comes from code/config.
+  enable/disable/reorder/config edit survives a restart. A plugin's manifest
+  and capability always come from code; `config` comes from code unless an
+  operator has overridden it here.
 
   All calls are fail-soft: a DB error logs and returns a safe default so the
   registry still boots.
@@ -16,12 +18,18 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   alias PhoenixElxirBeam.MCP.Plugin.PluginState
   alias PhoenixElxirBeam.Repo
 
-  @type overlay :: %{optional(String.t()) => %{enabled: boolean(), position: integer() | nil}}
+  @type overlay :: %{
+          optional(String.t()) => %{
+            enabled: boolean(),
+            position: integer() | nil,
+            config: map() | nil
+          }
+        }
 
   @spec all() :: overlay()
   def all do
     Repo.all(PluginState)
-    |> Map.new(fn s -> {s.name, %{enabled: s.enabled, position: s.position}} end)
+    |> Map.new(fn s -> {s.name, %{enabled: s.enabled, position: s.position, config: s.config}} end)
   rescue
     e -> soft("load", e, %{})
   catch
@@ -39,6 +47,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
     ordered_names
     |> Enum.with_index()
     |> Enum.each(fn {name, pos} -> upsert(%{name: name, position: pos}, [:position]) end)
+  end
+
+  @doc "Persists an operator-edited config override for `name`."
+  @spec put_config(String.t(), map()) :: :ok
+  def put_config(name, config) when is_binary(name) and is_map(config) do
+    upsert(%{name: name, config: config}, [:config])
   end
 
   @spec upsert(map(), [atom()]) :: :ok

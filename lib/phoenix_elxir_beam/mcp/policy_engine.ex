@@ -295,8 +295,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
       timestamp: DateTime.utc_now()
     }
 
-    # `before` / `after` must already be JSON-safe (bool / string / list) — the
-    # caller (PhoenixElxirBeam.MCP.PolicyChange) guarantees that.
+    # `before` / `after` must already be JSON-safe (bool / string / list / map,
+    # e.g. a plugin's `config`) — the caller (PhoenixElxirBeam.MCP.PolicyChange)
+    # guarantees that.
     decision = %{
       plugin: change.actor,
       verdict: :policy_change,

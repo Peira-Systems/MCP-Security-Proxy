@@ -84,6 +84,30 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert {:error, :not_found} = Registry.disable("nope", reg)
   end
 
+  test "update_config/2 replaces a plugin's config, visible immediately via list/1" do
+    reg = start_registry([{StreamGuard, config: %{"max_bytes" => 1_200}}])
+
+    assert [%{config: %{"max_bytes" => 1_200}}] = Registry.list(reg)
+
+    :ok = Registry.update_config("stream-guard", %{"max_bytes" => 500}, reg)
+
+    assert [%{config: %{"max_bytes" => 500}}] = Registry.list(reg)
+  end
+
+  test "update_config/2 on an unknown plugin returns an error" do
+    reg = start_registry([{ChainExfil, []}])
+    assert {:error, :not_found} = Registry.update_config("nope", %{"a" => 1}, reg)
+  end
+
+  test "default_config holds the registered config and is unaffected by update_config/2" do
+    reg = start_registry([{StreamGuard, config: %{"max_bytes" => 1_200}}])
+
+    :ok = Registry.update_config("stream-guard", %{"max_bytes" => 500}, reg)
+
+    assert [%{config: %{"max_bytes" => 500}, default_config: %{"max_bytes" => 1_200}}] =
+             Registry.list(reg)
+  end
+
   @sidecar_fixture Path.expand("../../../support/fixtures/sidecar_scanner.js", __DIR__)
 
   test "a sidecar spec spawns a runner and registers its capability from the manifest" do

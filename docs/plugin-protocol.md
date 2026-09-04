@@ -806,8 +806,12 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
 ### 15.2 Runtime
 
 A `PhoenixElxirBeam.MCP.Plugin.Registry` GenServer (ETS-backed) is seeded from config at
-boot and lets the dashboard enable, disable, reorder, and re-verify plugins without a
-redeploy. Sidecars are supervised like `StdioServer` instances.
+boot and lets the dashboard enable, disable, reorder, re-verify, and (M4.4) edit a
+plugin's `config` without a redeploy — every plugin reads `entry.config` fresh on each
+call (§9.2/9.3), so a config edit applies on the very next call, not just at the next
+restart. Sidecars are supervised like `StdioServer` instances. All four overlay onto the
+config-declared defaults and are persisted (`PhoenixElxirBeam.MCP.Plugin.StateStore`) so
+they survive a restart too.
 
 ---
 

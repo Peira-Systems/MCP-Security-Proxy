@@ -243,6 +243,65 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end)
   end
 
+  def handle_event("update_plugin_config", %{"name" => name, "raw_config" => raw}, socket) do
+    with_operator(socket, fn user ->
+      case Jason.decode(raw) do
+        {:ok, config} when is_map(config) ->
+          current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+
+          case Registry.update_config(name, config) do
+            :ok ->
+              PolicyChange.record(%{
+                kind: :plugin_config,
+                target: name,
+                actor: user.email,
+                before: current && current.config,
+                after: config
+              })
+
+              socket
+              |> assign(:plugins, plugin_rows())
+              |> put_flash(:info, "Updated config for #{name}")
+
+            {:error, :not_found} ->
+              put_flash(socket, :error, "Plugin #{name} not found")
+          end
+
+        {:ok, _not_an_object} ->
+          put_flash(socket, :error, "Config must be a JSON object, e.g. {\"max_bytes\": 4000}")
+
+        {:error, _} ->
+          put_flash(socket, :error, "That isn't valid JSON — config was not changed")
+      end
+    end)
+  end
+
+  def handle_event("reset_plugin_config", %{"name" => name}, socket) do
+    with_operator(socket, fn user ->
+      case Enum.find(socket.assigns.plugins, &(&1.name == name)) do
+        nil ->
+          put_flash(socket, :error, "Plugin #{name} not found")
+
+        current ->
+          default = current.default_config || %{}
+          :ok = Registry.update_config(name, default)
+
+          PolicyChange.record(%{
+            kind: :plugin_config,
+            target: name,
+            actor: user.email,
+            before: current.config,
+            after: default,
+            summary: "#{user.email} reset config for plugin #{name} to its default"
+          })
+
+          socket
+          |> assign(:plugins, plugin_rows())
+          |> put_flash(:info, "Reset config for #{name} to its default")
+      end
+    end)
+  end
+
   def handle_event("revert_policy_change", %{"event_id" => event_id}, socket) do
     with_operator(socket, fn user ->
       case Enum.find(socket.assigns.policy_changes, &(&1.event_id == event_id)) do
@@ -259,6 +318,21 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
             summary:
               "#{user.email} reverted #{event_id}: plugin #{name} " <>
                 "#{if want, do: "enabled", else: "disabled"}"
+          })
+
+          assign(socket, :plugins, plugin_rows())
+
+        %{kind: "plugin_config", target: name, before: before} when is_map(before) ->
+          :ok = Registry.update_config(name, before)
+          current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+
+          PolicyChange.record(%{
+            kind: :plugin_config,
+            target: name,
+            actor: user.email,
+            before: current && current.config,
+            after: before,
+            summary: "#{user.email} reverted #{event_id}: config for plugin #{name} restored"
           })
 
           assign(socket, :plugins, plugin_rows())
@@ -720,7 +794,9 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         enabled: entry.enabled,
         health: health,
         note: plugin_note(entry),
-        description: plugin_description(entry.name)
+        description: plugin_description(entry.name),
+        config: entry.config,
+        default_config: entry.default_config
       }
     end)
   rescue
@@ -886,6 +962,78 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     "No detailed description is registered for \"#{name}\" yet — see the " <>
       "plugin's own module for what it does and how it works."
   end
+
+  # A plain-language reference for each configurable key a plugin's `config`
+  # accepts — key, type, valid values, and what happens when it's absent (the
+  # plugin module's own hardcoded fallback, a stable code-level fact
+  # independent of whatever this deployment's config/*.exs currently sets).
+  # An empty list means the plugin takes no configuration at all.
+  defp plugin_config_options("rule-engine") do
+    [
+      "rules (array, code default []): evaluated in order — the first rule " <>
+        "whose match conditions are satisfied decides the verdict. A rule " <>
+        "with no match object matches every call (a catch-all). No " <>
+        "matching rule → allow.",
+      "Each rule: match (object, see below), action: \"deny\" | \"allow\" | " <>
+        "\"hold\", severity: \"low\" | \"medium\" | \"high\" | \"critical\" " <>
+        "(default \"high\", used when action is \"deny\"), reason (string " <>
+        "shown to the operator/agent), timeout_ms (integer, milliseconds, " <>
+        "only used for \"hold\", default 120000).",
+      "match predicates (all must hold — AND): agent / agent_prefix (exact " <>
+        "/ prefix match on the call's agent id), tool / server (exact " <>
+        "match), tool_tags_any (array — any of these tags on the call), " <>
+        "after_sensitive_read: true (a sensitive read happened earlier " <>
+        "this session), if_tainted: true (a secret has flowed through " <>
+        "this session)."
+    ]
+  end
+
+  defp plugin_config_options("unclassified-guard") do
+    [
+      "mode (string, code default \"off\"): \"off\" — no-op. \"deny\" — " <>
+        "refuse a call to an unclassified tool with a JSON-RPC -32001 " <>
+        "error. \"hold\" — park it for operator sign-off (5 minute " <>
+        "timeout, then deny)."
+    ]
+  end
+
+  defp plugin_config_options("baseline-guard") do
+    [
+      "window_ms (integer, milliseconds, code default 10000): the " <>
+        "look-back window for counting calls.",
+      "max_calls (integer, code default 5): calls of a watched kind " <>
+        "allowed within the window before the next one is denied.",
+      "watch_tags (array of strings, code default [\"sensitive_read\"]): " <>
+        "which call tags count toward the rate limit."
+    ]
+  end
+
+  defp plugin_config_options("stream-guard") do
+    [
+      "max_bytes (integer, bytes, code default 2000): the running byte " <>
+        "total — delivered chunks plus the current one — that cuts the " <>
+        "stream once exceeded. Chunks already delivered are kept; this " <>
+        "stops the rest."
+    ]
+  end
+
+  defp plugin_config_options("response-size-guard") do
+    [
+      "max_bytes (integer, bytes, code default 4000): a single tool " <>
+        "response larger than this is withheld entirely (JSON-RPC error " <>
+        "-32002) instead of relayed."
+    ]
+  end
+
+  defp plugin_config_options("approval-gate") do
+    [
+      "timeout_ms (integer, milliseconds, code default 120000): how long " <>
+        "a held call waits for an operator to approve or deny before " <>
+        "it's automatically denied."
+    ]
+  end
+
+  defp plugin_config_options(_name), do: []
 
   defp parse_date("", _edge), do: nil
 

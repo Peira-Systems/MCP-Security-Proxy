@@ -99,6 +99,17 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     GenServer.call(server, {:reorder, names})
   end
 
+  @doc """
+  Replaces `name`'s `config` map, effective on the very next call — every
+  plugin (in-process and sidecar) reads `entry.config` fresh per call
+  (`PhoenixElxirBeam.MCP.Pipeline`), so this needs no plugin/app restart.
+  Persisted (M4.4) so the override survives a restart too.
+  """
+  @spec update_config(String.t(), map(), atom()) :: :ok | {:error, :not_found}
+  def update_config(name, config, server \\ __MODULE__) when is_map(config) do
+    GenServer.call(server, {:update_config, name, config})
+  end
+
   # Server
 
   @impl true
@@ -150,6 +161,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         entry
         |> then(&if is_boolean(s.enabled), do: %{&1 | enabled: s.enabled}, else: &1)
         |> then(&if is_integer(s.position), do: %{&1 | order: s.position}, else: &1)
+        |> then(&if is_map(s.config), do: %{&1 | config: s.config}, else: &1)
 
       :ets.insert(table, {name, entry})
     end
@@ -172,6 +184,19 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       [{^name, entry}] ->
         :ets.insert(state.table, {name, %{entry | enabled: value}})
         if state.persist?, do: StateStore.put_enabled(name, value)
+        {:reply, :ok, state}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:update_config, name, config}, _from, state) do
+    case :ets.lookup(state.table, name) do
+      [{^name, entry}] ->
+        :ets.insert(state.table, {name, %{entry | config: config}})
+        if state.persist?, do: StateStore.put_config(name, config)
         {:reply, :ok, state}
 
       [] ->
@@ -206,13 +231,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         {:error, "manifest declares no supported capability"}
 
       kind ->
+        registered_config = Keyword.get(opts, :config, %{})
+
         entry =
           kind
           |> capability_entry(manifest, grants, index)
           |> Map.merge(%{
             module: module,
             impl: {:module, module},
-            config: Keyword.get(opts, :config, %{})
+            config: registered_config,
+            default_config: registered_config
           })
 
         {:ok, entry}
@@ -248,6 +276,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
            Enum.find(@capability_kinds, &Map.has_key?(manifest.capabilities, &1)) do
       grants = Keyword.get(opts, :grants, %{})
 
+      registered_config = Keyword.get(opts, :config, %{})
+
       entry =
         kind
         |> capability_entry(manifest, grants, index)
@@ -255,7 +285,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
           module: nil,
           impl: {:sidecar, runner},
           transport: :stdio,
-          config: Keyword.get(opts, :config, %{})
+          config: registered_config,
+          default_config: registered_config
         })
         |> cap_sidecar_grants(kind, grants)
 
@@ -342,6 +373,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         module: nil,
         impl: {:module, nil},
         config: %{},
+        # The config this plugin was registered with (config/*.exs) — never
+        # mutated by update_config/3, so "reset to default" (M4.5) always has
+        # a stable target regardless of how many operator overrides followed.
+        default_config: %{},
         transport: :in_process,
         kind: nil,
         phases: [],
