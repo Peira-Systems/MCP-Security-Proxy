@@ -20,7 +20,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     SessionStore
   }
 
-  alias PhoenixElxirBeam.MCP.Plugin.{Registry, SidecarRunner}
+  alias PhoenixElxirBeam.MCP.Plugin.{ConfigSchema, Registry, SidecarRunner}
 
   @topic "mcp:events"
   @servers_topic "mcp:servers"
@@ -29,6 +29,22 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @alerts_topic "mcp:alerts"
   @policy_topic "mcp:policy"
   @history_page_size 20
+
+  # A blank rule-engine editor row (see the rules editor section below).
+  @blank_rule %{
+    "agent" => "",
+    "agent_prefix" => "",
+    "tool" => "",
+    "server" => "",
+    "tool_tags_any" => "",
+    "after_sensitive_read" => false,
+    "if_tainted" => false,
+    "action" => "deny",
+    "severity" => "high",
+    "reason" => "",
+    "prompt" => "",
+    "timeout_ms" => ""
+  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -45,6 +61,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end
 
     graph = build_graph()
+    plugins = plugin_rows()
 
     socket =
       socket
@@ -63,7 +80,9 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_by, "time")
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
-      |> assign(:plugins, plugin_rows())
+      |> assign(:plugins, plugins)
+      |> assign(:open_plugin, nil)
+      |> assign(:rules_draft, load_rules_draft(plugins))
       |> assign(:can_operate, Accounts.role_at_least?(socket.assigns.current_user, :operator))
       |> assign(:policy_changes, PolicyChange.recent(15))
       |> assign(:session_count, safe_session_count())
@@ -276,6 +295,38 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end)
   end
 
+  def handle_event("save_plugin_config", %{"name" => name} = params, socket) do
+    with_operator(socket, fn user ->
+      current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+      existing = (current && current.config) || %{}
+      field_params = Map.get(params, "config", %{})
+
+      case ConfigSchema.build(name, existing, field_params) do
+        {:ok, config} ->
+          case Registry.update_config(name, config) do
+            :ok ->
+              PolicyChange.record(%{
+                kind: :plugin_config,
+                target: name,
+                actor: user.email,
+                before: current && current.config,
+                after: config
+              })
+
+              socket
+              |> assign(:plugins, plugin_rows())
+              |> put_flash(:info, "Updated config for #{name}")
+
+            {:error, :not_found} ->
+              put_flash(socket, :error, "Plugin #{name} not found")
+          end
+
+        {:error, message} ->
+          put_flash(socket, :error, "#{message} — config was not changed")
+      end
+    end)
+  end
+
   def handle_event("reset_plugin_config", %{"name" => name}, socket) do
     with_operator(socket, fn user ->
       case Enum.find(socket.assigns.plugins, &(&1.name == name)) do
@@ -295,9 +346,96 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
             summary: "#{user.email} reset config for plugin #{name} to its default"
           })
 
+          plugins = plugin_rows()
+
+          socket
+          |> assign(:plugins, plugins)
+          |> then(
+            &if(name == "rule-engine",
+              do: assign(&1, :rules_draft, load_rules_draft(plugins)),
+              else: &1
+            )
+          )
+          |> put_flash(:info, "Reset config for #{name} to its default")
+      end
+    end)
+  end
+
+  def handle_event("open_plugin", %{"name" => name}, socket) do
+    socket = assign(socket, :open_plugin, name)
+
+    socket =
+      if name == "rule-engine",
+        do: assign(socket, :rules_draft, load_rules_draft(socket.assigns.plugins)),
+        else: socket
+
+    {:noreply, socket}
+  end
+
+  def handle_event("close_plugin", _params, socket) do
+    {:noreply, assign(socket, :open_plugin, nil)}
+  end
+
+  def handle_event("rules_change", params, socket) do
+    {:noreply, assign(socket, :rules_draft, params_to_rows(params))}
+  end
+
+  def handle_event("rule_add", _params, socket) do
+    {:noreply, assign(socket, :rules_draft, socket.assigns.rules_draft ++ [@blank_rule])}
+  end
+
+  def handle_event("rule_remove", %{"idx" => idx}, socket) do
+    {:noreply, update(socket, :rules_draft, &List.delete_at(&1, to_int(idx)))}
+  end
+
+  def handle_event("rule_move", %{"idx" => idx, "dir" => dir}, socket)
+      when dir in ["up", "down"] do
+    i = to_int(idx)
+    rows = socket.assigns.rules_draft
+    j = if dir == "up", do: i - 1, else: i + 1
+
+    rows =
+      if j >= 0 and j < length(rows) do
+        moved = Enum.at(rows, i)
+        rows |> List.delete_at(i) |> List.insert_at(j, moved)
+      else
+        rows
+      end
+
+    {:noreply, assign(socket, :rules_draft, rows)}
+  end
+
+  def handle_event("reload_rules", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:rules_draft, load_rules_draft(socket.assigns.plugins))
+     |> put_flash(:info, "Reloaded rules from the saved config")}
+  end
+
+  def handle_event("save_rules", params, socket) do
+    with_operator(socket, fn user ->
+      rules = params |> params_to_rows() |> rows_to_rules()
+      current = Enum.find(socket.assigns.plugins, &(&1.name == "rule-engine"))
+      existing = (current && current.config) || %{}
+      config = Map.put(existing, "rules", rules)
+
+      case Registry.update_config("rule-engine", config) do
+        :ok ->
+          PolicyChange.record(%{
+            kind: :plugin_config,
+            target: "rule-engine",
+            actor: user.email,
+            before: current && current.config,
+            after: config
+          })
+
           socket
           |> assign(:plugins, plugin_rows())
-          |> put_flash(:info, "Reset config for #{name} to its default")
+          |> assign(:rules_draft, Enum.map(rules, &rule_to_row/1))
+          |> put_flash(:info, "Saved #{length(rules)} rule(s) for rule-engine")
+
+        {:error, :not_found} ->
+          put_flash(socket, :error, "rule-engine plugin not found")
       end
     end)
   end
@@ -963,77 +1101,487 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       "plugin's own module for what it does and how it works."
   end
 
-  # A plain-language reference for each configurable key a plugin's `config`
-  # accepts — key, type, valid values, and what happens when it's absent (the
-  # plugin module's own hardcoded fallback, a stable code-level fact
-  # independent of whatever this deployment's config/*.exs currently sets).
-  # An empty list means the plugin takes no configuration at all.
-  defp plugin_config_options("rule-engine") do
-    [
-      "rules (array, code default []): evaluated in order — the first rule " <>
-        "whose match conditions are satisfied decides the verdict. A rule " <>
-        "with no match object matches every call (a catch-all). No " <>
-        "matching rule → allow.",
-      "Each rule: match (object, see below), action: \"deny\" | \"allow\" | " <>
-        "\"hold\", severity: \"low\" | \"medium\" | \"high\" | \"critical\" " <>
-        "(default \"high\", used when action is \"deny\"), reason (string " <>
-        "shown to the operator/agent), timeout_ms (integer, milliseconds, " <>
-        "only used for \"hold\", default 120000).",
-      "match predicates (all must hold — AND): agent / agent_prefix (exact " <>
-        "/ prefix match on the call's agent id), tool / server (exact " <>
-        "match), tool_tags_any (array — any of these tags on the call), " <>
-        "after_sensitive_read: true (a sensitive read happened earlier " <>
-        "this session), if_tainted: true (a secret has flowed through " <>
-        "this session)."
-    ]
+  # The per-plugin config form (schema, field reference, and param coercion)
+  # lives in `PhoenixElxirBeam.MCP.Plugin.ConfigSchema`.
+
+  # Seeds a config field's input: the live config value, else the plugin's
+  # code-level default. `:string_list` and `:json` fields render as text, so
+  # they get a string here; everything else passes its native value through.
+  defp config_field_value(%{type: :string_list} = field, config) do
+    field |> ConfigSchema.value_for(config) |> List.wrap() |> Enum.join(", ")
   end
 
-  defp plugin_config_options("unclassified-guard") do
-    [
-      "mode (string, code default \"off\"): \"off\" — no-op. \"deny\" — " <>
-        "refuse a call to an unclassified tool with a JSON-RPC -32001 " <>
-        "error. \"hold\" — park it for operator sign-off (5 minute " <>
-        "timeout, then deny)."
-    ]
+  defp config_field_value(%{type: :json} = field, config) do
+    Jason.encode!(ConfigSchema.value_for(field, config), pretty: true)
   end
 
-  defp plugin_config_options("baseline-guard") do
-    [
-      "window_ms (integer, milliseconds, code default 10000): the " <>
-        "look-back window for counting calls.",
-      "max_calls (integer, code default 5): calls of a watched kind " <>
-        "allowed within the window before the next one is denied.",
-      "watch_tags (array of strings, code default [\"sensitive_read\"]): " <>
-        "which call tags count toward the rate limit."
-    ]
+  defp config_field_value(field, config), do: ConfigSchema.value_for(field, config)
+
+  defp config_field_id(plugin_name, key), do: "cfg-#{plugin_name}-#{key}"
+
+  # One config input, rendered from a `ConfigSchema` field. `value` is
+  # already display-shaped (see `config_field_value/2`).
+  attr :plugin, :string, required: true
+  attr :field, :map, required: true
+  attr :value, :any, default: nil
+
+  def config_field_input(%{field: %{type: :select}} = assigns) do
+    ~H"""
+    <select
+      id={config_field_id(@plugin, @field.key)}
+      name={"config[#{@field.key}]"}
+      class="select select-bordered select-sm w-full max-w-md text-xs"
+    >
+      <option :for={{val, label} <- @field.options} value={val} selected={to_string(@value) == val}>
+        {label}
+      </option>
+    </select>
+    """
   end
 
-  defp plugin_config_options("stream-guard") do
-    [
-      "max_bytes (integer, bytes, code default 2000): the running byte " <>
-        "total — delivered chunks plus the current one — that cuts the " <>
-        "stream once exceeded. Chunks already delivered are kept; this " <>
-        "stops the rest."
-    ]
+  def config_field_input(%{field: %{type: :boolean}} = assigns) do
+    ~H"""
+    <input type="hidden" name={"config[#{@field.key}]"} value="false" />
+    <input
+      type="checkbox"
+      id={config_field_id(@plugin, @field.key)}
+      name={"config[#{@field.key}]"}
+      value="true"
+      checked={@value in [true, "true"]}
+      class="checkbox checkbox-sm"
+    />
+    """
   end
 
-  defp plugin_config_options("response-size-guard") do
-    [
-      "max_bytes (integer, bytes, code default 4000): a single tool " <>
-        "response larger than this is withheld entirely (JSON-RPC error " <>
-        "-32002) instead of relayed."
-    ]
+  def config_field_input(%{field: %{type: :integer}} = assigns) do
+    ~H"""
+    <label class="input input-bordered input-sm flex w-40 items-center gap-1 text-xs">
+      <input
+        type="number"
+        min={Map.get(@field, :min, 0)}
+        id={config_field_id(@plugin, @field.key)}
+        name={"config[#{@field.key}]"}
+        value={@value}
+        placeholder={to_string(@field.default)}
+        class="w-full"
+      />
+      <span :if={Map.get(@field, :unit)} class="text-base-content/40">{@field.unit}</span>
+    </label>
+    """
   end
 
-  defp plugin_config_options("approval-gate") do
-    [
-      "timeout_ms (integer, milliseconds, code default 120000): how long " <>
-        "a held call waits for an operator to approve or deny before " <>
-        "it's automatically denied."
-    ]
+  def config_field_input(%{field: %{type: :json}} = assigns) do
+    ~H"""
+    <textarea
+      id={config_field_id(@plugin, @field.key)}
+      name={"config[#{@field.key}]"}
+      rows="8"
+      spellcheck="false"
+      class="textarea textarea-bordered w-full font-mono text-xs"
+    >{@value}</textarea>
+    """
   end
 
-  defp plugin_config_options(_name), do: []
+  def config_field_input(assigns) do
+    ~H"""
+    <input
+      type="text"
+      id={config_field_id(@plugin, @field.key)}
+      name={"config[#{@field.key}]"}
+      value={@value}
+      placeholder={to_string(@field.default)}
+      class="input input-bordered input-sm w-full max-w-md text-xs"
+    />
+    """
+  end
+
+  # --- rule-engine visual rules editor -------------------------------------
+  #
+  # `rule-engine`'s `config["rules"]` is an ordered list of rule objects — too
+  # nested for a flat field form, so it gets its own editor backed by
+  # `@rules_draft`. A draft "row" is the rule flattened for form binding:
+  # every `match.*` key hoisted to the top level, `tool_tags_any` joined to a
+  # comma string, the two boolean predicates as real booleans. `rule_to_row/1`
+  # normalizes a stored rule into a row; `rows_to_rules/1` rebuilds stored
+  # rules from form params, dropping blank keys so a catch-all rule stays
+  # `match`-less. `@blank_rule` (a fresh row) is at the top of the module so
+  # `rule_add` can see it.
+
+  defp load_rules_draft(plugins) do
+    case Enum.find(plugins, &(&1.name == "rule-engine")) do
+      %{config: %{"rules" => rules}} when is_list(rules) -> Enum.map(rules, &rule_to_row/1)
+      _ -> []
+    end
+  end
+
+  defp rule_to_row(rule) when is_map(rule) do
+    match = Map.get(rule, "match", %{}) || %{}
+
+    %{
+      "agent" => rule_str(match["agent"]),
+      "agent_prefix" => rule_str(match["agent_prefix"]),
+      "tool" => rule_str(match["tool"]),
+      "server" => rule_str(match["server"]),
+      "tool_tags_any" => match |> Map.get("tool_tags_any", []) |> List.wrap() |> Enum.join(", "),
+      "after_sensitive_read" => match["after_sensitive_read"] == true,
+      "if_tainted" => match["if_tainted"] == true,
+      "action" => rule_action(rule["action"]),
+      "severity" => rule_severity(rule["severity"]),
+      "reason" => rule_str(rule["reason"]),
+      "prompt" => rule_str(rule["prompt"]),
+      "timeout_ms" => (rule["timeout_ms"] && to_string(rule["timeout_ms"])) || ""
+    }
+  end
+
+  defp rule_to_row(_), do: @blank_rule
+
+  defp params_to_rows(%{"rules" => rules}) when is_map(rules) do
+    rules
+    |> Enum.sort_by(fn {k, _} -> to_int(k) end)
+    |> Enum.map(fn {_k, row} -> row_from_params(row) end)
+  end
+
+  defp params_to_rows(_), do: []
+
+  defp row_from_params(row) when is_map(row) do
+    %{
+      "agent" => rule_str(row["agent"]),
+      "agent_prefix" => rule_str(row["agent_prefix"]),
+      "tool" => rule_str(row["tool"]),
+      "server" => rule_str(row["server"]),
+      "tool_tags_any" => rule_str(row["tool_tags_any"]),
+      "after_sensitive_read" => row["after_sensitive_read"] == "true",
+      "if_tainted" => row["if_tainted"] == "true",
+      "action" => rule_action(row["action"]),
+      "severity" => rule_severity(row["severity"]),
+      "reason" => rule_str(row["reason"]),
+      "prompt" => rule_str(row["prompt"]),
+      "timeout_ms" => rule_str(row["timeout_ms"])
+    }
+  end
+
+  defp row_from_params(_), do: @blank_rule
+
+  defp rows_to_rules(rows), do: Enum.map(rows, &row_to_rule/1)
+
+  defp row_to_rule(row) do
+    match =
+      %{}
+      |> rule_put("agent", row["agent"])
+      |> rule_put("agent_prefix", row["agent_prefix"])
+      |> rule_put("tool", row["tool"])
+      |> rule_put("server", row["server"])
+      |> rule_put_list("tool_tags_any", row["tool_tags_any"])
+      |> rule_put_flag("after_sensitive_read", row["after_sensitive_read"])
+      |> rule_put_flag("if_tainted", row["if_tainted"])
+
+    %{"action" => rule_action(row["action"])}
+    |> then(&if(match == %{}, do: &1, else: Map.put(&1, "match", match)))
+    |> rule_put("reason", row["reason"])
+    |> rule_action_fields(row)
+  end
+
+  defp rule_action_fields(rule, %{"action" => "deny"} = row),
+    do: rule_put(rule, "severity", row["severity"])
+
+  defp rule_action_fields(rule, %{"action" => "hold"} = row) do
+    rule
+    |> rule_put("prompt", row["prompt"])
+    |> rule_put_pos_int("timeout_ms", row["timeout_ms"])
+  end
+
+  defp rule_action_fields(rule, _row), do: rule
+
+  defp rule_put(map, _key, value) when value in [nil, ""], do: map
+  defp rule_put(map, key, value), do: Map.put(map, key, String.trim(value))
+
+  defp rule_put_list(map, key, csv) do
+    list =
+      csv
+      |> rule_str()
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if list == [], do: map, else: Map.put(map, key, list)
+  end
+
+  defp rule_put_flag(map, key, flag) when flag in [true, "true"], do: Map.put(map, key, true)
+  defp rule_put_flag(map, _key, _flag), do: map
+
+  defp rule_put_pos_int(map, key, value) do
+    case Integer.parse(rule_str(value)) do
+      {n, _} when n > 0 -> Map.put(map, key, n)
+      _ -> map
+    end
+  end
+
+  defp rule_str(nil), do: ""
+  defp rule_str(s) when is_binary(s), do: s
+  defp rule_str(other), do: to_string(other)
+
+  defp rule_action(a) when a in ["deny", "allow", "hold"], do: a
+  defp rule_action(_), do: "deny"
+
+  defp rule_severity(s) when s in ["low", "medium", "high", "critical"], do: s
+  defp rule_severity(_), do: "high"
+
+  defp to_int(n) when is_integer(n), do: n
+
+  defp to_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      _ -> 0
+    end
+  end
+
+  defp to_int(_), do: 0
+
+  defp rule_summary(row) do
+    preds =
+      [
+        row["agent"] != "" && "agent #{row["agent"]}",
+        row["agent_prefix"] != "" && "agent ~ #{row["agent_prefix"]}",
+        row["tool"] != "" && "tool #{row["tool"]}",
+        row["server"] != "" && "server #{row["server"]}",
+        row["tool_tags_any"] != "" && "tags: #{row["tool_tags_any"]}",
+        row["after_sensitive_read"] && "after sensitive read",
+        row["if_tainted"] && "if tainted"
+      ]
+      |> Enum.filter(& &1)
+
+    case preds do
+      [] -> "#{row["action"]} · any call"
+      list -> "#{row["action"]} · #{Enum.join(list, ", ")}"
+    end
+  end
+
+  attr :rules, :list, required: true
+  attr :can_operate, :boolean, required: true
+
+  def rules_editor(assigns) do
+    ~H"""
+    <div>
+      <p :if={not @can_operate} class="text-xs text-base-content/50">
+        Operator role required to edit rules.
+      </p>
+
+      <.form
+        :if={@can_operate}
+        for={to_form(%{})}
+        id="rule-engine-rules-form"
+        phx-change="rules_change"
+        phx-submit="save_rules"
+        class="space-y-3"
+      >
+        <p
+          :if={@rules == []}
+          class="rounded-box border border-dashed border-base-300 px-3 py-4 text-center text-xs text-base-content/50"
+        >
+          No rules — every call is allowed. Add a rule to start denying or holding calls.
+        </p>
+
+        <div
+          :for={{row, idx} <- Enum.with_index(@rules)}
+          class="space-y-2 rounded-box border border-base-300 bg-base-200/40 p-3"
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold">Rule {idx + 1}</span>
+            <span class="rounded-full bg-base-300 px-2 py-0.5 text-[10px] text-base-content/60">
+              {rule_summary(row)}
+            </span>
+            <div class="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs px-1"
+                phx-click="rule_move"
+                phx-value-idx={idx}
+                phx-value-dir="up"
+                title="move earlier"
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs px-1"
+                phx-click="rule_move"
+                phx-value-idx={idx}
+                phx-value-dir="down"
+                title="move later"
+              >
+                ▼
+              </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs px-1 text-error"
+                phx-click="rule_remove"
+                phx-value-idx={idx}
+                title="delete rule"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/40">
+            Match — every field you set must hold (leave all blank for a catch-all)
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <label class="flex flex-col gap-0.5 text-[11px]">
+              Agent id — exact
+              <input
+                type="text"
+                name={"rules[#{idx}][agent]"}
+                value={row["agent"]}
+                placeholder="agent://ci-runner"
+                class="input input-bordered input-xs font-mono"
+              />
+            </label>
+            <label class="flex flex-col gap-0.5 text-[11px]">
+              Agent id — prefix
+              <input
+                type="text"
+                name={"rules[#{idx}][agent_prefix]"}
+                value={row["agent_prefix"]}
+                placeholder="agent://acme-"
+                class="input input-bordered input-xs font-mono"
+              />
+            </label>
+            <label class="flex flex-col gap-0.5 text-[11px]">
+              Tool name
+              <input
+                type="text"
+                name={"rules[#{idx}][tool]"}
+                value={row["tool"]}
+                class="input input-bordered input-xs font-mono"
+              />
+            </label>
+            <label class="flex flex-col gap-0.5 text-[11px]">
+              Server id
+              <input
+                type="text"
+                name={"rules[#{idx}][server]"}
+                value={row["server"]}
+                class="input input-bordered input-xs font-mono"
+              />
+            </label>
+            <label class="flex flex-col gap-0.5 text-[11px] sm:col-span-2">
+              Tool tags — matches if the call carries any of these (comma-separated)
+              <input
+                type="text"
+                name={"rules[#{idx}][tool_tags_any]"}
+                value={row["tool_tags_any"]}
+                placeholder="network_egress, sensitive_read"
+                class="input input-bordered input-xs font-mono"
+              />
+            </label>
+          </div>
+          <div class="flex flex-wrap gap-4">
+            <label class="flex items-center gap-1.5 text-[11px]">
+              <input
+                type="checkbox"
+                name={"rules[#{idx}][after_sensitive_read]"}
+                value="true"
+                checked={row["after_sensitive_read"]}
+                class="checkbox checkbox-xs"
+              /> after a sensitive read this session
+            </label>
+            <label class="flex items-center gap-1.5 text-[11px]">
+              <input
+                type="checkbox"
+                name={"rules[#{idx}][if_tainted]"}
+                value="true"
+                checked={row["if_tainted"]}
+                class="checkbox checkbox-xs"
+              /> a secret has flowed through this session
+            </label>
+          </div>
+
+          <div class="text-[10px] font-semibold uppercase tracking-wide text-base-content/40">
+            Then
+          </div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <label class="flex flex-col gap-0.5 text-[11px]">
+              Action
+              <select name={"rules[#{idx}][action]"} class="select select-bordered select-xs">
+                <option value="deny" selected={row["action"] == "deny"}>deny</option>
+                <option value="allow" selected={row["action"] == "allow"}>
+                  allow — exception, stops later rules
+                </option>
+                <option value="hold" selected={row["action"] == "hold"}>hold for approval</option>
+              </select>
+            </label>
+            <label :if={row["action"] == "deny"} class="flex flex-col gap-0.5 text-[11px]">
+              Severity
+              <select name={"rules[#{idx}][severity]"} class="select select-bordered select-xs">
+                <option
+                  :for={s <- ~w(low medium high critical)}
+                  value={s}
+                  selected={row["severity"] == s}
+                >
+                  {s}
+                </option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-0.5 text-[11px] sm:col-span-2">
+              Reason — shown to the agent and operator
+              <input
+                type="text"
+                name={"rules[#{idx}][reason]"}
+                value={row["reason"]}
+                class="input input-bordered input-xs"
+              />
+            </label>
+            <label :if={row["action"] == "hold"} class="flex flex-col gap-0.5 text-[11px]">
+              Approval prompt
+              <input
+                type="text"
+                name={"rules[#{idx}][prompt]"}
+                value={row["prompt"]}
+                class="input input-bordered input-xs"
+              />
+            </label>
+            <label :if={row["action"] == "hold"} class="flex flex-col gap-0.5 text-[11px]">
+              Timeout (ms) — auto-denies after this
+              <input
+                type="number"
+                min="1"
+                name={"rules[#{idx}][timeout_ms]"}
+                value={row["timeout_ms"]}
+                placeholder="120000"
+                class="input input-bordered input-xs"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <button type="button" class="btn btn-outline btn-xs" phx-click="rule_add">
+            + Add rule
+          </button>
+          <div class="flex gap-1.5">
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs"
+              phx-click="reset_plugin_config"
+              phx-value-name="rule-engine"
+            >
+              Reset to default
+            </button>
+            <button type="button" class="btn btn-ghost btn-xs" phx-click="reload_rules">
+              Reload saved
+            </button>
+            <button type="submit" class="btn btn-xs btn-primary">Save rules</button>
+          </div>
+        </div>
+        <p class="text-[10px] text-base-content/40">
+          Rules run top to bottom — the first whose match holds decides. No match → allow.
+          Applies on the next call, no restart.
+        </p>
+      </.form>
+    </div>
+    """
+  end
 
   defp parse_date("", _edge), do: nil
 

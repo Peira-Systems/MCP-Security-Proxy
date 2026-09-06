@@ -718,6 +718,15 @@
       </div>
     </div>
 
+    <div
+      :if={@open_plugin}
+      id="plugin-popup-esc"
+      phx-window-keydown="close_plugin"
+      phx-key="Escape"
+      class="hidden"
+    >
+    </div>
+
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Plugins</h2>
@@ -741,7 +750,8 @@
           <button
             type="button"
             class="link link-hover text-xs text-primary"
-            onclick={"document.getElementById('plugin-info-#{plugin.name}').showModal()"}
+            phx-click="open_plugin"
+            phx-value-name={plugin.name}
           >
             details
           </button>
@@ -805,13 +815,18 @@
             </button>
           </div>
 
-          <dialog id={"plugin-info-" <> plugin.name} class="modal">
+          <dialog
+            id={"plugin-info-" <> plugin.name}
+            class="modal"
+            phx-hook=".PluginPopup"
+            data-open={to_string(@open_plugin == plugin.name)}
+          >
             <div class="modal-box max-h-[85vh] max-w-lg overflow-y-auto">
               <button
                 type="button"
                 aria-label="Close"
                 class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
-                onclick="this.closest('dialog').close()"
+                phx-click="close_plugin"
               >
                 <.icon name="hero-x-mark" class="size-4" />
               </button>
@@ -828,42 +843,66 @@
                 {plugin.description}
               </p>
 
+              <% schema = ConfigSchema.schema(plugin.name) %>
+              <% reference = ConfigSchema.reference(plugin.name) %>
+              <% custom_editor = ConfigSchema.custom_editor?(plugin.name) %>
               <div class="mt-4 border-t border-base-300 pt-3">
                 <h4 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/50">
                   Configuration
                 </h4>
 
-                <p
-                  :if={plugin_config_options(plugin.name) == []}
-                  class="text-xs text-base-content/50"
-                >
+                <p :if={schema == [] and not custom_editor} class="text-xs text-base-content/50">
                   This plugin has no configurable options.
                 </p>
 
-                <div :if={plugin_config_options(plugin.name) != []}>
-                  <ul class="mb-2 list-disc space-y-1 pl-4 text-xs text-base-content/70">
-                    <li :for={line <- plugin_config_options(plugin.name)}>{line}</li>
-                  </ul>
-
-                  <div class="mb-1.5 text-[10px] text-base-content/40">
-                    Default: <span class="font-mono">{Jason.encode!(plugin.default_config)}</span>
-                  </div>
+                <div :if={schema != [] or custom_editor}>
+                  <.rules_editor
+                    :if={custom_editor}
+                    rules={@rules_draft}
+                    can_operate={@can_operate}
+                  />
 
                   <.form
-                    :if={@can_operate}
+                    :if={not custom_editor and @can_operate}
                     for={to_form(%{})}
                     id={"plugin-config-form-" <> plugin.name}
-                    phx-submit="update_plugin_config"
-                    class="flex flex-col gap-2"
+                    phx-submit="save_plugin_config"
+                    class="space-y-3"
                   >
                     <input type="hidden" name="name" value={plugin.name} />
-                    <textarea
-                      name="raw_config"
-                      rows="6"
-                      spellcheck="false"
-                      class="textarea textarea-bordered w-full font-mono text-xs"
-                    >{Jason.encode!(plugin.config, pretty: true)}</textarea>
-                    <div class="flex items-center justify-between">
+                    <div :for={field <- schema} class="flex flex-col gap-1">
+                      <label
+                        for={config_field_id(plugin.name, field.key)}
+                        class="flex items-center gap-1.5 text-xs font-medium"
+                      >
+                        {field.label}
+                        <span
+                          class="tooltip tooltip-right before:z-50 before:w-64 before:whitespace-normal before:text-left before:text-[11px] before:font-normal before:normal-case"
+                          data-tip={field.help}
+                        >
+                          <span
+                            title={field.help}
+                            class="inline-flex size-4 cursor-help items-center justify-center rounded-full border border-base-content/30 text-[10px] font-semibold text-base-content/50"
+                          >
+                            ?
+                          </span>
+                        </span>
+                      </label>
+                      <.config_field_input
+                        plugin={plugin.name}
+                        field={field}
+                        value={config_field_value(field, plugin.config)}
+                      />
+                      <span class="text-[10px] text-base-content/40">
+                        Built-in fallback:
+                        <span class="font-mono">{ConfigSchema.display(field.default)}</span>
+                      </span>
+                    </div>
+                    <div class="border-t border-base-300/60 pt-2 text-[10px] text-base-content/40">
+                      Registered default (what "Reset to default" restores):
+                      <span class="font-mono">{Jason.encode!(plugin.default_config)}</span>
+                    </div>
+                    <div class="flex items-center justify-between pt-1">
                       <span class="text-[10px] text-base-content/40">
                         Applies on the next call — no restart needed.
                       </span>
@@ -880,10 +919,42 @@
                       </div>
                     </div>
                   </.form>
+
                   <pre
                     :if={not @can_operate}
                     class="overflow-x-auto rounded bg-base-200 p-2 text-xs"
                   >{Jason.encode!(plugin.config, pretty: true)}</pre>
+
+                  <details :if={@can_operate} class="mt-3">
+                    <summary class="cursor-pointer text-[11px] text-base-content/50 hover:text-base-content/80">
+                      Field reference &amp; raw JSON
+                    </summary>
+                    <div class="mt-2 space-y-2">
+                      <ul
+                        :if={reference != []}
+                        class="list-disc space-y-1 pl-4 text-[11px] text-base-content/60"
+                      >
+                        <li :for={line <- reference}>{line}</li>
+                      </ul>
+                      <.form
+                        for={to_form(%{})}
+                        id={"plugin-config-raw-form-" <> plugin.name}
+                        phx-submit="update_plugin_config"
+                        class="flex flex-col gap-2"
+                      >
+                        <input type="hidden" name="name" value={plugin.name} />
+                        <textarea
+                          name="raw_config"
+                          rows="6"
+                          spellcheck="false"
+                          class="textarea textarea-bordered w-full font-mono text-xs"
+                        >{Jason.encode!(plugin.config, pretty: true)}</textarea>
+                        <button type="submit" class="btn btn-xs btn-primary self-end">
+                          Save raw JSON
+                        </button>
+                      </.form>
+                    </div>
+                  </details>
                 </div>
               </div>
 
@@ -896,18 +967,19 @@
                 >
                   Copy text
                 </button>
-                <button
-                  type="button"
-                  class="btn btn-sm btn-primary"
-                  onclick="this.closest('dialog').close()"
-                >
+                <button type="button" class="btn btn-sm btn-primary" phx-click="close_plugin">
                   Close
                 </button>
               </div>
             </div>
-            <form method="dialog" class="modal-backdrop">
-              <button>close</button>
-            </form>
+            <button
+              type="button"
+              class="modal-backdrop"
+              aria-label="Close"
+              phx-click="close_plugin"
+            >
+              close
+            </button>
           </dialog>
         </div>
         <div :if={@plugins == []} class="px-4 py-3 text-center text-sm text-base-content/50">
@@ -1416,6 +1488,36 @@
         const cls = blocked ? "stroke-error" : "stroke-primary"
         shape.classList.add(cls, "[stroke-width:3px]")
         setTimeout(() => shape.classList.remove(cls, "[stroke-width:3px]"), 450)
+      }
+    }
+  </script>
+
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".PluginPopup">
+    // Keeps a plugin's <dialog> in sync with server-tracked open state
+    // (@open_plugin), the single source of truth via `data-open`. Without
+    // this, a LiveView re-render (the 5s plugin poll, editing a rule) strips
+    // the native `open` attribute and the modal closes under the operator.
+    //
+    // Every explicit close path (✕ / Close / backdrop) is a phx-click that
+    // clears @open_plugin server-side; `sync()` then closes the dialog.
+    // Native Esc ("cancel") is the one path the browser drives itself — we
+    // cancel it and let the server round-trip close it, so state stays
+    // consistent.
+    export default {
+      mounted() {
+        this.el.addEventListener("cancel", (e) => {
+          e.preventDefault()
+          if (this.el.dataset.open === "true") this.pushEvent("close_plugin", {})
+        })
+        this.sync()
+      },
+      updated() {
+        this.sync()
+      },
+      sync() {
+        const shouldOpen = this.el.dataset.open === "true"
+        if (shouldOpen && !this.el.open) this.el.showModal()
+        else if (!shouldOpen && this.el.open) this.el.close()
       }
     }
   </script>

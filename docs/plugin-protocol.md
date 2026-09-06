@@ -813,6 +813,12 @@ restart. Sidecars are supervised like `StdioServer` instances. All four overlay 
 config-declared defaults and are persisted (`PhoenixElxirBeam.MCP.Plugin.StateStore`) so
 they survive a restart too.
 
+For the built-in plugins the dashboard renders `config` as a typed form — number
+boxes, dropdowns, a comma-separated list, with a `?` hover note per field —
+driven by `PhoenixElxirBeam.MCP.Plugin.ConfigSchema`. A collapsible "raw JSON"
+editor stays available for anything the form doesn't model (chiefly
+`rule-engine`'s rules array).
+
 ---
 
 ## 16. Worked examples
