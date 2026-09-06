@@ -1505,6 +1505,7 @@
     // consistent.
     export default {
       mounted() {
+        this._open = false
         this.el.addEventListener("cancel", (e) => {
           e.preventDefault()
           if (this.el.dataset.open === "true") this.pushEvent("close_plugin", {})
@@ -1516,8 +1517,22 @@
       },
       sync() {
         const shouldOpen = this.el.dataset.open === "true"
-        if (shouldOpen && !this.el.open) this.el.showModal()
-        else if (!shouldOpen && this.el.open) this.el.close()
+
+        if (shouldOpen) {
+          // Re-open every time: a LiveView re-render (5s poll, editing a
+          // rule) strips the browser-added `open` attribute, closing the
+          // modal under the operator unless we re-assert it here.
+          if (!this.el.open) this.el.showModal()
+        } else if (this._open) {
+          // Closing. The same patch can strip `open` *before* this runs, and
+          // dialog.close() is a no-op without it — leaving the dialog in the
+          // top layer with its ::backdrop swallowing every click (the page
+          // looks frozen until a refresh). Re-assert `open` so close() fully
+          // tears the modal down.
+          if (!this.el.open) this.el.setAttribute("open", "")
+          this.el.close()
+        }
+        this._open = shouldOpen
       }
     }
   </script>
