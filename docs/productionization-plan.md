@@ -353,9 +353,11 @@ Plugin `Registry` toggle state → **M3.4** (bundled with its UI, already done).
   `_build` + PLT are cached on `mix.lock`. Elixir/OTP pinned to the Dockerfile args.
 - `release.yml`: on a `v*` tag (or manual `workflow_dispatch`), on a **self-hosted** runner —
   `docker/build-push-action` builds the runtime image and pushes it to
-  `${REGISTRY_HOST}/mcp-security-proxy` (`:<version>`, `:<major>.<minor>`, `:<short-sha>`,
-  `:latest`) with GHA layer cache. Registry is HTTPS; host + credentials come from the
-  `REGISTRY_HOST` repo variable and `REGISTRY_USER` / `REGISTRY_PASSWORD` repo secrets.
+  `ghcr.io/<owner>/<repo>` (`:<version>`, `:<major>.<minor>`, `:<short-sha>`,
+  `:latest`) with GHA layer cache. Auth is the workflow's own `GITHUB_TOKEN`
+  (`packages: write`) — no repo secrets needed. *(Originally pushed to a
+  self-hosted registry via `REGISTRY_HOST`/`REGISTRY_USER`/`REGISTRY_PASSWORD`;
+  switched to GHCR — see `docs/ci-cd.md`.)*
 - `security-review.yml`: PR touching `mcp/**` / `priv/plugins/**` / `config/**` →
   `anthropics/claude-code-security-review`, posted as PR comments. Job is skipped unless an
   `ANTHROPIC_API_KEY` repo secret exists (forks/clones stay green).
@@ -366,7 +368,7 @@ Plugin `Registry` toggle state → **M3.4** (bundled with its UI, already done).
   auto-deploy onto the node (no server access from CI) — deploy stays a documented manual
   `docker compose pull && up -d` on the host.
 - **Acceptance:** a red `mix test` / `dialyzer` fails the `CI` workflow; a `v*` tag produces
-  a pushed `${REGISTRY_HOST}/mcp-security-proxy` image; `docs/ci-cd.md` has the
+  a pushed `ghcr.io/<owner>/<repo>` image; `docs/ci-cd.md` has the
   one-command rollback (`docker compose pull app && up -d app` on the prior tag).
 
 ### M3.2 — Observability — **done** (`MCP.Telemetry`, `MCP.Alerts`, `MCP.Health`, `docs/observability.md`)

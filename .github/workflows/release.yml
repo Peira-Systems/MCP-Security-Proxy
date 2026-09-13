@@ -6,11 +6,10 @@ name: Release image
 # any ref — the image is then tagged only `:<short-sha>` (no `:latest`, which is
 # reserved for tag builds).
 #
-# The image is published to `${REGISTRY_HOST}/mcp-security-proxy` over HTTPS.
-# Configure it in the repo settings (Settings → Secrets and variables → Actions):
-#   - variable REGISTRY_HOST      e.g. artifact-keeper.peirasystems.com
-#   - secret   REGISTRY_USER
-#   - secret   REGISTRY_PASSWORD
+# The image is published to GHCR at `ghcr.io/<owner>/<repo>`, authenticated
+# with the workflow's own GITHUB_TOKEN (no repo secrets to configure). The
+# package inherits the repo's visibility on GHCR; make it public under the
+# package's own settings if pulls shouldn't require auth.
 # Deploying the image onto the node is a manual step on the host — see
 # docs/ci-cd.md (deploy + rollback).
 
@@ -20,33 +19,30 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: ${{ vars.REGISTRY_HOST }}/mcp-security-proxy
+  REGISTRY: ghcr.io
 
 jobs:
   build-push:
-    # Self-hosted runner that can reach the registry host.
     runs-on: self-hosted
     permissions:
       contents: read
+      packages: write
 
     steps:
-      - name: Check registry config
-        env:
-          REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
-        run: |
-          test -n "$REGISTRY_HOST" \
-            || { echo "::error::repo variable REGISTRY_HOST is not set"; exit 1; }
-
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to the registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ vars.REGISTRY_HOST }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR requires an all-lowercase path; github.repository preserves case.
+      - name: Set image name
+        run: echo "IMAGE=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Image metadata
         id: meta

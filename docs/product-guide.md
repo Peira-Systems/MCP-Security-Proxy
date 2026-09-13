@@ -211,7 +211,7 @@ full topology, sizing, TLS, retention, and backup detail.
 
 - Docker + Docker Compose v2.
 - A DNS name and TLS cert for the reverse proxy.
-- Pull access to the image registry (`${REGISTRY_HOST}/mcp-security-proxy`), or
+- Pull access to the image registry (`ghcr.io/<owner>/<repo>`), or
   build locally with `docker compose build`.
 
 ### 4.3 Configure

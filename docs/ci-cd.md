@@ -7,7 +7,7 @@
 | Workflow | Trigger | What it does |
 |---|---|---|
 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | every PR, push to `main`/`master` | `deps.unlock --check-unused`, `format --check-formatted`, `compile --warnings-as-errors`, `mix deps.audit`, `mix test` (against a `postgres:17` service), and `mix dialyzer` in a separate job |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | push of a `v*` tag (or manual `workflow_dispatch`) | on a **self-hosted** runner, build the runtime image and push it to `${REGISTRY_HOST}/mcp-security-proxy` tagged `:<version>`, `:<major>.<minor>`, `:<short-sha>`, and `:latest` |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | push of a `v*` tag (or manual `workflow_dispatch`) | on a **self-hosted** runner, build the runtime image and push it to `ghcr.io/<owner>/<repo>` tagged `:<version>`, `:<major>.<minor>`, `:<short-sha>`, and `:latest` |
 | [`.github/workflows/security-review.yml`](../.github/workflows/security-review.yml) | PR touching `lib/phoenix_elxir_beam/mcp/**`, `priv/plugins/**`, `config/**` | Claude security review of the diff, posted as PR comments. Skipped unless an `ANTHROPIC_API_KEY` repo secret is set. |
 | [`.github/workflows/load.yml`](../.github/workflows/load.yml) | nightly (04:00 UTC) + manual | Runs `bench/load.exs` against a fresh Postgres, publishes latency numbers to the run summary. **Non-blocking** — fails only on a >1% error rate, not the latency budget. See [`docs/latency-budget.md`](latency-budget.md). |
 
@@ -39,18 +39,16 @@ absolute OTP paths that differ between the two).
 
 ## Registry
 
-`release.yml` pushes over HTTPS to `${REGISTRY_HOST}/mcp-security-proxy`.
-Configure it under Settings → Secrets and variables → Actions:
+`release.yml` pushes to GHCR at `ghcr.io/<owner>/<repo>`, authenticated with
+the workflow's own `GITHUB_TOKEN` (the job's `packages: write` permission) —
+no repo secrets to configure. The image path is lowercased from
+`github.repository` since GHCR rejects uppercase.
 
-| Kind | Name | Example / note |
-|---|---|---|
-| Variable | `REGISTRY_HOST` | `artifact-keeper.peirasystems.com` — host only, no scheme or path |
-| Secret | `REGISTRY_USER` | registry username |
-| Secret | `REGISTRY_PASSWORD` | registry password / token |
-
-The job fails fast if `REGISTRY_HOST` is unset; a bad or missing credential
-fails the login step with `unauthorized`. After the push, a **Verify pushed
-tags** step re-fetches every tag from the registry with `docker buildx imagetools
+The pushed package is private by default and inherits nothing from the repo's
+visibility; if hosts need to `docker pull` it without authenticating, make the
+package public under its own Settings on GHCR (Package settings → Change
+visibility) after the first push. After the push, a **Verify pushed tags**
+step re-fetches every tag from the registry with `docker buildx imagetools
 inspect` and fails if any doesn't resolve to the digest just built.
 
 A red `mix test` or `mix dialyzer` blocks merge once branch protection requires
@@ -73,15 +71,16 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-`release.yml` builds and pushes `${REGISTRY_HOST}/mcp-security-proxy:v0.2.0`
+`release.yml` builds and pushes `ghcr.io/<owner>/<repo>:v0.2.0`
 (+ `:0.2` + `:latest`). The image is **not** deployed automatically — deploy is a
 manual step on the node.
 
 ## Deploy onto the node
 
 On the single host, with `.env` populated and `docker-compose.yml` pointed at the
-registry image (`image: <REGISTRY_HOST>/mcp-security-proxy:v0.2.0` instead
-of the local build):
+registry image (`image: ghcr.io/<owner>/<repo>:v0.2.0` instead
+of the local build), signed in via `docker login ghcr.io` with a token that has
+`read:packages` if the package is private:
 
 ```bash
 docker compose pull app
