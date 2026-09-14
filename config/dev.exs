@@ -57,7 +57,38 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        {:priv, "plugins/injection_rules.json"}
      ],
      config: %{},
-     grants: %{block: true, mutate: [], network: false}}
+     grants: %{block: true, mutate: [], network: false}},
+    # W4 reference Wasm plugin (docs/wasm-plugin-plan.md) -- a wasm32-wasip1 port of
+    # RuleEngine above, verdict-parity-tested against it
+    # (rule_engine_wasm_parity_test.exs). Ships alongside, not instead of, the trusted
+    # Elixir original, and disabled by default -- enable from the dashboard to compare
+    # them live. Rebuild with priv/wasm_plugins/rule_engine/build.sh.
+    {:wasm,
+     name: "rule-engine-wasm",
+     path: {:priv, "wasm_plugins/rule_engine.wasm"},
+     enabled: false,
+     config: %{
+       "rules" => [
+         %{
+           "match" => %{"agent" => "agent://ci-runner", "tool_tags_any" => ["network_egress"]},
+           "action" => "deny",
+           "severity" => "high",
+           "reason" => "policy: agent ci-runner may not perform network egress"
+         },
+         %{
+           "match" => %{"agent" => "agent://ci-runner", "tool" => "read_secrets"},
+           "action" => "deny",
+           "severity" => "high",
+           "reason" => "policy: agent ci-runner may not read secrets"
+         }
+       ]
+     },
+     pin: [
+       code: "sha256:5ae445d3877cf388a4b0774a6b32886852417329257b3f008d7883ac952a4f29",
+       manifest: "sha256:246db3d4700329099a4c3fc4d0dcb79521322ec152b24edc5e98124ff8985dd2"
+     ],
+     limits: [memory_pages: 256],
+     grants: %{mutate: [], block: false}}
   ]
 
 # For development, we disable any cache and enable

@@ -250,7 +250,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
             module: module,
             impl: {:module, module},
             config: registered_config,
-            default_config: registered_config
+            default_config: registered_config,
+            enabled: Keyword.get(opts, :enabled, true)
           })
 
         {:ok, entry}
@@ -296,7 +297,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
           impl: {:sidecar, runner},
           transport: :stdio,
           config: registered_config,
-          default_config: registered_config
+          default_config: registered_config,
+          enabled: Keyword.get(opts, :enabled, true)
         })
         |> cap_grants(kind, grants)
 
@@ -341,7 +343,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
           impl: {:wasm, runner},
           transport: :wasm,
           config: registered_config,
-          default_config: registered_config
+          default_config: registered_config,
+          enabled: Keyword.get(opts, :enabled, true)
         })
         |> cap_grants(kind, grants)
 

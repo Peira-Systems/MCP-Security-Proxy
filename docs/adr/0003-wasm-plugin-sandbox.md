@@ -122,16 +122,30 @@ elsewhere). This is a second concrete hardening win, not just a config-shape par
 
 ### 5. Capability grants: no network, no filesystem, by default — structurally, not by policy
 
-A Wasm guest gets **no WASI imports linked** beyond what it needs to run at all (no
-filesystem preopens, no sockets, no environment variables). This is enforced by the host
-simply not providing those import functions — a guest that tries to call an unlinked import
-fails to instantiate, not "is trusted not to." This is strictly stronger than the sidecar
-model's `requiresNetwork` flag, which today is **declarative only** — the operator vets it,
-but a sidecar subprocess otherwise has whatever OS-level network access the host or
-container permits (`docs/plugin-protocol.md` §12: "the operator vets those grants"). Network
-access for a Wasm plugin is out of scope for v1 entirely (no plugin in this plan needs it);
-revisit if a concrete Wasm plugin ever does, the same way OTel export was deferred until
-there was a concrete consumer for it.
+Every Wasm guest is instantiated against a WASI preview1 environment with **every option at
+its empty default** — no preopened directories, no args, no env vars, stdio wired to
+nothing. **No filesystem access is possible at all** (WASI preview1's filesystem model is
+capability-based: without an explicit preopened directory handle, there is nothing for a
+guest to open), and **no network access is possible either**, structurally — WASI preview1
+has no socket API to grant in the first place, regardless of configuration. This is strictly
+stronger than the sidecar model's `requiresNetwork` flag, which today is **declarative
+only** — the operator vets it, but a sidecar subprocess otherwise has whatever OS-level
+network access the host or container permits (`docs/plugin-protocol.md` §12: "the operator
+vets those grants").
+
+**Correction from this ADR's first draft:** it originally described this as "no WASI
+imports linked at all." Building the W4 reference plugin showed that claim was only true for
+a guest that makes zero calls into `std` beyond pure computation — a module linking an
+ordinary crate like `serde_json` imports a handful of WASI functions
+(`environ_get`/`environ_sizes_get`/`fd_write`/`proc_exit`) purely because `std`'s own
+init/panic machinery references them, whether or not the guest's own code ever calls them.
+Confirmed by building a trivial no-op guest (zero imports) and then adding `serde_json` to
+the same guest (four imports appear) and inspecting both with `Wasmex.Module.imports/1`
+before writing any real plugin logic. What the ADR's security argument actually depends
+on — no filesystem, no network — is unaffected: those four functions grant neither. Network
+access for a Wasm plugin remains out of scope for v1 entirely (no plugin in this plan needs
+it); revisit if a concrete Wasm plugin ever does, the same way OTel export was deferred
+until there was a concrete consumer for it.
 
 ### 6. Reference plugin: port `RuleEngine`, prove parity, don't replace it
 

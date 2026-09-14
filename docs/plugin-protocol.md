@@ -296,7 +296,7 @@ spectrum, distinct from every other binding:
 |---|---|---|---|
 | Runs in the proxy's OS process | yes | no | **yes** |
 | A crash/hang can take down the proxy | yes (shares the BEAM) | no (separate process) | **no** (Wasmtime traps are memory-safe; a timeout is enforced by the host, not the guest) |
-| Filesystem/network access | whatever the release has | whatever the OS/container grants, operator-trusted | **none, structurally** — no import linked unless a future revision adds one |
+| Filesystem/network access | whatever the release has | whatever the OS/container grants, operator-trusted | **none, structurally** — WASI preview1 linked with every option empty (§5.4.3); no filesystem handle to open, no socket API to grant |
 | Per-call latency | lowest | IPC round-trip | low — a direct function call, no subprocess |
 | Language | Elixir only | any | any `wasm32-wasip1` target |
 
@@ -318,13 +318,26 @@ that region. The proxy calls this once per request, to get somewhere to write th
 envelope (§5.4.2) before calling `handle`.
 
 ```
-handle(in_ptr: i32, in_len: i32) -> (out_ptr: i32, out_len: i32)
+handle(in_ptr: i32, in_len: i32) -> header_ptr: i32
 ```
 
 Processes one request envelope (`in_len` bytes, already written into the guest's memory at
-`in_ptr` by the proxy) and returns a pointer/length pair locating the response envelope,
-via Wasm's standard multi-value return (two `i32` results, not a packed value) — the guest
-may write the response anywhere in its own memory, including reusing the input region.
+`in_ptr` by the proxy) and returns a single pointer to an **8-byte header** the guest wrote
+into its own memory: bytes `0..4` are the response's `out_ptr` and bytes `4..8` are its
+`out_len`, both little-endian `u32`. The guest may place the header and the response body
+anywhere in its own memory, including reusing the input region, as long as they don't
+overlap each other.
+
+> **Not a 2-value Wasm return.** An earlier draft of this section specified
+> `(out_ptr, out_len)` via genuine Wasm multi-value return. Building the W4 reference
+> plugin (`docs/wasm-plugin-plan.md`) showed that doesn't hold for an ordinary
+> `extern "C"` function on this target: Rust's own compiler warns that a tuple return from
+> `extern "C"` has an *unspecified* ABI, and empirically it turned out to be neither real
+> multi-value nor a predictable "hidden output parameter" position — inspecting the
+> compiled module's own export signature (`Wasmex.Module.exports/1`) was the only way to
+> find out what actually happened. The single-pointer-to-a-header convention here sidesteps
+> the ambiguity entirely: it's one ordinary `i32`-returning function, valid in any language
+> or toolchain, not dependent on a specific compiler's tuple-lowering choice.
 
 There is **no `dealloc` export, and none is needed.** The proxy draws each call from a small
 pool of pre-instantiated guests (`Plugin.WasmRunner`, `docs/wasm-plugin-plan.md` W2) and
@@ -370,14 +383,26 @@ sidecar subprocess has.
 call) — every instance in a plugin's pool is instantiated from the same compiled `Module`
 and reports the same manifest, so any one of them is authoritative.
 
-#### 5.4.3 Capabilities: none by default
+#### 5.4.3 Capabilities: no filesystem, no network — ever
 
-A Wasm guest is instantiated with **no WASI imports linked** — no filesystem preopens, no
-sockets, no environment variables, no ambient authority of any kind beyond what core Wasm
-itself provides (pure computation over its own linear memory). This is enforced by the host
-simply not providing those import functions: a guest that references an unlinked import
-fails to *instantiate*, not "is trusted not to call it." See §12 for how this compares to
-the sidecar binding's `requiresNetwork` flag.
+Every Wasm guest is instantiated against WASI preview1 with **every option at its empty
+default**: no preopened directories, no args, no env vars, stdio wired to nothing. WASI
+preview1's filesystem access is capability-based — without an explicit preopened directory
+handle there is nothing for a guest to open, so **no filesystem access is possible at all**.
+**No network access is possible either**, structurally, because WASI preview1 has no socket
+API to grant in the first place, regardless of configuration. See §12 for how this compares
+to the sidecar binding's `requiresNetwork` flag.
+
+This is **not** the same as "no WASI imports linked at all." A guest built from Rust's `std`
+that uses an ordinary crate like `serde_json` imports a handful of WASI functions
+(`environ_get` / `environ_sizes_get` / `fd_write` / `proc_exit`) purely because `std`'s own
+init/panic machinery references them — confirmed empirically while building the W4
+reference plugin (`docs/wasm-plugin-plan.md`), by inspecting a trivial no-op guest (zero
+imports) versus the same guest with `serde_json` added (those four imports appear) via
+`Wasmex.Module.imports/1`. None of the four grant filesystem or network access; what matters
+for the threat model is unaffected. A guest that makes no `std` calls beyond pure
+computation (this protocol's own WAT test fixtures, for instance) imports nothing at all,
+and is unaffected either way by WASI being linked but unused.
 
 Network access for a Wasm plugin is **out of scope for v1 entirely** — no capability
 negotiation for it exists yet in this section, because no plugin currently needs it
@@ -820,13 +845,17 @@ available.
 `requiresNetwork: false` is a *claim the operator vets* — the subprocess itself may still
 have whatever OS-level filesystem/network access the host or container permits, restricted
 only by whatever hardening in the previous paragraph the operator actually applied. A Wasm
-guest's lack of network/filesystem access is enforced by the host **not linking those
-imports at all** — there is nothing for a compromised or buggy guest to call, regardless of
-container/OS configuration, because the capability does not exist inside its sandbox. The
-same asymmetry applies to a runaway call: a sidecar that ignores its timeout keeps its
-process running until something external notices; a Wasm call that hits its timeout is
-interrupted by the runtime itself (§5.4.4). This is the concrete reason ADR-0003 chose Wasm
-for *untrusted-shaped, latency-sensitive* plugin logic over adding more sidecar hardening.
+guest's lack of filesystem access is enforced by the host never preopening a directory (WASI
+preview1's filesystem model is capability-based — there is nothing to open without one), and
+its lack of network access is enforced by WASI preview1 simply having no socket API to grant
+in the first place — regardless of container/OS configuration, because neither capability
+exists inside its sandbox (§5.4.3 — note this is narrower than "zero WASI imports," which a
+`std`-based guest using an ordinary crate will not have, but neither of those two properties
+depends on that). The same asymmetry applies to a runaway call: a sidecar that ignores its
+timeout keeps its process running until something external notices; a Wasm call that hits
+its timeout is interrupted by the runtime itself (§5.4.4). This is the concrete reason
+ADR-0003 chose Wasm for *untrusted-shaped, latency-sensitive* plugin logic over adding more
+sidecar hardening.
 
 **Data exposure.** Any plugin that requests `call.arguments` or `response.content` can see
 whatever sensitive data passes through — including the very secrets this proxy exists to
@@ -1088,7 +1117,7 @@ into the guest's memory at a pointer from `alloc`, calls `handle(in_ptr, in_len)
   "pluginConfig":{}
 }}}
 
-// response, at the (out_ptr, out_len) handle returned
+// response body, located via the 8-byte header handle's return pointer locates (§5.4.1)
 {"result":{
   "verdict":"deny","severity":"high",
   "reason":"network egress blocked: a sensitive read occurred earlier in this session"

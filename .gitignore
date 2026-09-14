@@ -63,5 +63,10 @@ npm-debug.log
 __pycache__/
 *.pyc
 
+# Rust build output for Wasm plugin crates (priv/wasm_plugins/*/) -- the
+# compiled .wasm artifact itself is checked in one level up; only the build
+# directory is regeneratable/large.
+/priv/wasm_plugins/*/target/
+
 
 /.idea/

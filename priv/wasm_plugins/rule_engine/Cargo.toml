@@ -1,0 +1,17 @@
+[package]
+name = "rule_engine_wasm"
+version = "0.1.0"
+edition = "2021"
+description = "W4 reference Wasm plugin (docs/wasm-plugin-plan.md) -- a wasm32-wasip1 port of PhoenixElxirBeam.MCP.Plugins.RuleEngine, validated for verdict parity against the trusted Elixir original."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true

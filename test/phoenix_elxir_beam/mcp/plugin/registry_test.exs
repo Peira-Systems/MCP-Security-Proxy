@@ -51,6 +51,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     assert entry.fail_mode == :fail_closed
   end
 
+  test "an :enabled opt in the spec starts a plugin disabled" do
+    reg = start_registry([{ChainExfil, enabled: false}])
+    assert [%{name: "chain-exfil", enabled: false}] = Registry.list(reg)
+    assert [] = Registry.active_policies(:pre_call, reg)
+  end
+
   test "active_policies/2 filters by phase" do
     reg = start_registry([{ChainExfil, []}])
 

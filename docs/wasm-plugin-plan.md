@@ -100,10 +100,15 @@ with one script. Results were **identical** on both platforms.
   `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` — the core go/no-go question.
   `bcrypt_elixir`'s Windows build failure does **not** recur here; `wasmex` ships a
   binary for this exact box.
-- The `alloc`/`handle` guest ABI (§W1) works exactly as specced: host writes N bytes into
-  guest linear memory at a pointer returned by `alloc`, calls `handle(ptr, len)`, gets back
-  a `(ptr, len)` pair via genuine Wasm multi-value return, reads those bytes back — a real
-  JSON `call/evaluate`-shaped payload round-tripped byte-for-byte.
+- The `alloc`/`handle` guest ABI (§W1) works exactly as specced *for hand-written WAT*: host
+  writes N bytes into guest linear memory at a pointer returned by `alloc`, calls
+  `handle(ptr, len)`, gets back a `(ptr, len)` pair via genuine Wasm multi-value return,
+  reads those bytes back — a real JSON `call/evaluate`-shaped payload round-tripped
+  byte-for-byte. **This multi-value return turned out not to be what an ordinary Rust
+  build produces** (found during W4 — see that section) — the ABI was corrected to a
+  single-pointer-to-a-header convention before any real plugin shipped; nothing here was
+  wrong, it just wasn't the whole story until a second toolchain (Rust, not just
+  hand-written WAT) exercised it.
 - `Wasmex.StoreLimits{memory_size: N}` enforces a hard cap — `memory.grow` past it returns
   Wasm's own `-1` failure sentinel (not a crash, not a silent no-op), confirming the
   `limits: [memory_pages: N]` design (ADR-0003 §4) is directly implementable.
@@ -175,8 +180,14 @@ release` exists to test with.
 
 ```
 alloc(size: i32) -> i32                    // reserve `size` bytes, return a pointer
-handle(in_ptr: i32, in_len: i32) -> (i32, i32)   // process one request, return (out_ptr, out_len)
+handle(in_ptr: i32, in_len: i32) -> i32    // process one request, return a header pointer
 ```
+
+> **Corrected during W4** (was `-> (i32, i32)` — see `docs/plugin-protocol.md` §5.4.1 for
+> the full story): `extern "C"` tuple returns have an unspecified ABI on this target, so
+> `handle` returns one `i32` pointing to an 8-byte `[out_ptr: u32 LE, out_len: u32 LE]`
+> header instead of relying on genuine multi-value return, which turned out not to be what
+> an ordinary Rust build actually produces.
 
 No `dealloc` export is required. Each call gets a **freshly instantiated** guest (§ W2 —
 instances are drawn from a small pool and are not reused for a second call), so a guest may
@@ -459,6 +470,82 @@ The actual acceptance bar for this milestone, not "it compiles and runs":
 `mix precommit` pass; a manual dashboard check showing `rule-engine` and `rule-engine-wasm`
 both listed in the Plugins panel (`rule-engine-wasm` disabled), with matching config.
 
+### As built (2026-09-14) — one major ABI correction, two real bugs caught by the parity test
+
+**The guest ABI itself needed a real fix, found by inspecting the compiled output, not by
+guessing.** `handle`'s return shape (`docs/plugin-protocol.md` §5.4.1) was specced as
+genuine Wasm multi-value return, `(out_ptr, out_len)`, validated in W0/W1 against
+hand-written WAT. Writing `rule_engine_wasm` in Rust broke that assumption: `rustc` itself
+warns that `extern "C"` tuple returns have an "unspecified layout" on this target, and
+inspecting the compiled module's real export signature (`Wasmex.Module.imports/1` /
+`exports/1` — the same tool used throughout this plan to settle ABI questions rather than
+assume them) showed it wasn't multi-value at all, and an attempt to guess the alternative
+(a 3-argument sret convention, `handle(in_ptr, in_len, out_ptr)`) also turned out wrong —
+the header never got written where expected. **The fix, corrected everywhere before it
+shipped**: `handle` now returns a single `i32` pointing to an 8-byte header
+(`[out_ptr: u32 LE, out_len: u32 LE]`) the guest writes itself — no reliance on any
+particular compiler's tuple-lowering choice, valid for any language. Propagated to
+`docs/plugin-protocol.md` §5.4.1, `WasmRunner.call_guest/4`, and **both** W2/W3's WAT test
+fixtures (regenerated, not hand-patched — a placement bug on the first regeneration
+attempt, the new header segment overlapping the JSON payload's own memory, was caught by
+the fixtures' own self-check before it reached a real test run).
+
+**Building a real `std`-based plugin also corrected the "zero WASI imports" framing** in
+ADR-0003 §5 / `docs/plugin-protocol.md` §5.4.3 and §12: a bare no-op guest genuinely
+imports nothing, but the moment `serde_json` (an ordinary crate, needed for real JSON
+handling) is linked, four WASI functions appear
+(`environ_get`/`environ_sizes_get`/`fd_write`/`proc_exit`) — `std`'s own init/panic
+machinery references them regardless of whether the guest's own code ever calls them.
+Confirmed by building the same trivial guest twice, with and without the dependency, and
+diffing `Wasmex.Module.imports/1`'s output. `WasmRunner.spin_instance/1` now uses
+`Wasmex.Store.new_wasi/3` with every `WasiOptions` field at its empty default (was plain
+`Store.new/2`) — no preopened directories (no filesystem access, full stop), no args/env,
+stdio wired to nothing. What the ADR's security argument actually rests on — no filesystem,
+no network (WASI preview1 has no socket API to grant regardless of configuration) — is
+unaffected either way; only the "literally zero imports" phrasing was too strong, and every
+existing WAT fixture (genuinely zero-import) is unaffected by WASI being linked but unused.
+
+**The parity test caught two real, distinct bugs before either shipped** (not
+hypothetically — both reproduced on the first run):
+1. A **test-harness bug**: the parity test's `entry()` helper built `config: %{}`, sending
+   an empty `pluginConfig` over the wire — `Wire.encode_context/2` sources `pluginConfig`
+   from `entry.config`, not `ctx.plugin_config` (the latter only matters for the in-process
+   calling convention). Every rule-matching case failed as a false "always allow" until
+   fixed; the "no rules" / "unknown predicate" cases passed anyway, which is exactly why a
+   parity suite needs *every* corpus case, not a couple of representative ones — those two
+   would look identical whether the rules array was empty or simply never arrived.
+2. A **real plugin bug**: `PhoenixElxirBeam.MCP.Decision.hold/2` unconditionally sets
+   `severity: :high` on the Elixir side (it isn't a rule field, just a hardcoded struct
+   default) — the Rust port's `hold` branch didn't replicate that, so every `hold`-verdict
+   case parity-failed on `severity: nil` vs `:high` until the Rust side added the same
+   literal `"severity": "high"`, commented as a port of that specific Elixir quirk rather
+   than a real severity computation, so a future reader doesn't mistake it for one.
+
+**Config/provenance**: `Registry` gained a small, generically useful addition along the
+way — a static `:enabled` opt on any plugin spec (`{Module, enabled: false, ...}` /
+`{:sidecar, enabled: false, ...}` / `{:wasm, enabled: false, ...}`), since there was
+previously no way to configure a plugin as disabled from boot at all (`enabled: true` was
+hardcoded in every entry builder) — needed for "ships disabled by default," and generic
+enough it isn't a wasm-specific hack. `rule-engine-wasm` is registered in `config/dev.exs`
+only (not `prod.exs` — it's a demonstration/comparison plugin, not something prod needs
+even dormant), pinned (`Provenance.wasm_code_digest/1`, recomputed once after the severity
+fix changed the binary's bytes), `enabled: false`, with the **same** operator rule config
+`RuleEngine` already ships with in the same file, for an apples-to-apples comparison if
+enabled. Verified the real app boots clean with it present: `Registry.list/0` shows the
+entry with `enabled: false`, `transport: :wasm`, and no provenance-mismatch alert.
+
+**Reuse, not a second corpus**: `rule_engine_test.exs` was refactored (behavior-preserving —
+re-ran it immediately after, all 8 tests identical) to source its fixtures from a new
+`test/support/rule_engine_corpus.ex` by name; the parity test iterates every entry in that
+same module. One corpus, two consumers, exactly as planned.
+
+Verified: `mix compile --warnings-as-errors` + `MIX_ENV=prod mix compile
+--warnings-as-errors` clean, `mix dialyzer` clean, full suite green at **396** (385 + 10
+parity tests + 1 new `:enabled`-opt test, zero regressions). The dashboard visual check
+from this milestone's stated acceptance criteria is deferred to W5, where it belongs
+alongside the rest of the dashboard work — confirmed via `Registry.list/0` directly instead
+for this milestone.
+
 ---
 
 ## W5 — Dashboard + docs
@@ -504,6 +591,11 @@ both listed in the Plugins panel (`rule-engine-wasm` disabled), with matching co
 - [x] W3: `Pipeline` `{:wasm, name}` dispatch — 2026-09-14. `pipeline_wasm_test.exs` green
       (7 tests, incl. a second `wasm_deny_policy.wat` fixture for deny-path coverage), full
       suite 385, dialyzer clean.
-- [ ] W4: `rule-engine-wasm` — parity suite green against the full `RuleEngine` corpus.
+- [x] W4: `rule-engine-wasm` — 2026-09-14. Parity suite green (10/10) against the full
+      `RuleEngine` corpus, full suite 396, dialyzer clean. Corrected the guest ABI's
+      `handle` return shape (single header pointer, not multi-value — see "As built") and
+      the "zero WASI imports" framing along the way; caught a test-harness bug and a real
+      plugin bug (hold's hardcoded severity) via the parity test itself before either
+      shipped.
 - [ ] W5: dashboard shows the `wasm` transport; supply-chain + cross-referencing docs
       updated; `mix precommit` / `mix dialyzer` / `MIX_ENV=prod mix compile` all still pass.

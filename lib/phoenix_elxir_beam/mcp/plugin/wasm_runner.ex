@@ -40,6 +40,21 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunner do
   deliberate scope boundary, not an oversight: resuming gracefully from a single dead pool
   slot without restarting the whole plugin would need first tracking checked-out slots by
   Wasm instance pid as well as by caller monitor, for what should be a rare event.
+
+  ## Capabilities
+
+  Every instance is given WASI preview1 with every option at its empty default (`docs/
+  plugin-protocol.md` §5.4.3) — no preopened directories (so no filesystem access at all,
+  full stop), no args/env, stdio wired to nothing. This is **not optional**, and it is not
+  "zero WASI" either — a guest built from Rust's `std` (needed for an ordinary JSON library
+  like `serde_json`) imports a handful of WASI functions (`environ_get`,
+  `environ_sizes_get`, `fd_write`, `proc_exit`) even when it makes no I/O calls itself,
+  because `std`'s own init/panic machinery references them; a guest built to need none of
+  that (this project's own WAT test fixtures) imports nothing and is unaffected by WASI
+  being linked but unused either way. What matters for the threat model is unchanged either
+  way: no filesystem, and no network capability at all, since WASI preview1 has no socket
+  API to grant regardless of configuration (confirmed empirically while building W4's
+  reference plugin — see `docs/wasm-plugin-plan.md`'s W4 notes).
   """
 
   use GenServer
@@ -210,8 +225,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunner do
     end
   end
 
+  # See the moduledoc "Capabilities" section for why this is `new_wasi` with
+  # empty options rather than plain `new` -- it's load-bearing, not a slip.
   defp spin_instance(state) do
-    {:ok, store} = Wasmex.Store.new(state.store_limits, state.engine)
+    {:ok, store} = Wasmex.Store.new_wasi(%Wasmex.Wasi.WasiOptions{}, state.store_limits, state.engine)
     {:ok, pid} = Wasmex.start_link(%{store: store, module: state.module})
     {:ok, memory} = Wasmex.memory(pid)
     %{pid: pid, store: store, memory: memory}
@@ -227,14 +244,25 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunner do
   # The §5.4.2 envelope round trip: write the request JSON into the guest's memory,
   # call handle, read the response JSON back. Runs in the CALLER's process (see
   # request/4), not this GenServer's.
+  #
+  # `handle` returns a SINGLE i32 pointing to an 8-byte header (`[ptr: u32 LE, len: u32
+  # LE]`), not a genuine 2-value Wasm return -- `extern "C"` tuple returns lower to an
+  # *unspecified* ABI on this target (confirmed empirically while building the W4
+  # reference plugin: neither real multi-value nor a predictable sret parameter position),
+  # so every guest, including this project's own WAT test fixtures, writes its response
+  # through this one-pointer-to-a-header convention instead. See docs/plugin-protocol.md
+  # §5.4.1.
   defp call_guest(%{pid: pid, store: store, memory: memory}, method, params, timeout) do
     payload = Jason.encode!(%{"method" => method, "params" => params})
 
     try do
       with {:ok, [in_ptr]} <- Wasmex.call_function(pid, "alloc", [byte_size(payload)], timeout),
            :ok <- Wasmex.Memory.write_binary(store, memory, in_ptr, payload),
-           {:ok, [out_ptr, out_len]} <-
+           {:ok, [header_ptr]} <-
              Wasmex.call_function(pid, "handle", [in_ptr, byte_size(payload)], timeout) do
+        <<out_ptr::little-32, out_len::little-32>> =
+          Wasmex.Memory.read_binary(store, memory, header_ptr, 8)
+
         store
         |> Wasmex.Memory.read_binary(memory, out_ptr, out_len)
         |> decode_envelope()
