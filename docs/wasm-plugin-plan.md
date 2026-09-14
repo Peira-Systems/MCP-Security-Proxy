@@ -416,7 +416,10 @@ both listed in the Plugins panel (`rule-engine-wasm` disabled), with matching co
       tag) — 2026-09-14, see Findings above. Two follow-ups carried forward, neither
       blocking: bump the project's pinned Elixir version before W2, and `WasmRunner` must
       `catch :exit` around `Wasmex.call_function/4`.
-- [ ] W1: `docs/plugin-protocol.md` §5.4 written, reviewed.
+- [x] W1: `docs/plugin-protocol.md` §5.4 written — 2026-09-14. Guest ABI (`alloc`/`handle`,
+      no `dealloc`), the reduced request/response envelope, the capability/resource-limit
+      contrast with sidecars (§12), a worked example (§16.6), and new open questions (§18:
+      pool sizing, whether `discovery`-phase Wasm scanners are worth it) all added.
 - [ ] W2: `WasmRunner`, `WasmSupervisor`, `Registry` `{:wasm, opts}`, `Provenance.
       wasm_code_digest/1` — hermetic fixture test green.
 - [ ] W3: `Pipeline` `{:wasm, name}` dispatch — `pipeline_wasm_test.exs` green.

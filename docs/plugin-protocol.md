@@ -1,6 +1,6 @@
 # Proxy Plugin Protocol
 
-**Status:** Draft · **Version:** `0.1` · **Last updated:** 2026-08-28
+**Status:** Draft · **Version:** `0.1` · **Last updated:** 2026-09-14
 
 This document specifies how the MCP Security Proxy is extended with **plugins** — units of
 detection and enforcement logic that the proxy consults as MCP traffic flows through it.
@@ -113,6 +113,15 @@ match on the retained raw secret stands in); batched / remote audit sinks and a 
 `audit/record` notification; a dashboard UI for the plugin registry; circuit breaker and
 decision cache. On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after
 the fact).
+
+**Wasm binding (§5.4): specced, not yet implemented.** [ADR-0003](adr/0003-wasm-plugin-sandbox.md)
+and [`docs/wasm-plugin-plan.md`](../wasm-plugin-plan.md) add a third binding — in-process,
+sandboxed by Wasmtime, speaking this document's existing `CallContext` / `Decision` /
+`Finding` / `Manifest` shapes over a minimal `alloc`/`handle` guest ABI (§5.4) rather than
+JSON-RPC framing. The plan's W0 runtime spike (2026-09-14) confirmed the underlying
+`wasmex`/Wasmtime dependency works on every target environment and validated the ABI itself
+round-tripping a real payload; no `Plugin.WasmRunner`, `Registry` integration, or `Pipeline`
+dispatch exists yet (that's W2/W3), and no Wasm plugin has shipped (W4).
 
 ---
 
@@ -263,6 +272,146 @@ MCP stdio transport already implemented in `PhoenixElxirBeam.MCP.StdioServer`:
 
 No transport. The proxy calls behaviour callbacks directly (§13). The manifest is returned
 by `c:manifest/0` instead of an `initialize` round-trip.
+
+### 5.4 Wasm (in-process, sandboxed)
+
+> **Status: specced, not built.** See [ADR-0003](adr/0003-wasm-plugin-sandbox.md) for the
+> rationale and [`docs/wasm-plugin-plan.md`](../wasm-plugin-plan.md) for the implementation
+> plan. This section is the wire-level contract a Wasm plugin's `.wasm` file implements —
+> written before `Plugin.WasmRunner` so the interface is fixed first, the same order the
+> stdio sidecar transport (§5.1) was specced in before `SidecarRunner` was built.
+
+A Wasm plugin is a single `.wasm` module (target `wasm32-wasip1`, or any language/toolchain
+that produces one) compiled from source and shipped in the proxy's own release, the same way
+`priv/plugins/prompt_injection_scanner.py` is today — **not** an operator-uploaded artifact
+(ADR-0003 §1). It runs **in-process**, inside the same OS process as the proxy, but sandboxed
+by Wasmtime: the guest can only touch its own linear memory and can only call host functions
+the proxy chose to link — by default, none. This is a fourth point on the trust/latency
+spectrum, distinct from every other binding:
+
+| | in-process (Elixir) | sidecar (§5.1/5.2) | **Wasm (§5.4)** |
+|---|---|---|---|
+| Runs in the proxy's OS process | yes | no | **yes** |
+| A crash/hang can take down the proxy | yes (shares the BEAM) | no (separate process) | **no** (Wasmtime traps are memory-safe; a timeout is enforced by the host, not the guest) |
+| Filesystem/network access | whatever the release has | whatever the OS/container grants, operator-trusted | **none, structurally** — no import linked unless a future revision adds one |
+| Per-call latency | lowest | IPC round-trip | low — a direct function call, no subprocess |
+| Language | Elixir only | any | any `wasm32-wasip1` target |
+
+**Unlike §5.1/5.2, a Wasm plugin does not speak JSON-RPC 2.0.** A Wasm function call is a
+synchronous, single-threaded, in-process invocation — there is no multiplexing, no request
+`id` to correlate, and no notifications to distinguish from requests. The envelope below is
+a deliberately reduced form of the same idea, not the full JSON-RPC framing §5.1 uses.
+
+#### 5.4.1 Guest exports
+
+A Wasm plugin module **MUST** export:
+
+```
+alloc(size: i32) -> i32
+```
+
+Reserves `size` bytes in the guest's linear memory and returns a pointer to the start of
+that region. The proxy calls this once per request, to get somewhere to write the request
+envelope (§5.4.2) before calling `handle`.
+
+```
+handle(in_ptr: i32, in_len: i32) -> (out_ptr: i32, out_len: i32)
+```
+
+Processes one request envelope (`in_len` bytes, already written into the guest's memory at
+`in_ptr` by the proxy) and returns a pointer/length pair locating the response envelope,
+via Wasm's standard multi-value return (two `i32` results, not a packed value) — the guest
+may write the response anywhere in its own memory, including reusing the input region.
+
+There is **no `dealloc` export, and none is needed.** The proxy draws each call from a small
+pool of pre-instantiated guests (`Plugin.WasmRunner`, `docs/wasm-plugin-plan.md` W2) and
+**discards and re-instantiates** whichever pool slot served a call before that slot serves
+another one — every call runs against a guest whose linear memory has never seen a previous
+call's bytes. A plugin author may use the simplest possible bump allocator in `alloc` (never
+freeing) without any risk of a cross-call leak; the tradeoff is one Wasmtime re-instantiation
+per call, which is the fast path `wasmex`/Wasmtime is designed for (instantiating an
+already-compiled `Module` is cheap — the compile step, not instantiation, is the expensive
+one, and that happens once per plugin, not once per call).
+
+A plugin **MAY** additionally export `memory` explicitly (most `wasm32-wasip1` toolchains do
+this automatically) — the proxy reads/writes the guest's default exported memory via
+`alloc`'s returned offsets.
+
+#### 5.4.2 Request / response envelope
+
+Both directions are UTF-8 JSON, with the *same method names and the same `params`/`result`
+shapes* as the corresponding sidecar method (§8–§9) — a plugin author who already knows the
+sidecar protocol only has to learn the ABI in §5.4.1, not a second data model:
+
+```jsonc
+// written by the proxy at in_ptr/in_len
+{"method": "initialize" | "discovery/inspect" | "call/evaluate" |
+            "call/inspectResponse" | "call/inspectChunk",
+ "params": { /* identical shape to the sidecar method of the same name — §8.1, §9.1–9.3 */ }}
+
+// returned by the guest at out_ptr/out_len
+{"result": { /* identical shape to the sidecar's JSON-RPC "result" for that method */ }}
+// or, on a guest-side error:
+{"error": {"code": -32000, "message": "..."}}
+```
+
+No `jsonrpc`, no `id` — both are meaningless for a direct function call with no
+multiplexing. `initialize` params omit nothing else from §8.1 (`protocolVersion`, `proxy`,
+`config`); the result is decoded with the **same** `Manifest.from_wire/1` a sidecar's
+`initialize` result is decoded with — a Wasm plugin's manifest has exactly the same shape as
+a sidecar's. There is no `ping` method — a Wasm instance either instantiates and answers or
+it does not; there is no long-lived out-of-process health to check between calls the way a
+sidecar subprocess has.
+
+`initialize` is sent once per pool instance, at `Plugin.WasmRunner` startup (not once per
+call) — every instance in a plugin's pool is instantiated from the same compiled `Module`
+and reports the same manifest, so any one of them is authoritative.
+
+#### 5.4.3 Capabilities: none by default
+
+A Wasm guest is instantiated with **no WASI imports linked** — no filesystem preopens, no
+sockets, no environment variables, no ambient authority of any kind beyond what core Wasm
+itself provides (pure computation over its own linear memory). This is enforced by the host
+simply not providing those import functions: a guest that references an unlinked import
+fails to *instantiate*, not "is trusted not to call it." See §12 for how this compares to
+the sidecar binding's `requiresNetwork` flag.
+
+Network access for a Wasm plugin is **out of scope for v1 entirely** — no capability
+negotiation for it exists yet in this section, because no plugin currently needs it
+(ADR-0003 §5). This may be revisited with its own manifest field and explicit operator grant
+if a concrete need for it appears, mirroring how every other capability in this protocol
+was added only once a plugin needed it.
+
+#### 5.4.4 Resource limits
+
+**Time:** bounded by the **same `timeoutMs`** every other binding's manifest already
+declares (§8.1) — no separate fuel or epoch budget. The proxy passes `entry.timeout_ms` as
+the call's timeout when invoking `handle`; Wasmtime interrupts a guest that overruns it. This
+is a strictly *stronger* bound than the sidecar binding gets: a sidecar that ignores its
+deadline keeps its OS process running, consuming CPU, until something else (the circuit
+breaker, an operator) notices; a Wasm call that hits its deadline is actually halted.
+
+**Memory:** a `limits: [memory_pages: N]` key on the plugin's registration spec (1 page =
+64 KiB), enforced by the Wasm runtime itself (`Wasmex.StoreLimits`) rather than best-effort
+via `prlimit` the way sidecar `limits:` are today (`docs/plugin-supply-chain.md`) — growing
+memory past the cap fails inside the guest (Wasm's own `memory.grow` failure return, `-1`),
+it does not crash or get silently ignored.
+
+#### 5.4.5 Provenance
+
+Pinned the same way a sidecar is (`docs/plugin-supply-chain.md`), with a simpler code
+digest — there is exactly one artifact, the `.wasm` file itself, not a command plus resolved
+argument files:
+
+```elixir
+{:wasm,
+  name: "rule-engine-wasm",
+  path: {:priv, "wasm_plugins/rule_engine.wasm"},
+  config: %{"rules" => [...]},
+  pin: [code: "sha256:...", manifest: "sha256:..."],
+  limits: [memory_pages: 256],
+  grants: %{mutate: [], block: false}}
+```
 
 ---
 
@@ -664,6 +813,18 @@ no outbound network unless `requiresNetwork: true` was declared **and** the oper
 approved it, CPU/memory limits enforced by cgroups/container, `seccomp`/AppArmor where
 available.
 
+**Least privilege for Wasm plugins (§5.4) is structural, not declarative.** A sidecar's
+`requiresNetwork: false` is a *claim the operator vets* — the subprocess itself may still
+have whatever OS-level filesystem/network access the host or container permits, restricted
+only by whatever hardening in the previous paragraph the operator actually applied. A Wasm
+guest's lack of network/filesystem access is enforced by the host **not linking those
+imports at all** — there is nothing for a compromised or buggy guest to call, regardless of
+container/OS configuration, because the capability does not exist inside its sandbox. The
+same asymmetry applies to a runaway call: a sidecar that ignores its timeout keeps its
+process running until something external notices; a Wasm call that hits its timeout is
+interrupted by the runtime itself (§5.4.4). This is the concrete reason ADR-0003 chose Wasm
+for *untrusted-shaped, latency-sensitive* plugin logic over adding more sidecar hardening.
+
 **Data exposure.** Any plugin that requests `call.arguments` or `response.content` can see
 whatever sensitive data passes through — including the very secrets this proxy exists to
 protect. The operator vets those grants. Prefer `session.taint` (HMAC markers) for plugins
@@ -909,6 +1070,28 @@ Plugin → proxy:
 ]}}
 ```
 
+### 16.6 Wasm — the §5.4 envelope for the same pre_call denial as §16.2
+
+Not JSON-RPC — no `"jsonrpc"`, no `"id"` — but otherwise the identical `params`/`result`
+shape as the sidecar `call/evaluate` example in §16.2. The proxy writes the request bytes
+into the guest's memory at a pointer from `alloc`, calls `handle(in_ptr, in_len)`:
+
+```jsonc
+// request, at in_ptr/in_len
+{"method":"call/evaluate","params":{"context":{
+  "protocolVersion":"0.1","phase":"pre_call",
+  "call":{"id":"c-9931","sessionId":"demo-abc","agentId":null,"serverId":"net","serverName":"net","transport":"mock","method":"tools/call","toolName":"post_webhook","rpcId":7,"startedAt":"2026-08-27T14:22:03Z"},
+  "session":{"seenTags":["sensitive_read"]},
+  "pluginConfig":{}
+}}}
+
+// response, at the (out_ptr, out_len) handle returned
+{"result":{
+  "verdict":"deny","severity":"high",
+  "reason":"network egress blocked: a sensitive read occurred earlier in this session"
+}}
+```
+
 ---
 
 ## 17. Reference skeletons
@@ -1004,3 +1187,13 @@ for line in sys.stdin:
 - **Taint marker scheme.** HMAC-of-normalized-value is proposed; needs a spec of its own
   (normalization, chunk size, minimum entropy to mark).
 - **Signing.** Manifest signing format (Sigstore? detached JWS?) is unspecified.
+- **Wasm pool sizing (§5.4).** `Plugin.WasmRunner`'s instance pool is sized from
+  `manifest.max_concurrency`, but no plugin has declared it yet and there's no guidance on
+  a sane default (`docs/wasm-plugin-plan.md` W2 proposes 2). Revisit once `rule-engine-wasm`
+  (W4) gives a real concurrency profile to size against.
+- **Wasm `discovery`-phase scanners.** Nothing stops a Wasm plugin from declaring the
+  `discovery` phase (§9.1) — the envelope and `Manifest.from_wire/1` handling are identical
+  regardless of phase — but `discovery` runs off the request path, where the sidecar
+  transport's IPC latency and process-per-plugin isolation are less costly than on
+  `pre_call`/`post_call`. Worth asking, once a concrete `discovery`-phase Wasm plugin exists,
+  whether the extra sandboxing is worth the added build/toolchain cost there specifically.
