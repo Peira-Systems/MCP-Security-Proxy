@@ -31,8 +31,10 @@ dialyzer clean, prod build compiles). Remaining follow-ups are tracked inline as
   survivability (state in Postgres) is in scope; running two app nodes at once is not.
   Deploys have a brief downtime window (stop, migrate, start) — acceptable for single-node.
 - **Kubernetes**, service mesh, operators.
-- **Untrusted third-party plugins.** Plugins are first-party or vendored; the Wasm
-  sandboxing path (ADR-0001 §3) stays deferred.
+- **Untrusted third-party plugins.** Plugins are first-party or vendored. A Wasm sandbox
+  for **first-party** plugins is now planned separately — see
+  [ADR-0003](adr/0003-wasm-plugin-sandbox.md) / [`docs/wasm-plugin-plan.md`](wasm-plugin-plan.md)
+  — but an operator-uploaded / third-party plugin path is explicitly out of scope there too.
 
 ---
 

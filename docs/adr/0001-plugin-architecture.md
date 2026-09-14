@@ -9,6 +9,13 @@
 > see [`docs/productionization-plan.md`](../productionization-plan.md). The
 > `chunk` phase now runs over a **real** incremental read of the upstream
 > response (`MCP.StreamProxy`), not a simulated `result.chunks` list.
+>
+> **Note (2026-09-14):** §3's Wasm clause ("deferred... revisit once a concrete
+> 'untrusted fast policy' need exists") is superseded by
+> [ADR-0003](0003-wasm-plugin-sandbox.md) — that need is now concrete and a Wasm
+> plugin binding is in the implementation plan
+> ([`docs/wasm-plugin-plan.md`](../wasm-plugin-plan.md)). The sidecar-first
+> reasoning below is otherwise unchanged.
 
 ## Context
 

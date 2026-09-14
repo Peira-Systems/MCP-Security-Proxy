@@ -88,6 +88,10 @@ defmodule PhoenixElxirBeam.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:pbkdf2_elixir, "~> 2.2"},
+      # Wasmtime NIF for the Wasm plugin sandbox (docs/adr/0003-wasm-plugin-sandbox.md,
+      # docs/wasm-plugin-plan.md). Added ahead of W2's WasmRunner per the W0 spike; no
+      # code depends on it yet.
+      {:wasmex, "~> 0.15"},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
