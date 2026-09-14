@@ -408,6 +408,24 @@ shapes the sidecar tests already assert. `Registry.active_policies/2` /
 `active_scanners/2` / etc. need no changes — they already filter on `kind`/`enabled`/
 `phases`, not on `impl`.
 
+### As built (2026-09-14) — matched the sketch almost exactly
+
+Unlike W2's pool design, this milestone needed no real design correction — the three
+`{:wasm, name}` clauses are line-for-line what was specced, `Wire` genuinely needed zero
+changes, and the existing `Task.yield`/`brutal_kill` wrapper genuinely needed no changes
+either. The one addition beyond the plan: **a second fixture,**
+`test/support/fixtures/wasm_deny_policy.wat` (same static-response technique as W2's echo
+scanner, always returns `{"verdict":"deny", ...}`) — the W2 echo fixture only ever says
+"allow," so it alone couldn't prove the `:deny` path (short-circuit on `pre_call`, response
+withholding on `post_call`) actually flows correctly through the Wasm binding rather than
+just not crashing. `pipeline_wasm_test.exs` has 7 tests: discovery routing + dead-plugin
+fail-open, post_call allow + post_call deny/withhold + dead-plugin fail-open, and
+`pre_call` deny-short-circuits-the-chain + dead-plugin fails to its declared `fail_mode`.
+
+Verified: `mix compile --warnings-as-errors` and `MIX_ENV=prod mix compile
+--warnings-as-errors` clean, `mix dialyzer` clean, full suite green at **385** (378 + 7 new,
+zero regressions).
+
 ---
 
 ## W4 — Reference plugin: `rule-engine-wasm`
@@ -483,7 +501,9 @@ both listed in the Plugins panel (`rule-engine-wasm` disabled), with matching co
       across `wasm_runner_test.exs` + `registry_test.exs`), full suite 378, dialyzer clean.
       See "As built" above for the pool-design correction and the unlink-before-kill bug
       caught before shipping.
-- [ ] W3: `Pipeline` `{:wasm, name}` dispatch — `pipeline_wasm_test.exs` green.
+- [x] W3: `Pipeline` `{:wasm, name}` dispatch — 2026-09-14. `pipeline_wasm_test.exs` green
+      (7 tests, incl. a second `wasm_deny_policy.wat` fixture for deny-path coverage), full
+      suite 385, dialyzer clean.
 - [ ] W4: `rule-engine-wasm` — parity suite green against the full `RuleEngine` corpus.
 - [ ] W5: dashboard shows the `wasm` transport; supply-chain + cross-referencing docs
       updated; `mix precommit` / `mix dialyzer` / `MIX_ENV=prod mix compile` all still pass.

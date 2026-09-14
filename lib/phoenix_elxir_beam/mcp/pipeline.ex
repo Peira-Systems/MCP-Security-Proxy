@@ -25,14 +25,14 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   require Logger
 
   alias PhoenixElxirBeam.MCP.{Alerts, CallContext, Decision, Finding, Telemetry}
-  alias PhoenixElxirBeam.MCP.Plugin.{Scanner, SidecarRunner, Wire}
+  alias PhoenixElxirBeam.MCP.Plugin.{Scanner, SidecarRunner, WasmRunner, Wire}
 
   @task_supervisor PhoenixElxirBeam.MCP.TaskSupervisor
 
   @type entry :: %{
           name: String.t(),
           version: String.t(),
-          impl: {:module, module()} | {:sidecar, atom()},
+          impl: {:module, module()} | {:sidecar, atom()} | {:wasm, atom()},
           config: map(),
           kind: :policy | :scanner | :audit_sink,
           phases: [atom()],
@@ -252,6 +252,18 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
     end
   end
 
+  defp post_call_eval(%{impl: {:wasm, name}} = entry, ctx, phase, method) do
+    case WasmRunner.request(
+           name,
+           method,
+           %{"context" => Wire.encode_context(%{ctx | phase: phase}, entry)},
+           entry.timeout_ms
+         ) do
+      {:ok, result} -> Wire.decode_decision(result)
+      {:error, reason} -> raise "wasm #{method} failed: #{inspect(reason)}"
+    end
+  end
+
   defp redactions_of(%Decision{mutations: m}) when is_map(m), do: Map.get(m, :redact_response, [])
   defp redactions_of(_), do: []
 
@@ -337,6 +349,22 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
       {:error, reason} ->
         raise "sidecar discovery/inspect failed: #{inspect(reason)}"
+    end
+  end
+
+  defp discovery_scan(%{impl: {:wasm, name}} = entry, ctx) do
+    case WasmRunner.request(
+           name,
+           "discovery/inspect",
+           Wire.encode_discovery(ctx),
+           entry.timeout_ms
+         ) do
+      {:ok, result} ->
+        {findings, updates} = Wire.decode_discovery_result(result)
+        {:ok, findings, drop_quarantine_unless_allowed(updates, entry)}
+
+      {:error, reason} ->
+        raise "wasm discovery/inspect failed: #{inspect(reason)}"
     end
   end
 
@@ -442,6 +470,20 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
          ) do
       {:ok, result} -> Wire.decode_decision(result)
       {:error, reason} -> raise "sidecar call/evaluate failed: #{inspect(reason)}"
+    end
+  end
+
+  defp policy_evaluate(%{impl: {:wasm, name}} = entry, phase, ctx) do
+    ctx = %{ctx | phase: phase}
+
+    case WasmRunner.request(
+           name,
+           "call/evaluate",
+           %{"context" => Wire.encode_context(ctx, entry)},
+           entry.timeout_ms
+         ) do
+      {:ok, result} -> Wire.decode_decision(result)
+      {:error, reason} -> raise "wasm call/evaluate failed: #{inspect(reason)}"
     end
   end
 

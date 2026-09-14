@@ -114,14 +114,17 @@ match on the retained raw secret stands in); batched / remote audit sinks and a 
 decision cache. On `post_call`, `:hold` is coerced to `:deny` (nothing to approve after
 the fact).
 
-**Wasm binding (§5.4): specced, not yet implemented.** [ADR-0003](adr/0003-wasm-plugin-sandbox.md)
+**Wasm binding (§5.4): runtime built, no plugin ships yet.** [ADR-0003](adr/0003-wasm-plugin-sandbox.md)
 and [`docs/wasm-plugin-plan.md`](../wasm-plugin-plan.md) add a third binding — in-process,
 sandboxed by Wasmtime, speaking this document's existing `CallContext` / `Decision` /
 `Finding` / `Manifest` shapes over a minimal `alloc`/`handle` guest ABI (§5.4) rather than
-JSON-RPC framing. The plan's W0 runtime spike (2026-09-14) confirmed the underlying
-`wasmex`/Wasmtime dependency works on every target environment and validated the ABI itself
-round-tripping a real payload; no `Plugin.WasmRunner`, `Registry` integration, or `Pipeline`
-dispatch exists yet (that's W2/W3), and no Wasm plugin has shipped (W4).
+JSON-RPC framing. `Plugin.WasmRunner` (a pool-owning GenServer parallel to `SidecarRunner`),
+`Registry` support for `{:wasm, opts}` specs, and `Pipeline` dispatch (`policy_evaluate/3`,
+`post_call_eval/4`, `discovery_scan/2`) are all built and tested (W0–W3) — a `{:wasm, ...}`
+plugin spec works end to end through the whole pipeline today. What's still missing is a
+real plugin: no Wasm plugin ships in `config/{dev,prod}.exs` yet, only hermetic WAT test
+fixtures that return a single static response (W4, a Rust port of `RuleEngine`, closes
+that).
 
 ---
 
