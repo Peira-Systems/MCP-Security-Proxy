@@ -23,13 +23,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
   defp start_registry(plugins) do
     suffix = System.unique_integer([:positive])
     name = :"plugin_registry_#{suffix}"
-    sup = :"sidecar_sup_#{suffix}"
+    sidecar_sup = :"sidecar_sup_#{suffix}"
+    wasm_sup = :"wasm_sup_#{suffix}"
 
-    start_supervised!({DynamicSupervisor, name: sup, strategy: :one_for_one}, id: sup)
+    start_supervised!({DynamicSupervisor, name: sidecar_sup, strategy: :one_for_one}, id: sidecar_sup)
+    start_supervised!({DynamicSupervisor, name: wasm_sup, strategy: :one_for_one}, id: wasm_sup)
 
     {:ok, _pid} =
       start_supervised(
-        {Registry, name: name, plugins: plugins, sidecar_supervisor: sup},
+        {Registry,
+         name: name, plugins: plugins, sidecar_supervisor: sidecar_sup, wasm_supervisor: wasm_sup},
         id: name
       )
 
@@ -182,6 +185,54 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
 
     :ok = Registry.disable("stream-guard", reg)
     assert [] = Registry.active_chunk(reg)
+  end
+
+  @wasm_fixture Path.expand("../../../support/fixtures/wasm_echo_scanner.wat", __DIR__)
+
+  test "a wasm spec spawns a runner and registers its capability from the manifest" do
+    wasm_name = "wasm-#{System.unique_integer([:positive])}"
+
+    reg =
+      start_registry([
+        {ChainExfil, []},
+        {:wasm, name: wasm_name, path: @wasm_fixture}
+      ])
+
+    entry = Enum.find(Registry.list(reg), &(&1.name == "wasm-echo-scanner"))
+    assert entry.kind == :scanner
+    assert entry.enabled
+    assert entry.transport == :wasm
+    assert match?({:wasm, _}, entry.impl)
+    assert [%{name: "wasm-echo-scanner"}] = Registry.active_scanners(:discovery, reg)
+  end
+
+  test "a wasm scanner declaring :post_call is exposed via active_post_call/1" do
+    wasm_name = "wasm-#{System.unique_integer([:positive])}"
+
+    reg = start_registry([{:wasm, name: wasm_name, path: @wasm_fixture}])
+
+    assert [%{name: "wasm-echo-scanner", kind: :scanner, impl: {:wasm, _}}] =
+             Registry.active_post_call(reg)
+  end
+
+  test "a wasm scanner's canBlock is capped by grants: %{block: false}" do
+    wasm_name = "wasm-#{System.unique_integer([:positive])}"
+
+    reg = start_registry([{:wasm, name: wasm_name, path: @wasm_fixture, grants: %{block: false}}])
+
+    assert [%{can_block: false}] = Registry.list(reg)
+  end
+
+  test "a wasm spec with a missing file is skipped; other plugins still register" do
+    reg =
+      start_registry([
+        {ChainExfil, []},
+        {:wasm, name: "broken", path: "/no/such/file.wasm"}
+      ])
+
+    names = Enum.map(Registry.list(reg), & &1.name)
+    assert "chain-exfil" in names
+    refute "broken" in names
   end
 
   test "seeds an audit_sink plugin enabled and exposes it via active_sinks/1" do

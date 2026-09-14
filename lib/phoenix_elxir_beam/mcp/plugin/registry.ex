@@ -14,23 +14,28 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         plugins: [
           {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
           {:sidecar, name: "...", transport: :stdio, cmd: "python",
-           args: [{:priv, "plugins/foo.py"}], config: %{...}, grants: %{...}}
+           args: [{:priv, "plugins/foo.py"}], config: %{...}, grants: %{...}},
+          {:wasm, name: "...", path: {:priv, "wasm_plugins/foo.wasm"},
+           config: %{...}, pin: [...], limits: [memory_pages: 256], grants: %{...}}
         ]
 
   In-process `{Module, opts}` entries are built synchronously at boot. Each
   `{:sidecar, opts}` entry spawns a `PhoenixElxirBeam.MCP.Plugin.SidecarRunner`
-  under `SidecarSupervisor` in `handle_continue/2` — so sidecar plugins come
-  online a beat after boot, and a spawn / handshake failure is logged and
-  skipped rather than blocking the registry.
+  under `SidecarSupervisor`, and each `{:wasm, opts}` entry
+  (`docs/plugin-protocol.md` §5.4) spawns a `PhoenixElxirBeam.MCP.Plugin.WasmRunner`
+  under `WasmSupervisor` — both in `handle_continue/2`, so out-of-band plugins come
+  online a beat after boot, and a spawn / handshake failure is logged and skipped
+  rather than blocking the registry.
   """
 
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, SidecarRunner, StateStore}
+  alias PhoenixElxirBeam.MCP.Plugin.{Manifest, SidecarRunner, StateStore, WasmRunner}
 
   @capability_kinds [:policy, :scanner, :audit_sink]
   @sidecar_supervisor PhoenixElxirBeam.MCP.SidecarSupervisor
+  @wasm_supervisor PhoenixElxirBeam.MCP.WasmSupervisor
 
   # Client API
 
@@ -122,26 +127,31 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       |> Keyword.get_lazy(:plugins, &configured_plugins/0)
       |> Enum.with_index()
 
-    {sidecars, in_process} =
-      Enum.split_with(specs, fn {spec, _index} -> match?({:sidecar, _}, spec) end)
+    {wasm, non_wasm} = Enum.split_with(specs, fn {spec, _index} -> match?({:wasm, _}, spec) end)
+    {sidecars, in_process} = Enum.split_with(non_wasm, fn {spec, _index} -> match?({:sidecar, _}, spec) end)
 
     Enum.each(in_process, fn {spec, index} -> insert_entry(table, spec, index, &build_entry/2) end)
 
     state = %{
       table: table,
       sidecar_supervisor: Keyword.get(opts, :sidecar_supervisor, @sidecar_supervisor),
+      wasm_supervisor: Keyword.get(opts, :wasm_supervisor, @wasm_supervisor),
       # Only the real, singleton registry reads/writes the persisted overlay
       # (M3.4b). Named test instances stay in-memory.
       persist?: Keyword.get(opts, :persist, table == __MODULE__)
     }
 
-    {:ok, state, {:continue, {:start_sidecars, sidecars}}}
+    {:ok, state, {:continue, {:start_plugins, sidecars, wasm}}}
   end
 
   @impl true
-  def handle_continue({:start_sidecars, sidecars}, state) do
+  def handle_continue({:start_plugins, sidecars, wasm}, state) do
     Enum.each(sidecars, fn {spec, index} ->
       insert_entry(state.table, spec, index, &start_sidecar(&1, &2, state.sidecar_supervisor))
+    end)
+
+    Enum.each(wasm, fn {spec, index} ->
+      insert_entry(state.table, spec, index, &start_wasm(&1, &2, state.wasm_supervisor))
     end)
 
     # Overlay the operator's persisted enable/disable + order (M3.4b) on top of
@@ -288,7 +298,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
           config: registered_config,
           default_config: registered_config
         })
-        |> cap_sidecar_grants(kind, grants)
+        |> cap_grants(kind, grants)
 
       {:ok, entry}
     else
@@ -299,12 +309,65 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
     end
   end
 
-  # A sidecar may only block if the operator granted it (`grants: %{block: true}`).
-  defp cap_sidecar_grants(entry, :scanner, grants) do
+  # Spawns the Wasm instance pool, fetches its manifest, and builds an entry
+  # keyed on `impl: {:wasm, runner_name}` (docs/plugin-protocol.md §5.4).
+  defp start_wasm({:wasm, opts}, index, supervisor) do
+    with {:ok, name} <- Keyword.fetch(opts, :name),
+         path when is_binary(path) <- resolve_wasm_path(Keyword.get(opts, :path)),
+         runner = Module.concat(WasmRunner, name),
+         {:ok, _pid} <-
+           DynamicSupervisor.start_child(
+             supervisor,
+             {WasmRunner,
+              name: runner,
+              plugin_name: to_string(name),
+              path: path,
+              config: Keyword.get(opts, :config, %{}),
+              pin: Keyword.get(opts, :pin),
+              limits: Keyword.get(opts, :limits),
+              pool_size: Keyword.get(opts, :pool_size)}
+           ),
+         %Manifest{} = manifest <- WasmRunner.manifest(runner),
+         kind when not is_nil(kind) <-
+           Enum.find(@capability_kinds, &Map.has_key?(manifest.capabilities, &1)) do
+      grants = Keyword.get(opts, :grants, %{})
+      registered_config = Keyword.get(opts, :config, %{})
+
+      entry =
+        kind
+        |> capability_entry(manifest, grants, index)
+        |> Map.merge(%{
+          module: nil,
+          impl: {:wasm, runner},
+          transport: :wasm,
+          config: registered_config,
+          default_config: registered_config
+        })
+        |> cap_grants(kind, grants)
+
+      {:ok, entry}
+    else
+      :error -> {:error, "wasm spec missing :name"}
+      nil -> {:error, "wasm #{Keyword.get(opts, :name)}: manifest declares no capability"}
+      {:error, reason} -> {:error, "wasm #{Keyword.get(opts, :name)}: #{inspect(reason)}"}
+      other -> {:error, "wasm #{Keyword.get(opts, :name)}: #{inspect(other)}"}
+    end
+  end
+
+  defp resolve_wasm_path(nil), do: {:error, :missing_path}
+
+  defp resolve_wasm_path({:priv, rel}),
+    do: Application.app_dir(:phoenix_elxir_beam, Path.join("priv", rel))
+
+  defp resolve_wasm_path(path) when is_binary(path), do: path
+
+  # A sidecar/Wasm scanner may only block if the operator granted it
+  # (`grants: %{block: true}`).
+  defp cap_grants(entry, :scanner, grants) do
     %{entry | can_block: entry.can_block and Map.get(grants, :block, false) == true}
   end
 
-  defp cap_sidecar_grants(entry, _kind, _grants), do: entry
+  defp cap_grants(entry, _kind, _grants), do: entry
 
   defp resolve_cmd(nil), do: {:error, :missing_cmd}
 

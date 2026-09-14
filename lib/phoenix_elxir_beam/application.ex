@@ -44,6 +44,11 @@ defmodule PhoenixElxirBeam.Application do
       # a flaky sidecar doesn't take the supervisor (and its siblings) down.
       {DynamicSupervisor,
        name: PhoenixElxirBeam.MCP.SidecarSupervisor, max_restarts: 10, max_seconds: 60},
+      # In-process Wasm plugin runners (docs/plugin-protocol.md §5.4). Must
+      # precede the Plugin.Registry, which starts one per {:wasm, _} config
+      # entry, for the same reason SidecarSupervisor does.
+      {DynamicSupervisor,
+       name: PhoenixElxirBeam.MCP.WasmSupervisor, max_restarts: 10, max_seconds: 60},
       PhoenixElxirBeam.MCP.Plugin.Registry,
       PhoenixElxirBeam.MCP.HoldRegistry,
       PhoenixElxirBeam.MCP.PolicyEngine,

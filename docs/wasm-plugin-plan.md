@@ -315,6 +315,61 @@ rebuild it from its Rust source, also checked in) — proves: `Registry` spawns 
 `WasmRunner`, fetches its manifest, and `WasmRunner.request/4` round-trips a `call/evaluate`
 end to end. No `Pipeline` involvement yet — this milestone is the runner and registry only.
 
+### As built (2026-09-14) — differs from the sketch above in three ways
+
+1. **Fixture is `.wat` text, not a compiled `.wasm` binary.** `Wasmex.Module.compile/2`
+   accepts WAT source directly (confirmed in W0), so
+   `test/support/fixtures/wasm_echo_scanner.wat` is a plain, git-diffable text file with a
+   JSON response baked in as a `(data ...)` segment — no Rust toolchain, no build step, no
+   binary blob to commit. It always returns the same canned `{"result": {...}}` payload
+   regardless of input (shaped to double as both a valid `Manifest` for the handshake and a
+   valid `{"verdict": "allow"}`-shaped result for a plain `request/4` call) — genuinely
+   hermetic, proves the transport, not real dispatch logic.
+2. **`Provenance.wasm_code_digest/1` delegates to the existing `code_digest/2`** rather than
+   hashing independently — `code_digest(Path.basename(path), [path])` already produces a
+   path-independent digest (hash of the file's own bytes + basename) via that function's
+   existing "no separate args, hash the one real file" fallback branch. Zero new hashing
+   logic, `Provenance.verify/2` genuinely unchanged as planned.
+3. **`request/4` is not "picks an instance, does the round trip, respins" as one atomic
+   step inside `WasmRunner`'s own process** — that would serialize every call through one
+   GenServer mailbox, defeating the point of a pool bigger than 1. Instead: `WasmRunner`
+   owns pool bookkeeping only (`checkout`/`checkin`, fast, in its own mailbox); the actual
+   `alloc`/write/`handle`/read round trip runs **in the calling process** (already a
+   `Pipeline`-owned `Task` by the time this is wired up in W3) directly against the checked-
+   out instance's pid — so N calls are genuinely concurrent, up to the pool size. Checkout
+   **monitors the caller**: if it dies mid-call without checking in (exactly what
+   `Pipeline`'s own `Task.shutdown(:brutal_kill)` on a timeout would do), `WasmRunner` sees
+   the `:DOWN` and reclaims + respins the slot itself. This is the piece of the design the
+   original sketch's prose glossed over and that turned out to matter most.
+
+**Bug caught before it shipped, not found by the tests:** every `Wasmex` instance is
+`start_link`'d, which **links** it to `WasmRunner`. `Process.exit(pid, :kill)` — used during
+every respin, i.e. after *every single call* — is untrappable and propagates fatally to
+linked processes regardless of `trap_exit`. Without an explicit `Process.unlink/1` right
+before the kill, `WasmRunner` would have crashed itself on its own first successful
+respin — every test still would have passed the first call, because the crash only shows up
+on the *second* checkin, which none of the single-call tests happened to exercise. Caught by
+reasoning through the linking semantics while writing `respin/2`, not by a red test; a
+concurrency/multi-call test (`WasmRunnerTest` "a checked-out instance is discarded and
+replaced, never reused", 2 sequential calls) was added specifically to guard against
+regressing this, but it would not have caught the bug in its *absence* — worth remembering
+if this code is refactored.
+
+**Deliberate scope boundary, documented in the moduledoc:** an instance crashing on its own
+(not via a respin-triggered kill) is **not** trapped — it crashes `WasmRunner` too, which
+`WasmSupervisor` restarts with a fresh handshake, mirroring `SidecarRunner`'s existing
+behavior for a dead sidecar subprocess exactly. No wait-queue on pool exhaustion either
+(`checkout` fails fast with `{:error, :pool_exhausted}`, which flows into the plugin's
+`fail_mode` same as any other error) — both are conscious "don't build more than this needs"
+choices, not gaps found and left open.
+
+Verified: `mix compile --warnings-as-errors` and `MIX_ENV=prod mix compile
+--warnings-as-errors` clean, `mix dialyzer` clean (zero errors), full suite green at **378**
+(didn't check the exact pre-W2 count this session, but the run included the entire
+pre-existing suite plus 10 new Wasm tests, all passing — zero regressions from the
+`Application.ex` supervision-tree change or the `cap_sidecar_grants` → `cap_grants` rename
+`Registry`'s wasm/sidecar code paths now share).
+
 ---
 
 ## W3 — `Pipeline` dispatch
@@ -423,8 +478,11 @@ both listed in the Plugins panel (`rule-engine-wasm` disabled), with matching co
       no `dealloc`), the reduced request/response envelope, the capability/resource-limit
       contrast with sidecars (§12), a worked example (§16.6), and new open questions (§18:
       pool sizing, whether `discovery`-phase Wasm scanners are worth it) all added.
-- [ ] W2: `WasmRunner`, `WasmSupervisor`, `Registry` `{:wasm, opts}`, `Provenance.
-      wasm_code_digest/1` — hermetic fixture test green.
+- [x] W2: `WasmRunner`, `WasmSupervisor`, `Registry` `{:wasm, opts}`, `Provenance.
+      wasm_code_digest/1` — 2026-09-14. Hermetic `.wat`-fixture tests green (10 new tests
+      across `wasm_runner_test.exs` + `registry_test.exs`), full suite 378, dialyzer clean.
+      See "As built" above for the pool-design correction and the unlink-before-kill bug
+      caught before shipping.
 - [ ] W3: `Pipeline` `{:wasm, name}` dispatch — `pipeline_wasm_test.exs` green.
 - [ ] W4: `rule-engine-wasm` — parity suite green against the full `RuleEngine` corpus.
 - [ ] W5: dashboard shows the `wasm` transport; supply-chain + cross-referencing docs

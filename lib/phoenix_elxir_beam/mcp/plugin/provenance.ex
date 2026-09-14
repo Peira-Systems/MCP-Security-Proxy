@@ -45,7 +45,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Provenance do
     case normalize_pin(pin) do
       nil ->
         Logger.warning(
-          "Plugin.Provenance: sidecar #{name} is unpinned — its code is trusted without " <>
+          "Plugin.Provenance: #{name} is unpinned — its code is trusted without " <>
             "verification. To pin, add to its config:\n" <>
             "  pin: [code: \"#{digests.code}\", manifest: \"#{digests.manifest}\"]"
         )
@@ -66,6 +66,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Provenance do
         end
     end
   end
+
+  @doc """
+  The `sha256:` code digest for a Wasm plugin (`docs/plugin-protocol.md` §5.4) — one
+  `.wasm`/`.wat` file, no interpreter/args to separate out. Delegates to `code_digest/2`
+  with the file's basename as `cmd` and the file itself as the sole resolved arg, so the
+  result stays **path-independent** the same way a sidecar's digest is: moving the file
+  changes nothing, editing its bytes does.
+  """
+  @spec wasm_code_digest(String.t()) :: String.t()
+  def wasm_code_digest(path), do: code_digest(Path.basename(path), [path])
 
   @doc "The `sha256:` code digest for a command + resolved args (no verification)."
   @spec code_digest(String.t(), [String.t()]) :: String.t()
