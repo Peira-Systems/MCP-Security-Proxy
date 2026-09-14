@@ -21,8 +21,8 @@ permissions:
   contents: read
 
 env:
-  ELIXIR_VERSION: "1.17.3"
-  OTP_VERSION: "27.1.2"
+  ELIXIR_VERSION: "1.18.5"
+  OTP_VERSION: "27.3.4.17"
   MIX_ENV: dev
   # Self-hosted runner: erlef/setup-beam needs ImageOS to pick the prebuilt
   # OTP/Elixir. Match the runner's Ubuntu release.

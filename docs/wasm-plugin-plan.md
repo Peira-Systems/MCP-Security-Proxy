@@ -115,18 +115,21 @@ with one script. Results were **identical** on both platforms.
   wasip1` Rust toolchain needed for *fixtures*, only for the real `rule-engine-wasm`
   plugin itself (W4).
 
-**Two concrete follow-ups this finding adds to the plan (neither blocks W1):**
+**Two concrete follow-ups this finding adds to the plan:**
 
-1. **`wasmex` 0.15.1 declares `elixir: "~> 1.18"`; this project pins Elixir `1.17.3`**
-   (`Dockerfile` `ELIXIR_VERSION` / `ci.yml` `ELIXIR_VERSION`, kept in sync per the
-   comment in `ci.yml`). `mix deps.get`/`compile` only **warn**, not fail, on both
-   platforms tested — but shipping on an Elixir version older than a dependency's stated
-   floor isn't something to carry silently. **Before W2**, either bump the project's
-   pinned Elixir version (this dev box already runs 1.20.3, well clear of 1.18; the
-   pin is what's stale) or confirm an older `wasmex` release that supports `~> 1.17` and
-   pin that instead. This is a toolchain-wide version bump, not a Wasm-specific change —
-   flag it as its own small decision/PR, the same weight as the `mint` 1.9.3→1.10.0 CVE
-   bump was, not folded silently into a Wasm commit.
+1. ~~`wasmex` 0.15.1 declares `elixir: "~> 1.18"`; this project pins Elixir
+   `1.17.3`~~ — **done, 2026-09-14.** Bumped `Dockerfile` (`ELIXIR_VERSION` 1.17.3→1.18.5,
+   `OTP_VERSION` 27.1.2→27.3.4.17, same Debian base — `bookworm`, just a newer snapshot
+   date to match a published `hexpm/elixir` tag), `ci.yml` and `load.yml`'s matching env
+   vars, and `mix.exs`'s own `elixir: "~> 1.17"` → `"~> 1.18"` (it was understating the
+   real constraint once `wasmex` became a dependency). Picked the latest OTP **27.x**
+   patch paired with Elixir 1.18.5 rather than jumping to OTP 28 — smallest change that
+   actually satisfies `wasmex`'s floor, not a speculative bigger upgrade. Re-ran the full
+   W0 spike script against the new exact pinned builder image
+   (`hexpm/elixir:1.18.5-erlang-27.3.4.17-debian-bookworm-20260824-slim`) — the
+   `elixir: "~> 1.18"` warning is gone, every other result unchanged.
+2. **`WasmRunner.request/4` (W2) must `catch :exit` around `Wasmex.call_function/4`** —
+   still open, this is a W2 implementation detail, not a pre-W2 blocker.
 2. **`call_function/4`'s timeout can surface as a caller-side `GenServer.call` EXIT
    rather than a clean `{:error, :timeout}` return** — observed consistently on both
    platforms (elapsed time lands right at the nominal deadline, e.g. 301ms for a 300ms
