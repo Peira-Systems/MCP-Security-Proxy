@@ -47,7 +47,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunnerTest do
 
     results =
       1..2
-      |> Enum.map(fn _ -> Task.async(fn -> WasmRunner.request(name, "call/evaluate", %{}) end) end)
+      |> Enum.map(fn _ ->
+        Task.async(fn -> WasmRunner.request(name, "call/evaluate", %{}) end)
+      end)
       |> Task.await_many(5_000)
 
     assert Enum.all?(results, &match?({:ok, %{"verdict" => "allow"}}, &1))

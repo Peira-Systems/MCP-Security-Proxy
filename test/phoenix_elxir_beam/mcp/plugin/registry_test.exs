@@ -26,7 +26,10 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     sidecar_sup = :"sidecar_sup_#{suffix}"
     wasm_sup = :"wasm_sup_#{suffix}"
 
-    start_supervised!({DynamicSupervisor, name: sidecar_sup, strategy: :one_for_one}, id: sidecar_sup)
+    start_supervised!({DynamicSupervisor, name: sidecar_sup, strategy: :one_for_one},
+      id: sidecar_sup
+    )
+
     start_supervised!({DynamicSupervisor, name: wasm_sup, strategy: :one_for_one}, id: wasm_sup)
 
     {:ok, _pid} =

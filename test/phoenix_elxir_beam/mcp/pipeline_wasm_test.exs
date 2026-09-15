@@ -59,7 +59,13 @@ defmodule PhoenixElxirBeam.MCP.PipelineWasmTest do
       discovery: %{
         server: %{id: "real-x", name: "x", transport: :http},
         tools: [
-          %{name: "note", description: "Save a note", input_schema: %{}, tags: [], description_hash: "sha256:x"}
+          %{
+            name: "note",
+            description: "Save a note",
+            input_schema: %{},
+            tags: [],
+            description_hash: "sha256:x"
+          }
         ],
         previous_hashes: %{}
       }
@@ -129,7 +135,9 @@ defmodule PhoenixElxirBeam.MCP.PipelineWasmTest do
   test "run/3 routes to a wasm policy and short-circuits the chain on deny" do
     name = start_wasm(@deny_fixture)
 
-    assert {:deny, decision, findings} = Pipeline.run(:pre_call, pre_call_ctx(), [policy_entry(name)])
+    assert {:deny, decision, findings} =
+             Pipeline.run(:pre_call, pre_call_ctx(), [policy_entry(name)])
+
     assert decision.deciding_plugin == "wasm-deny-policy"
     assert decision.reason == "denied by wasm-deny-policy (test fixture)"
     assert findings == []

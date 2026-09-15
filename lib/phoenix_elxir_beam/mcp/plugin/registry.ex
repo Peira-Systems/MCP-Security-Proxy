@@ -128,7 +128,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       |> Enum.with_index()
 
     {wasm, non_wasm} = Enum.split_with(specs, fn {spec, _index} -> match?({:wasm, _}, spec) end)
-    {sidecars, in_process} = Enum.split_with(non_wasm, fn {spec, _index} -> match?({:sidecar, _}, spec) end)
+
+    {sidecars, in_process} =
+      Enum.split_with(non_wasm, fn {spec, _index} -> match?({:sidecar, _}, spec) end)
 
     Enum.each(in_process, fn {spec, index} -> insert_entry(table, spec, index, &build_entry/2) end)
 

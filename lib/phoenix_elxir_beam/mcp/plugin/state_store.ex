@@ -29,7 +29,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   @spec all() :: overlay()
   def all do
     Repo.all(PluginState)
-    |> Map.new(fn s -> {s.name, %{enabled: s.enabled, position: s.position, config: s.config}} end)
+    |> Map.new(fn s ->
+      {s.name, %{enabled: s.enabled, position: s.position, config: s.config}}
+    end)
   rescue
     e -> soft("load", e, %{})
   catch

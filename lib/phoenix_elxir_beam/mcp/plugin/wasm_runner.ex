@@ -228,7 +228,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunner do
   # See the moduledoc "Capabilities" section for why this is `new_wasi` with
   # empty options rather than plain `new` -- it's load-bearing, not a slip.
   defp spin_instance(state) do
-    {:ok, store} = Wasmex.Store.new_wasi(%Wasmex.Wasi.WasiOptions{}, state.store_limits, state.engine)
+    {:ok, store} =
+      Wasmex.Store.new_wasi(%Wasmex.Wasi.WasiOptions{}, state.store_limits, state.engine)
+
     {:ok, pid} = Wasmex.start_link(%{store: store, module: state.module})
     {:ok, memory} = Wasmex.memory(pid)
     %{pid: pid, store: store, memory: memory}
@@ -308,7 +310,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WasmRunner do
   end
 
   @impl true
-  def handle_cast({:checkin, mon, outcome}, state), do: {:noreply, do_checkin(mon, outcome, state)}
+  def handle_cast({:checkin, mon, outcome}, state),
+    do: {:noreply, do_checkin(mon, outcome, state)}
 
   @impl true
   def handle_info({:DOWN, mon, :process, _pid, _reason}, state) do

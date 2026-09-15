@@ -63,13 +63,17 @@ defmodule PhoenixElxirBeam.MCP.Plugins.RuleEngineCorpus do
       name: "after_sensitive_read - not yet in this session",
       call: %{},
       session: %{},
-      rules: [%{"match" => %{"after_sensitive_read" => true}, "action" => "deny", "reason" => "sr"}]
+      rules: [
+        %{"match" => %{"after_sensitive_read" => true}, "action" => "deny", "reason" => "sr"}
+      ]
     },
     %{
       name: "after_sensitive_read - fires",
       call: %{},
       session: %{seen_tags: [:sensitive_read]},
-      rules: [%{"match" => %{"after_sensitive_read" => true}, "action" => "deny", "reason" => "sr"}]
+      rules: [
+        %{"match" => %{"after_sensitive_read" => true}, "action" => "deny", "reason" => "sr"}
+      ]
     },
     %{
       name: "if_tainted - fires",
@@ -103,6 +107,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.RuleEngineCorpus do
 
   @doc "One fixture by name, for RuleEngineTest's existing named assertions."
   def fetch!(name) do
-    Enum.find(@cases, &(&1.name == name)) || raise "no RuleEngineCorpus case named #{inspect(name)}"
+    Enum.find(@cases, &(&1.name == name)) ||
+      raise "no RuleEngineCorpus case named #{inspect(name)}"
   end
 end

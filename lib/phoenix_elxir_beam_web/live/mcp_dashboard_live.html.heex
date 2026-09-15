@@ -5,6 +5,7 @@
         <span class="flex size-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-content">
           M
         </span>
+
         <h1 class="text-base font-semibold tracking-tight">MCP Security Proxy</h1>
       </div>
 
@@ -38,8 +39,10 @@
       <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-error/25 text-error">
         ⚠
       </span>
+
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-error">Audit chain integrity check FAILED</div>
+
         <div class="text-xs text-base-content/70">{elem(@integrity, 1)}</div>
       </div>
     </div>
@@ -51,6 +54,7 @@
       <div class="text-sm font-semibold text-warning">
         Operational alerts ({length(@alerts)})
       </div>
+
       <div :for={alert <- Enum.take(@alerts, 5)} class="text-xs text-base-content/70">
         <span class={[
           "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
@@ -72,9 +76,12 @@
       <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-warning/25 text-warning">
         ⏸
       </span>
+
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-warning">Approval required</div>
+
         <div class="text-sm text-base-content/80">{hold.prompt}</div>
+
         <div class="text-xs text-base-content/40">
           {hold.reason} · held {held_ago(hold.created_at)} · auto-denies in {div(
             hold.timeout_ms,
@@ -82,6 +89,7 @@
           )}s
         </div>
       </div>
+
       <div class="flex items-center gap-2">
         <button
           type="button"
@@ -92,6 +100,7 @@
         >
           Approve
         </button>
+
         <button
           type="button"
           phx-click="resolve_hold"
@@ -113,8 +122,7 @@
       >
         <svg viewBox="0 0 900 480" class="h-full w-full">
           <g>
-            <% {ax, ay} = @positions["agent"] %>
-            <% {gx, gy} = @positions["gate"] %>
+            <% {ax, ay} = @positions["agent"] %> <% {gx, gy} = @positions["gate"] %>
             <line
               id="edge-agent-gate"
               data-from="agent"
@@ -138,9 +146,10 @@
                 y2={sy}
               />
             <% end %>
+
             <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
-              <% {sx, sy} = @positions["server-" <> server_id] %>
-              <% {tx, ty} = @positions["tool-" <> tool.name] %>
+              <% {sx, sy} = @positions["server-" <> server_id] %> <% {tx, ty} =
+                @positions["tool-" <> tool.name] %>
               <line
                 id={"edge-server-" <> server_id <> "-tool-" <> tool.name}
                 data-from={"server-" <> server_id}
@@ -286,9 +295,7 @@
               </g>
             <% end %>
           </g>
-
           <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
-
           <text
             id="graph-reason-label"
             text-anchor="middle"
@@ -308,7 +315,6 @@
             <span class="size-2 rounded-full bg-neutral-content/20"></span>
           </span>
           <span class="font-mono text-xs text-neutral-content/60">event-log · mcp-proxy</span>
-
           <div class="ml-auto flex items-center gap-1 rounded-full bg-neutral-content/10 p-0.5">
             <button
               type="button"
@@ -324,6 +330,7 @@
             >
               live
             </button>
+
             <button
               type="button"
               phx-click="set_console_mode"
@@ -365,6 +372,7 @@
               <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
                 Status
               </span>
+
               <div class="inline-flex overflow-hidden rounded-md border border-neutral-content/20">
                 <button
                   type="button"
@@ -380,6 +388,7 @@
                 >
                   All
                 </button>
+
                 <button
                   type="button"
                   phx-click="history_set_status"
@@ -394,6 +403,7 @@
                 >
                   Allowed
                 </button>
+
                 <button
                   type="button"
                   phx-click="history_set_status"
@@ -415,11 +425,13 @@
               <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
                 Server
               </span>
+
               <select
                 name="server_id"
                 class="select select-xs bg-neutral-content/10 font-mono text-[11px] text-neutral-content border-none"
               >
                 <option value="all" selected={@history_server_id == "all"}>all servers</option>
+
                 <option
                   :for={server_id <- @server_options}
                   value={server_id}
@@ -434,6 +446,7 @@
               <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
                 From
               </span>
+
               <input
                 type="date"
                 name="from"
@@ -446,6 +459,7 @@
               <span class="text-[10px] font-semibold uppercase tracking-wide text-neutral-content/40">
                 To
               </span>
+
               <input
                 type="date"
                 name="to"
@@ -484,6 +498,7 @@
                 ×
               </button>
             </span>
+
             <span
               :if={@history_server_id != "all"}
               class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
@@ -498,6 +513,7 @@
                 ×
               </button>
             </span>
+
             <span
               :if={@history_from != ""}
               class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
@@ -512,6 +528,7 @@
                 ×
               </button>
             </span>
+
             <span
               :if={@history_to != ""}
               class="inline-flex items-center gap-1 rounded-full bg-neutral-content/10 px-2 py-0.5 font-mono text-[11px] text-neutral-content/70"
@@ -541,6 +558,7 @@
             >
               No events yet — make a tool call through the proxy to see it here.
             </div>
+
             <div
               :for={{dom_id, event} <- @streams.events}
               id={dom_id}
@@ -550,6 +568,7 @@
               <span class={["w-16 shrink-0 font-semibold", console_status_class(event.status)]}>
                 {status_label(event.status)}
               </span>
+
               <span class="min-w-0 flex-1 truncate">
                 <span :if={event.server_id}>{event.server_id}/{event.tool_name}</span>
                 <span :if={event.reason} class="ml-2 text-error">{event.reason}</span>
@@ -564,6 +583,7 @@
                   {finding_field(finding, :type)}
                 </span>
               </span>
+
               <span
                 :if={event.agent_id}
                 class="shrink-0 text-neutral-content/30"
@@ -591,6 +611,7 @@
                     </span>
                   </button>
                 </th>
+
                 <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-left">
                   <button
                     type="button"
@@ -604,6 +625,7 @@
                     </span>
                   </button>
                 </th>
+
                 <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-left">
                   <button
                     type="button"
@@ -617,17 +639,20 @@
                     </span>
                   </button>
                 </th>
+
                 <th class="sticky top-0 z-10 bg-neutral px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wide text-neutral-content/50">
                   session
                 </th>
               </tr>
             </thead>
+
             <tbody>
               <tr :if={@history_result.entries == []}>
                 <td colspan="4" class="px-3 py-6 text-center text-neutral-content/40">
                   No events match these filters.
                 </td>
               </tr>
+
               <tr
                 :for={entry <- @history_result.entries}
                 class={[
@@ -638,9 +663,11 @@
                 <td class="px-3 py-1.5 whitespace-nowrap text-neutral-content/50">
                   {format_datetime(entry.occurred_at)}
                 </td>
+
                 <td class={["px-3 py-1.5 font-semibold", console_status_class(entry.status)]}>
                   {status_label(entry.status)}
                 </td>
+
                 <td class="px-3 py-1.5">
                   <span :if={entry.server_id}>{entry.server_id}/{entry.tool_name}</span>
                   <span :if={!entry.server_id} class="text-neutral-content/30">—</span>
@@ -650,13 +677,16 @@
                   >
                     {tag_label(tag)}
                   </span>
+
                   <span
                     :for={decision <- entry.decisions}
                     class="ml-1 rounded-full bg-neutral-content/15 px-1.5 py-0.5 text-[10px] text-neutral-content/80"
                   >
                     {decision["plugin"]} · {decision["verdict"]}
                   </span>
+
                   <div :if={entry.reason} class="text-error">{entry.reason}</div>
+
                   <span
                     :for={finding <- entry.findings || []}
                     class={[
@@ -668,6 +698,7 @@
                     {finding_field(finding, :type)}
                   </span>
                 </td>
+
                 <td class="px-3 py-1.5 text-right text-neutral-content/40">
                   <div :if={entry.agent_id} class="text-neutral-content/60">
                     {short_agent(entry.agent_id)}
@@ -693,6 +724,7 @@
               verify audit chain
             </button>
           </div>
+
           <div class="flex items-center gap-2">
             <span>page {@history_result.page} / {@history_result.total_pages}</span>
             <button
@@ -704,6 +736,7 @@
             >
               ‹ prev
             </button>
+
             <button
               type="button"
               phx-click="history_paginate"
@@ -730,13 +763,16 @@
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Plugins</h2>
+
         <span class="text-xs text-base-content/40">
           {length(@plugins)} registered — the proxy pipeline, in evaluation order
         </span>
+
         <span :if={not @can_operate} class="ml-auto text-[10px] text-base-content/40">
           read-only (operator role required to change)
         </span>
       </div>
+
       <div class="divide-y divide-base-300/60">
         <div
           :for={plugin <- @plugins}
@@ -745,8 +781,7 @@
           <span class={[
             "size-2 rounded-full",
             if(plugin.enabled, do: "bg-success", else: "bg-base-content/25")
-          ]}></span>
-          <span class="font-mono font-medium">{plugin.name}</span>
+          ]}></span> <span class="font-mono font-medium">{plugin.name}</span>
           <button
             type="button"
             class="link link-hover text-xs text-primary"
@@ -759,6 +794,7 @@
           <span class="rounded-full bg-base-200 px-2 py-0.5 text-[10px] text-base-content/60">
             {plugin.kind}
           </span>
+
           <span class={[
             "rounded-full px-2 py-0.5 text-[10px]",
             if(plugin.source == "sidecar",
@@ -794,6 +830,7 @@
             >
               ▲
             </button>
+
             <button
               type="button"
               class="btn btn-ghost btn-xs px-1"
@@ -804,6 +841,7 @@
             >
               ▼
             </button>
+
             <button
               type="button"
               class={["btn btn-xs", if(plugin.enabled, do: "btn-ghost", else: "btn-primary")]}
@@ -842,10 +880,9 @@
               <p class="mt-3 whitespace-pre-line text-sm text-base-content/80">
                 {plugin.description}
               </p>
-
-              <% schema = ConfigSchema.schema(plugin.name) %>
-              <% reference = ConfigSchema.reference(plugin.name) %>
-              <% custom_editor = ConfigSchema.custom_editor?(plugin.name) %>
+              <% schema = ConfigSchema.schema(plugin.name) %> <% reference =
+                ConfigSchema.reference(plugin.name) %> <% custom_editor =
+                ConfigSchema.custom_editor?(plugin.name) %>
               <div class="mt-4 border-t border-base-300 pt-3">
                 <h4 class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/50">
                   Configuration
@@ -861,7 +898,6 @@
                     rules={@rules_draft}
                     can_operate={@can_operate}
                   />
-
                   <.form
                     :if={not custom_editor and @can_operate}
                     for={to_form(%{})}
@@ -888,6 +924,7 @@
                           </span>
                         </span>
                       </label>
+
                       <.config_field_input
                         plugin={plugin.name}
                         field={field}
@@ -898,14 +935,17 @@
                         <span class="font-mono">{ConfigSchema.display(field.default)}</span>
                       </span>
                     </div>
+
                     <div class="border-t border-base-300/60 pt-2 text-[10px] text-base-content/40">
                       Registered default (what "Reset to default" restores):
                       <span class="font-mono">{Jason.encode!(plugin.default_config)}</span>
                     </div>
+
                     <div class="flex items-center justify-between pt-1">
                       <span class="text-[10px] text-base-content/40">
                         Applies on the next call — no restart needed.
                       </span>
+
                       <div class="flex gap-1.5">
                         <button
                           type="button"
@@ -919,16 +959,15 @@
                       </div>
                     </div>
                   </.form>
-
                   <pre
                     :if={not @can_operate}
                     class="overflow-x-auto rounded bg-base-200 p-2 text-xs"
                   >{Jason.encode!(plugin.config, pretty: true)}</pre>
-
                   <details :if={@can_operate} class="mt-3">
                     <summary class="cursor-pointer text-[11px] text-base-content/50 hover:text-base-content/80">
                       Field reference &amp; raw JSON
                     </summary>
+
                     <div class="mt-2 space-y-2">
                       <ul
                         :if={reference != []}
@@ -936,14 +975,14 @@
                       >
                         <li :for={line <- reference}>{line}</li>
                       </ul>
+
                       <.form
                         for={to_form(%{})}
                         id={"plugin-config-raw-form-" <> plugin.name}
                         phx-submit="update_plugin_config"
                         class="flex flex-col gap-2"
                       >
-                        <input type="hidden" name="name" value={plugin.name} />
-                        <textarea
+                        <input type="hidden" name="name" value={plugin.name} /> <textarea
                           name="raw_config"
                           rows="6"
                           spellcheck="false"
@@ -964,6 +1003,7 @@
                 </button>
               </div>
             </div>
+
             <button
               type="button"
               class="modal-backdrop"
@@ -974,6 +1014,7 @@
             </button>
           </dialog>
         </div>
+
         <div :if={@plugins == []} class="px-4 py-3 text-center text-sm text-base-content/50">
           No plugins registered.
         </div>
@@ -983,10 +1024,12 @@
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Policy changes</h2>
+
         <span class="text-xs text-base-content/40">
           runtime changes, recorded on the audit hash chain
         </span>
       </div>
+
       <div class="divide-y divide-base-300/60">
         <div
           :for={change <- @policy_changes}
@@ -1009,6 +1052,7 @@
             revert
           </button>
         </div>
+
         <div
           :if={@policy_changes == []}
           class="px-4 py-3 text-center text-sm text-base-content/50"
@@ -1021,6 +1065,7 @@
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Client keys</h2>
+
         <span class="text-xs text-base-content/40">
           {length(@api_keys)} — API keys downstream MCP clients authenticate with
         </span>
@@ -1034,6 +1079,7 @@
         <code phx-no-curly-interpolation class="rounded bg-base-300 px-2 py-0.5 font-mono text-xs">
           {@new_token}
         </code>
+
         <button type="button" phx-click="dismiss_token" class="btn btn-ghost btn-xs ml-auto">
           dismiss
         </button>
@@ -1061,9 +1107,9 @@
           <input type="checkbox" name="all_servers" value="true" class="checkbox checkbox-xs" />
           all servers
         </label>
+
         <label :for={s <- @real_servers} class="flex items-center gap-1 text-xs">
-          <input type="checkbox" name={"servers[#{s.id}]"} value="1" class="checkbox checkbox-xs" />
-          {s.name}
+          <input type="checkbox" name={"servers[#{s.id}]"} value="1" class="checkbox checkbox-xs" /> {s.name}
         </label>
         <button type="submit" class="btn btn-primary btn-sm">Issue key</button>
       </.form>
@@ -1084,17 +1130,20 @@
             do: "all servers",
             else: "#{length(key.granted_server_ids)} server(s)"}
         </span>
+
         <span
           :if={key.disabled_at}
           class="rounded-full bg-error/20 px-2 py-0.5 text-[10px] font-semibold text-error"
         >
           revoked
         </span>
+
         <span class="text-[10px] text-base-content/40">
           {if key.last_used_at,
             do: "last used #{format_datetime(key.last_used_at)}",
             else: "never used"}
         </span>
+
         <button
           :if={!key.disabled_at}
           type="button"
@@ -1110,6 +1159,7 @@
     <div class="rounded-box border border-base-300 bg-base-100">
       <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
         <h2 class="text-sm font-semibold">Servers &amp; tools</h2>
+
         <span class="text-xs text-base-content/40">
           {length(@real_servers)} registered — real Streamable HTTP or stdio MCP servers, tools discovered live
         </span>
@@ -1156,6 +1206,7 @@
             class="checkbox checkbox-xs"
           /> Skip TLS verify
         </label>
+
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
           {if @registering, do: "Registering…", else: "Register"}
         </button>
@@ -1199,15 +1250,19 @@
             >
               Re-handshake
             </button>
+
             <span :if={server[:last_handshake_at]} class="text-xs text-base-content/40">
               last handshake {format_time(server.last_handshake_at)}
             </span>
+
             <span :if={server[:timeout_ms]} class="text-xs text-base-content/40">
               timeout {server.timeout_ms}ms
             </span>
+
             <span :if={server[:tls_verify] == false} class="text-xs text-warning">
               TLS verify off
             </span>
+
             <button
               type="button"
               phx-click="remove_server"
@@ -1223,13 +1278,14 @@
             class="rounded-box border border-error/40 bg-error/10 px-3 py-2 text-sm"
           >
             <div class="flex items-center gap-2 font-semibold text-error">
-              <span>⚠</span>
-              <span>{finding.title}</span>
+              <span>⚠</span> <span>{finding.title}</span>
               <span class="rounded-full bg-error/20 px-1.5 py-0.5 text-[10px] font-normal">
                 {finding.type} · {finding.plugin && finding.plugin.name}
               </span>
             </div>
+
             <p :if={finding.detail} class="mt-1 text-xs text-base-content/70">{finding.detail}</p>
+
             <p
               :if={finding.evidence}
               class="mt-1 truncate font-mono text-xs text-base-content/50"
@@ -1257,12 +1313,14 @@
               >
                 quarantined
               </span>
+
               <span
                 :if={tool.tags == []}
                 class="rounded-full bg-base-content/10 px-2 py-0.5 text-[10px] font-semibold text-base-content/50"
               >
                 unclassified
               </span>
+
               <button
                 :if={
                   tool.tags == [] and Map.get(tool, :suggested_tags, []) != [] and @can_operate
@@ -1292,6 +1350,7 @@
                 >
                   clear quarantine
                 </button>
+
                 <button
                   type="button"
                   phx-click="toggle_tool_tag"
@@ -1308,6 +1367,7 @@
                 >
                   sensitive read
                 </button>
+
                 <button
                   type="button"
                   phx-click="toggle_tool_tag"
@@ -1338,13 +1398,13 @@
             <select name="tool_name" class="select select-bordered select-sm">
               <option :for={tool <- server.tools} value={tool.name}>{tool.name}</option>
             </select>
+
             <input
               type="text"
               name="arguments"
               placeholder={~s({"key": "value"})}
               class="input input-bordered input-sm flex-1 font-mono"
-            />
-            <button type="submit" class="btn btn-sm btn-outline">Call tool</button>
+            /> <button type="submit" class="btn btn-sm btn-outline">Call tool</button>
           </.form>
         </div>
       </div>
