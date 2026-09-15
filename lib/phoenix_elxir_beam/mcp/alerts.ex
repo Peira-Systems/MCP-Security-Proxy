@@ -8,8 +8,14 @@ defmodule PhoenixElxirBeam.MCP.Alerts do
     * `:audit_integrity` — the audit hash chain failed verification (M2.3)
     * `:plugin_fail_open` — a `fail_open` plugin actually errored and the call
       was allowed to proceed without its check
-    * `:sidecar_circuit_open` — a sidecar plugin's circuit breaker tripped
+    * `:sidecar_provenance` / `:wasm_provenance` — a pinned sidecar/Wasm plugin's code or
+      manifest digest didn't match at startup (`docs/plugin-supply-chain.md`)
+    * `:sidecar_circuit_open` / `:wasm_circuit_open` — a sidecar/Wasm plugin's circuit
+      breaker tripped
     * `:upstream_unreachable` — a registered upstream failed the readiness probe
+
+  (Not an exhaustive list — every call site chooses its own key; these are the ones worth
+  knowing about up front.)
 
   Every alert:
 

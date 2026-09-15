@@ -148,6 +148,28 @@ defmodule PhoenixElxirBeam.MCP.Plugin.ConfigSchema do
   # visual editor (`MCPDashboardLive.rules_editor/1`), not a flat field form.
   def schema("rule-engine"), do: []
 
+  # rule-engine-wasm takes the identical `rules` shape (docs/wasm-plugin-plan.md
+  # W4 — verdict parity is checked against the same corpus) but doesn't share
+  # rule-engine's bespoke editor state (`@rules_draft` is a single, unkeyed
+  # assign — wiring a second plugin through it is a real refactor, not this
+  # plugin's job). A generic `:json` field gives it a genuinely working, if
+  # plainer, editor for the exact same data instead of the dashboard wrongly
+  # claiming it "has no configurable options."
+  def schema("rule-engine-wasm") do
+    [
+      %{
+        key: "rules",
+        label: "Rules",
+        type: :json,
+        default: [],
+        help:
+          "Same shape as rule-engine's rules — see its own \"details\" popup for the " <>
+            "match-predicate reference. Evaluated in order; the first rule whose match " <>
+            "conditions are satisfied decides the verdict."
+      }
+    ]
+  end
+
   def schema(_name), do: []
 
   @doc "True when the dashboard renders a bespoke editor for this plugin instead of a field form."

@@ -6,7 +6,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.ConfigSchemaTest do
   describe "schema/1" do
     test "every field carries the keys the dashboard form needs" do
       for name <- ~w(approval-gate baseline-guard response-size-guard stream-guard
-                     unclassified-guard) do
+                     unclassified-guard rule-engine-wasm) do
         for field <- ConfigSchema.schema(name) do
           assert is_binary(field.key)
           assert is_binary(field.label)
@@ -26,6 +26,13 @@ defmodule PhoenixElxirBeam.MCP.Plugin.ConfigSchemaTest do
       assert ConfigSchema.schema("rule-engine") == []
       assert ConfigSchema.custom_editor?("rule-engine")
       refute ConfigSchema.custom_editor?("baseline-guard")
+    end
+
+    test "rule-engine-wasm gets a generic :json rules field, not the bespoke editor" do
+      # It takes the identical config shape as rule-engine (docs/wasm-plugin-plan.md W4)
+      # but doesn't share rule-engine's single, unkeyed @rules_draft editor state.
+      assert [%{key: "rules", type: :json}] = ConfigSchema.schema("rule-engine-wasm")
+      refute ConfigSchema.custom_editor?("rule-engine-wasm")
     end
   end
 
@@ -67,6 +74,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.ConfigSchemaTest do
                ConfigSchema.build("unclassified-guard", %{}, %{"mode" => "bogus"})
 
       refute Map.has_key?(config, "mode")
+    end
+
+    test "a :json field round-trips valid JSON and rejects invalid JSON" do
+      assert {:ok, %{"rules" => [%{"action" => "deny"}]}} =
+               ConfigSchema.build("rule-engine-wasm", %{}, %{"rules" => ~s([{"action":"deny"}])})
+
+      assert {:error, msg} =
+               ConfigSchema.build("rule-engine-wasm", %{}, %{"rules" => "not json"})
+
+      assert msg =~ "valid JSON"
     end
 
     test "keys outside the schema are preserved" do

@@ -1,6 +1,6 @@
 # Wasm plugin sandbox — implementation plan
 
-**Status:** Ready to implement · **Date:** 2026-09-14 · **Implements:** [ADR-0003](adr/0003-wasm-plugin-sandbox.md)
+**Status:** Complete (W0–W5 all done) · **Date:** 2026-09-14 · **Implements:** [ADR-0003](adr/0003-wasm-plugin-sandbox.md)
 
 This is the execution plan for ADR-0003. The ADR records *what* and *why*; this document
 sequences it into shippable milestones with acceptance criteria, mirroring how
@@ -571,6 +571,47 @@ for this milestone.
   W5 itself doesn't block calling the effort done, the same way `docs/productionization-
   plan.md` treated its own doc-sync milestones as real but non-blocking.
 
+### As built (2026-09-15) — one real gap found and closed beyond the checklist above
+
+- **Dashboard transport rendering** needed one small, real code change, not just a mapping
+  tweak: `MCPDashboardLive.plugin_rows/0` derived `source`/`health` with a `case entry.impl`
+  that had clauses for `{:sidecar, _}` and a catch-all — a `{:wasm, _}` entry fell into the
+  catch-all and was mislabeled `"in-process"` with no live health. Added a `{:wasm, runner}`
+  clause calling `WasmRunner.health/1` — the template's health badge already renders any
+  `:ready` / `:circuit_open` atom generically, so no `.heex` changes were needed once the
+  Elixir side produced the right values. Verified live (not just "should work"): logged into
+  a real dev server, confirmed `rule-engine-wasm` renders with a `wasm` badge and a live
+  `ready` health pill, toggled it enabled then back to disabled through the dashboard UI
+  (not the console), and watched the resulting `plugin_enabled` entry actually land on the
+  Policy Changes audit panel — the M3.4b persisted-toggle and policy-change-audit paths work
+  for a Wasm plugin exactly like they do for any other, not just in theory.
+- **A second, more interesting gap, found only by actually opening the plugin's details
+  popup**: `rule-engine-wasm` takes the identical `config: %{"rules" => [...]}` shape as
+  `rule-engine`, but the dashboard's "Configuration" section is driven by
+  `ConfigSchema.schema/1` + `custom_editor?/1`, both keyed by exact plugin name — an
+  unrecognized name falls through to "This plugin has no configurable options," which is
+  simply false here. Generalizing `rule-engine`'s bespoke visual rules editor
+  (`MCPDashboardLive.rules_editor/1`) to a second plugin would have meant threading a plugin
+  name through its single, currently-unkeyed `@rules_draft` assign — out of scope for a
+  dashboard-polish milestone. Instead, added a `schema("rule-engine-wasm")` entry using the
+  already-built-but-previously-unused `:json` field type (`config_field_value/2` and
+  `config_field_input/1` already handled it generically; no plugin had ever used it before
+  this). Confirmed via direct DOM inspection of the live page that the field renders
+  pre-filled with the actual configured rules, correctly pretty-printed. Added real test
+  coverage for the `:json` field type in `config_schema_test.exs` — it was previously wired
+  but genuinely untested plumbing.
+- `docs/plugin-supply-chain.md` gained the planned "Wasm plugin provenance" section;
+  `MCP.Alerts`'s moduledoc gained the `:wasm_provenance` / `:wasm_circuit_open` keys (kept
+  as their own keys, not merged into the sidecar ones — the alert banner shouldn't blur
+  which binding actually failed).
+- Fixed one thing along the way that had nothing to do with Wasm: the dev database was
+  missing a migration (`plugin_states.config`), causing a fail-soft warning on every boot.
+  Ran it; unrelated to this plan but blocked getting a clean screenshot otherwise.
+
+Verified: `mix compile --warnings-as-errors` + `MIX_ENV=prod mix compile
+--warnings-as-errors` clean, `mix dialyzer` clean, full suite green at **398** (396 + 2 new
+`:json`-field tests).
+
 ---
 
 ## Definition of done
@@ -597,5 +638,9 @@ for this milestone.
       the "zero WASI imports" framing along the way; caught a test-harness bug and a real
       plugin bug (hold's hardcoded severity) via the parity test itself before either
       shipped.
-- [ ] W5: dashboard shows the `wasm` transport; supply-chain + cross-referencing docs
-      updated; `mix precommit` / `mix dialyzer` / `MIX_ENV=prod mix compile` all still pass.
+- [x] W5: dashboard shows the `wasm` transport — 2026-09-15. Verified live (real dev
+      server, real login, real toggle) not just by reading code. Found and fixed a real gap
+      beyond the checklist: the plugin details popup wrongly claimed rule-engine-wasm "has
+      no configurable options" — gave it a working `:json` rules field instead. Supply-chain
+      docs + `MCP.Alerts` moduledoc updated. Full suite 398, dialyzer clean, prod compile
+      clean. **All of W0–W5 done — nothing open on this plan.**

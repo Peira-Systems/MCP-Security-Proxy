@@ -20,7 +20,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     SessionStore
   }
 
-  alias PhoenixElxirBeam.MCP.Plugin.{ConfigSchema, Registry, SidecarRunner}
+  alias PhoenixElxirBeam.MCP.Plugin.{ConfigSchema, Registry, SidecarRunner, WasmRunner}
 
   @topic "mcp:events"
   @servers_topic "mcp:servers"
@@ -914,13 +914,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   # Rows for the read-only Plugins panel: name, kind, source, enabled, and
-  # (sidecar only) live health from the SidecarRunner.
+  # (sidecar/wasm only) live health from the SidecarRunner/WasmRunner.
   defp plugin_rows do
     Registry.list()
     |> Enum.map(fn entry ->
       {source, health} =
         case entry.impl do
           {:sidecar, runner} -> {"sidecar", SidecarRunner.health(runner)}
+          {:wasm, runner} -> {"wasm", WasmRunner.health(runner)}
           _ -> {"in-process", nil}
         end
 
@@ -1016,6 +1017,17 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       "allow (an explicit exception that short-circuits later rules), or " <>
       "hold (with an optional timeout, default 120s). No matching rule " <>
       "defaults to allow."
+  end
+
+  defp plugin_description("rule-engine-wasm") do
+    "The W4 reference Wasm plugin (docs/wasm-plugin-plan.md): a wasm32-wasip1 port of " <>
+      "rule-engine's exact match/decision logic, run in-process but sandboxed by " <>
+      "Wasmtime — no filesystem or network capability, a runaway call interrupted by " <>
+      "the runtime rather than merely abandoned (docs/plugin-protocol.md §5.4). Ships " <>
+      "alongside rule-engine, not instead of it, disabled by default; its verdicts are " <>
+      "checked against the Elixir original call-for-call by " <>
+      "rule_engine_wasm_parity_test.exs, not just spot-checked. Enable it here with the " <>
+      "same operator rules rule-engine already has to compare them live."
   end
 
   defp plugin_description("secret-leak") do
