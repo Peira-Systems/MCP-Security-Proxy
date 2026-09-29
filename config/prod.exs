@@ -19,8 +19,18 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
     # `/metrics` scraped by Prometheus, both over plain HTTP on an internal
     # network; every other request is redirected to HTTPS. (`Plug.SSL`
     # `:exclude` matches `path_info` exactly, so each path is listed.)
+    #
+    # `black-phillip` (+ its Tailscale MagicDNS FQDN) is also excluded: this
+    # tailnet doesn't support Tailscale-issued TLS certs, and traffic between
+    # tailnet peers is already encrypted by Tailscale's own WireGuard tunnel,
+    # so plain HTTP over Tailscale is not sending anything in the clear.
     exclude: [
-      hosts: ["localhost", "127.0.0.1"],
+      hosts: [
+        "localhost",
+        "127.0.0.1",
+        "black-phillip",
+        "black-phillip.tailcd1fdf.ts.net"
+      ],
       paths: ["/health", "/health/live", "/health/ready", "/metrics"]
     ]
   ]
