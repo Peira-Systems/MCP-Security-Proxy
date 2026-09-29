@@ -5,6 +5,8 @@ it calls tools on. Every `tools/call` runs through a plugin pipeline — policy
 decisions, content scanners, tamper-evident audit — before it is forwarded.
 A LiveView dashboard visualizes traffic and lets an operator curate policy.
 
+![MCP Security Proxy dashboard](priv/static/images/dashboard-screenshot.jpg)
+
 See [`Project.md`](Project.md) for an overview and [`docs/adr/`](docs/adr) for
 the architecture and productionization decisions.
 
