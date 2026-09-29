@@ -845,6 +845,9 @@
 
               <%= for %{id: server_id, name: server_name} <- @graph do %>
                 <% {sx, sy} = @positions["server-" <> server_id] %>
+                <% sw = @node_widths["server-" <> server_id] %>
+                <% rect_x = -sw / 2 %>
+                <% text_x = rect_x + 26 + (sw - 26) / 2 %>
                 <g
                   id={"node-server-" <> server_id}
                   data-key={"server-" <> server_id}
@@ -852,36 +855,36 @@
                   transform={"translate(#{sx},#{sy})"}
                 >
                   <rect
-                    x="-42"
+                    x={rect_x}
                     y="-18"
-                    width="84"
+                    width={sw}
                     height="36"
                     rx="9"
                     class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
                   />
                   <line
-                    x1="-32"
+                    x1={rect_x + 10}
                     y1="-8"
-                    x2="-18"
+                    x2={rect_x + 24}
                     y2="-8"
                     class="stroke-base-content/40 [stroke-width:1.2px]"
                   />
                   <line
-                    x1="-32"
+                    x1={rect_x + 10}
                     y1="-2"
-                    x2="-18"
+                    x2={rect_x + 24}
                     y2="-2"
                     class="stroke-base-content/40 [stroke-width:1.2px]"
                   />
                   <line
-                    x1="-32"
+                    x1={rect_x + 10}
                     y1="4"
-                    x2="-18"
+                    x2={rect_x + 24}
                     y2="4"
                     class="stroke-base-content/40 [stroke-width:1.2px]"
                   />
                   <text
-                    x="8"
+                    x={text_x}
                     text-anchor="middle"
                     dy="4"
                     class="fill-base-content text-[11px] font-semibold"
@@ -893,6 +896,7 @@
 
               <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
                 <% {tx, ty} = @positions["tool-" <> tool.name] %>
+                <% tw = @node_widths["tool-" <> tool.name] %>
                 <g
                   id={"node-tool-" <> tool.name}
                   data-key={"tool-" <> tool.name}
@@ -900,9 +904,9 @@
                   transform={"translate(#{tx},#{ty})"}
                 >
                   <rect
-                    x="-46"
+                    x={-tw / 2}
                     y="-14"
-                    width="92"
+                    width={tw}
                     height="28"
                     rx="14"
                     class={[
@@ -912,14 +916,14 @@
                   />
                   <circle
                     :if={:sensitive_read in tool.tags}
-                    cx="-36"
+                    cx={-tw / 2 + 10}
                     cy="-9"
                     r="3.5"
                     class="fill-warning"
                   />
                   <circle
                     :if={:network_egress in tool.tags}
-                    cx="36"
+                    cx={tw / 2 - 10}
                     cy="-9"
                     r="3.5"
                     class="fill-none stroke-error [stroke-width:1.3px]"

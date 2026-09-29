@@ -62,6 +62,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
     graph = build_graph()
     plugins = plugin_rows()
+    {positions, node_widths} = layout_positions(graph)
 
     socket =
       socket
@@ -69,7 +70,8 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:app_version, Application.spec(:phoenix_elxir_beam, :vsn) |> to_string())
       |> assign(:config_tab, "plugins")
       |> assign(:graph, graph)
-      |> assign(:positions, layout_positions(graph))
+      |> assign(:positions, positions)
+      |> assign(:node_widths, node_widths)
       |> assign(:real_servers, ServerRegistry.list_servers())
       |> assign(:registering, false)
       |> assign(:register_transport, "http")
@@ -127,29 +129,73 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp graph_server_ids(graph), do: Enum.map(graph, & &1.id)
 
+  # Rough glyph width for the node label fonts (10-11px semibold/medium) —
+  # good enough to size node shapes without measuring real text server-side.
+  @avg_char_px 6.4
+
+  defp text_width_px(text), do: String.length(text) * @avg_char_px
+
+  # Server node: fixed icon block (52px) to the left of the label, plus
+  # padding around the text.
+  defp server_node_width(name), do: max(84, text_width_px(name) + 52 + 16)
+
+  # Tool node: pill centered on the label, plus padding for the tag dots.
+  defp tool_node_width(name), do: max(92, text_width_px(name) + 24)
+
   # Fixed four-tier layout — agent, policy gate, server, tool — top to
   # bottom. Positions are final, not a seed for client-side relaxation.
+  # Column widths follow each node's label so long names no longer overlap
+  # their neighbors; `node_widths` is returned alongside positions so the
+  # template can size each node's shape to match.
   defp layout_positions(graph) do
-    server_count = max(length(graph), 1)
-    server_spacing = 170
-    first_server_x = 240 - server_spacing * (server_count - 1) / 2
+    gap = 26
 
-    graph
-    |> Enum.with_index()
-    |> Enum.reduce(%{"agent" => {240, 70}, "gate" => {240, 240}}, fn
-      {%{id: server_id, tools: tools}, i}, acc ->
-        server_x = first_server_x + i * server_spacing
-        acc = Map.put(acc, "server-" <> server_id, {server_x, 450})
+    server_widths =
+      Map.new(graph, fn %{id: server_id, name: name} ->
+        {"server-" <> server_id, server_node_width(name)}
+      end)
 
-        tool_spacing = 110
-        first_tool_x = server_x - tool_spacing * (length(tools) - 1) / 2
+    tool_widths =
+      for %{tools: tools} <- graph, tool <- tools, into: %{} do
+        {"tool-" <> tool.name, tool_node_width(tool.name)}
+      end
 
-        tools
-        |> Enum.with_index()
-        |> Enum.reduce(acc, fn {tool, j}, acc2 ->
-          Map.put(acc2, "tool-" <> tool.name, {first_tool_x + j * tool_spacing, 700})
-        end)
-    end)
+    server_row_width = row_width(graph, & &1.id, server_widths, "server-", gap)
+    first_server_x = 240 - server_row_width / 2
+
+    {positions, _} =
+      Enum.reduce(graph, {%{"agent" => {240, 70}, "gate" => {240, 240}}, first_server_x}, fn
+        %{id: server_id, tools: tools}, {acc, cursor_x} ->
+          sw = Map.fetch!(server_widths, "server-" <> server_id)
+          server_x = cursor_x + sw / 2
+          acc = Map.put(acc, "server-" <> server_id, {server_x, 450})
+
+          tool_row_width = row_width(tools, & &1.name, tool_widths, "tool-", gap)
+          first_tool_x = server_x - tool_row_width / 2
+
+          {acc, _} =
+            Enum.reduce(tools, {acc, first_tool_x}, fn tool, {acc2, tool_cursor_x} ->
+              tw = Map.fetch!(tool_widths, "tool-" <> tool.name)
+              tool_x = tool_cursor_x + tw / 2
+              acc2 = Map.put(acc2, "tool-" <> tool.name, {tool_x, 700})
+              {acc2, tool_cursor_x + tw + gap}
+            end)
+
+          {acc, cursor_x + sw + gap}
+      end)
+
+    {positions, Map.merge(server_widths, tool_widths)}
+  end
+
+  defp row_width(items, key_fun, widths, prefix, gap) do
+    case items do
+      [] ->
+        0
+
+      _ ->
+        widths_sum = items |> Enum.map(&Map.fetch!(widths, prefix <> key_fun.(&1))) |> Enum.sum()
+        widths_sum + gap * (length(items) - 1)
+    end
   end
 
   @impl true
@@ -771,11 +817,13 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   # the server list and rebuild the graph.
   def handle_info({:servers_changed}, socket) do
     graph = build_graph()
+    {positions, node_widths} = layout_positions(graph)
 
     {:noreply,
      socket
      |> assign(:graph, graph)
-     |> assign(:positions, layout_positions(graph))
+     |> assign(:positions, positions)
+     |> assign(:node_widths, node_widths)
      |> assign(:real_servers, ServerRegistry.list_servers())
      |> assign(:server_options, EventLog.distinct_server_ids())}
   end
