@@ -12,7 +12,17 @@ defmodule PhoenixElxirBeam.MixProject do
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader],
-      dialyzer: dialyzer()
+      dialyzer: dialyzer(),
+      package: package()
+    ]
+  end
+
+  # Apache-2.0 with the Commons Clause restriction (see LICENSE) — not
+  # published to Hex, but this keeps license metadata discoverable via
+  # `mix hex.info` / tooling that reads project metadata.
+  defp package do
+    [
+      licenses: ["Apache-2.0", "Commons-Clause"]
     ]
   end
 
