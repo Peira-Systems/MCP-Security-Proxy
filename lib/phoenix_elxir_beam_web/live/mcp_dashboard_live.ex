@@ -66,6 +66,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     socket =
       socket
       |> assign(:page_title, "MCP Dashboard")
+      |> assign(:config_tab, "plugins")
       |> assign(:graph, graph)
       |> assign(:positions, layout_positions(graph))
       |> assign(:real_servers, ServerRegistry.list_servers())
@@ -97,10 +98,22 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:ok, refresh_history(socket)}
   end
 
+  @config_tabs ~w(plugins policy_changes client_keys servers)
+
   @impl true
   def handle_params(params, _uri, socket) do
     page = if params["page"] == "config", do: "config", else: "executive"
-    {:noreply, assign(socket, :page, page)}
+
+    socket = assign(socket, :page, page)
+
+    socket =
+      if params["config_tab"] in @config_tabs do
+        assign(socket, :config_tab, params["config_tab"])
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   # The graph's server + tool nodes come from the live ServerRegistry —
@@ -113,27 +126,27 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp graph_server_ids(graph), do: Enum.map(graph, & &1.id)
 
-  # Fixed four-tier layout — agent, policy gate, server, tool — left to
-  # right. Positions are final, not a seed for client-side relaxation.
+  # Fixed four-tier layout — agent, policy gate, server, tool — top to
+  # bottom. Positions are final, not a seed for client-side relaxation.
   defp layout_positions(graph) do
     server_count = max(length(graph), 1)
     server_spacing = 170
-    first_server_y = 240 - server_spacing * (server_count - 1) / 2
+    first_server_x = 240 - server_spacing * (server_count - 1) / 2
 
     graph
     |> Enum.with_index()
-    |> Enum.reduce(%{"agent" => {70, 240}, "gate" => {240, 240}}, fn
+    |> Enum.reduce(%{"agent" => {240, 70}, "gate" => {240, 240}}, fn
       {%{id: server_id, tools: tools}, i}, acc ->
-        server_y = first_server_y + i * server_spacing
-        acc = Map.put(acc, "server-" <> server_id, {450, server_y})
+        server_x = first_server_x + i * server_spacing
+        acc = Map.put(acc, "server-" <> server_id, {server_x, 450})
 
-        tool_spacing = 70
-        first_tool_y = server_y - tool_spacing * (length(tools) - 1) / 2
+        tool_spacing = 110
+        first_tool_x = server_x - tool_spacing * (length(tools) - 1) / 2
 
         tools
         |> Enum.with_index()
         |> Enum.reduce(acc, fn {tool, j}, acc2 ->
-          Map.put(acc2, "tool-" <> tool.name, {700, first_tool_y + j * tool_spacing})
+          Map.put(acc2, "tool-" <> tool.name, {first_tool_x + j * tool_spacing, 700})
         end)
     end)
   end
@@ -141,6 +154,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   @impl true
   def handle_event("nav", %{"page" => page}, socket) do
     {:noreply, push_patch(socket, to: ~p"/mcp/dashboard?page=#{page}")}
+  end
+
+  def handle_event("nav_config_tab", %{"tab" => tab}, socket) when tab in @config_tabs do
+    {:noreply, push_patch(socket, to: ~p"/mcp/dashboard?page=config&config_tab=#{tab}")}
   end
 
   def handle_event("set_console_mode", %{"mode" => mode}, socket)

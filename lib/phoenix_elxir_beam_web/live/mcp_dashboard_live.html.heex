@@ -28,6 +28,35 @@
         <span class="rounded-full bg-base-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
           {@current_user.role}
         </span>
+
+        <details id="settings-menu" class="dropdown dropdown-end">
+          <summary class="btn btn-ghost btn-xs px-1.5 list-none [&::-webkit-details-marker]:hidden">
+            <.icon name="hero-cog-6-tooth" class="size-4" />
+          </summary>
+
+          <div class="dropdown-content z-20 mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-3 shadow-lg">
+            <button
+              type="button"
+              phx-click="nav"
+              phx-value-page="config"
+              onclick="document.getElementById('settings-menu').removeAttribute('open')"
+              class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-base-200"
+            >
+              <.icon name="hero-adjustments-horizontal" class="size-4 text-base-content/60" />
+              Config
+            </button>
+
+            <div class="my-2 h-px bg-base-300"></div>
+
+            <div class="px-2 py-1">
+              <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-base-content/40">
+                Theme
+              </div>
+              <Layouts.theme_toggle />
+            </div>
+          </div>
+        </details>
+
         <.link href={~p"/logout"} method="delete" class="link link-hover">log out</.link>
       </span>
     </div>
@@ -214,236 +243,6 @@
     </div>
 
     <div :if={@page == "executive"} class="grid gap-4">
-      <div
-        id="mcp-tool-graph"
-        phx-hook=".ToolGraph"
-        phx-update="ignore"
-        class="relative flex h-[560px] items-center rounded-box border border-base-300 bg-base-100 p-2"
-      >
-        <div class="graph-toolbar absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-box border border-base-300 bg-base-100 p-1 shadow-sm">
-          <button
-            type="button"
-            data-graph-zoom="in"
-            class="btn btn-ghost btn-xs px-2 font-mono"
-            title="Zoom in"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            data-graph-zoom="out"
-            class="btn btn-ghost btn-xs px-2 font-mono"
-            title="Zoom out"
-          >
-            −
-          </button>
-          <div class="mx-1 h-px bg-base-300"></div>
-          <button
-            type="button"
-            data-graph-zoom="reset"
-            class="btn btn-ghost btn-xs px-2"
-            title="Reset view"
-          >
-            ⟲
-          </button>
-        </div>
-
-        <div class="graph-hint pointer-events-none absolute bottom-3 left-3 z-10 rounded-box border border-base-300 bg-base-100 px-2 py-1 font-mono text-[10px] text-base-content/50">
-          drag to pan · scroll to zoom
-        </div>
-
-        <svg
-          viewBox="0 0 900 480"
-          class="graph-svg h-full w-full cursor-grab active:cursor-grabbing"
-        >
-          <g class="graph-viewport">
-            <g>
-              <% {ax, ay} = @positions["agent"] %> <% {gx, gy} = @positions["gate"] %>
-              <line
-                id="edge-agent-gate"
-                data-from="agent"
-                data-to="gate"
-                class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-                x1={ax}
-                y1={ay}
-                x2={gx}
-                y2={gy}
-              />
-              <%= for %{id: server_id} <- @graph do %>
-                <% {sx, sy} = @positions["server-" <> server_id] %>
-                <line
-                  id={"edge-gate-server-" <> server_id}
-                  data-from="gate"
-                  data-to={"server-" <> server_id}
-                  class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-                  x1={gx}
-                  y1={gy}
-                  x2={sx}
-                  y2={sy}
-                />
-              <% end %>
-
-              <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
-                <% {sx, sy} = @positions["server-" <> server_id] %> <% {tx, ty} =
-                  @positions["tool-" <> tool.name] %>
-                <line
-                  id={"edge-server-" <> server_id <> "-tool-" <> tool.name}
-                  data-from={"server-" <> server_id}
-                  data-to={"tool-" <> tool.name}
-                  class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
-                  x1={sx}
-                  y1={sy}
-                  x2={tx}
-                  y2={ty}
-                />
-              <% end %>
-            </g>
-
-            <g>
-              <g
-                id="node-agent"
-                data-key="agent"
-                class="mcp-node"
-                transform={"translate(#{ax},#{ay})"}
-              >
-                <circle r="24" class="mcp-node-shape fill-primary" />
-                <text
-                  text-anchor="middle"
-                  dy="4"
-                  class="fill-primary-content text-[10px] font-semibold"
-                >
-                  agent
-                </text>
-              </g>
-
-              <g
-                id="node-gate"
-                data-key="gate"
-                class="mcp-node"
-                transform={"translate(#{gx},#{gy})"}
-              >
-                <polygon
-                  points="0,-20 20,0 0,20 -20,0"
-                  class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
-                />
-                <path
-                  d="M-4,-3 a4,4 0 0 1 8,0"
-                  class="fill-none stroke-base-content/60 [stroke-width:1.3px]"
-                />
-                <rect x="-5" y="-3" width="10" height="7" rx="1.5" class="fill-base-content/60" />
-                <text
-                  text-anchor="middle"
-                  dy="34"
-                  class="fill-base-content/70 text-[10px] font-medium"
-                >
-                  policy gate
-                </text>
-              </g>
-
-              <%= for %{id: server_id, name: server_name} <- @graph do %>
-                <% {sx, sy} = @positions["server-" <> server_id] %>
-                <g
-                  id={"node-server-" <> server_id}
-                  data-key={"server-" <> server_id}
-                  class="mcp-node"
-                  transform={"translate(#{sx},#{sy})"}
-                >
-                  <rect
-                    x="-42"
-                    y="-18"
-                    width="84"
-                    height="36"
-                    rx="9"
-                    class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
-                  />
-                  <line
-                    x1="-32"
-                    y1="-8"
-                    x2="-18"
-                    y2="-8"
-                    class="stroke-base-content/40 [stroke-width:1.2px]"
-                  />
-                  <line
-                    x1="-32"
-                    y1="-2"
-                    x2="-18"
-                    y2="-2"
-                    class="stroke-base-content/40 [stroke-width:1.2px]"
-                  />
-                  <line
-                    x1="-32"
-                    y1="4"
-                    x2="-18"
-                    y2="4"
-                    class="stroke-base-content/40 [stroke-width:1.2px]"
-                  />
-                  <text
-                    x="8"
-                    text-anchor="middle"
-                    dy="4"
-                    class="fill-base-content text-[11px] font-semibold"
-                  >
-                    {server_name}
-                  </text>
-                </g>
-              <% end %>
-
-              <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
-                <% {tx, ty} = @positions["tool-" <> tool.name] %>
-                <g
-                  id={"node-tool-" <> tool.name}
-                  data-key={"tool-" <> tool.name}
-                  class="mcp-node"
-                  transform={"translate(#{tx},#{ty})"}
-                >
-                  <rect
-                    x="-46"
-                    y="-14"
-                    width="92"
-                    height="28"
-                    rx="14"
-                    class={[
-                      "mcp-node-shape stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
-                      if(tool.tags != [], do: "fill-warning/10", else: "fill-base-200")
-                    ]}
-                  />
-                  <circle
-                    :if={:sensitive_read in tool.tags}
-                    cx="-36"
-                    cy="-9"
-                    r="3.5"
-                    class="fill-warning"
-                  />
-                  <circle
-                    :if={:network_egress in tool.tags}
-                    cx="36"
-                    cy="-9"
-                    r="3.5"
-                    class="fill-none stroke-error [stroke-width:1.3px]"
-                  />
-                  <text
-                    text-anchor="middle"
-                    dy="4"
-                    class="fill-base-content text-[10px] font-medium"
-                  >
-                    {tool.name}
-                  </text>
-                </g>
-              <% end %>
-            </g>
-            <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
-          </g>
-          <text
-            id="graph-reason-label"
-            text-anchor="middle"
-            x="450"
-            y="465"
-            class="fill-error text-[12px] font-medium opacity-0 transition-opacity duration-300"
-          >
-          </text>
-        </svg>
-      </div>
-
       <div class="flex h-[420px] flex-col overflow-hidden rounded-box border border-base-300 bg-neutral text-neutral-content">
         <div class="flex items-center gap-2 border-b border-neutral-content/10 px-3 py-2">
           <span class="flex gap-1">
@@ -886,6 +685,235 @@
           </div>
         </div>
       </div>
+      <div
+        id="mcp-tool-graph"
+        phx-hook=".ToolGraph"
+        phx-update="ignore"
+        class="relative flex h-[820px] items-center rounded-box border border-base-300 bg-base-100 p-2"
+      >
+        <div class="graph-toolbar absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-box border border-base-300 bg-base-100 p-1 shadow-sm">
+          <button
+            type="button"
+            data-graph-zoom="in"
+            class="btn btn-ghost btn-xs px-2 font-mono"
+            title="Zoom in"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            data-graph-zoom="out"
+            class="btn btn-ghost btn-xs px-2 font-mono"
+            title="Zoom out"
+          >
+            −
+          </button>
+          <div class="mx-1 h-px bg-base-300"></div>
+          <button
+            type="button"
+            data-graph-zoom="reset"
+            class="btn btn-ghost btn-xs px-2"
+            title="Reset view"
+          >
+            ⟲
+          </button>
+        </div>
+
+        <div class="graph-hint pointer-events-none absolute bottom-3 left-3 z-10 rounded-box border border-base-300 bg-base-100 px-2 py-1 font-mono text-[10px] text-base-content/50">
+          drag background to pan · drag a node to move it · scroll to zoom
+        </div>
+
+        <svg
+          viewBox="0 0 480 900"
+          class="graph-svg h-full w-full cursor-grab active:cursor-grabbing"
+        >
+          <g class="graph-viewport">
+            <g>
+              <% {ax, ay} = @positions["agent"] %> <% {gx, gy} = @positions["gate"] %>
+              <line
+                id="edge-agent-gate"
+                data-from="agent"
+                data-to="gate"
+                class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+                x1={ax}
+                y1={ay}
+                x2={gx}
+                y2={gy}
+              />
+              <%= for %{id: server_id} <- @graph do %>
+                <% {sx, sy} = @positions["server-" <> server_id] %>
+                <line
+                  id={"edge-gate-server-" <> server_id}
+                  data-from="gate"
+                  data-to={"server-" <> server_id}
+                  class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+                  x1={gx}
+                  y1={gy}
+                  x2={sx}
+                  y2={sy}
+                />
+              <% end %>
+
+              <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
+                <% {sx, sy} = @positions["server-" <> server_id] %> <% {tx, ty} =
+                  @positions["tool-" <> tool.name] %>
+                <line
+                  id={"edge-server-" <> server_id <> "-tool-" <> tool.name}
+                  data-from={"server-" <> server_id}
+                  data-to={"tool-" <> tool.name}
+                  class="mcp-edge stroke-base-content/25 transition-[stroke,stroke-width] duration-300 [stroke-width:2px]"
+                  x1={sx}
+                  y1={sy}
+                  x2={tx}
+                  y2={ty}
+                />
+              <% end %>
+            </g>
+
+            <g>
+              <g
+                id="node-agent"
+                data-key="agent"
+                class="mcp-node"
+                transform={"translate(#{ax},#{ay})"}
+              >
+                <circle r="24" class="mcp-node-shape fill-primary" />
+                <text
+                  text-anchor="middle"
+                  dy="4"
+                  class="fill-primary-content text-[10px] font-semibold"
+                >
+                  agent
+                </text>
+              </g>
+
+              <g
+                id="node-gate"
+                data-key="gate"
+                class="mcp-node"
+                transform={"translate(#{gx},#{gy})"}
+              >
+                <polygon
+                  points="0,-20 20,0 0,20 -20,0"
+                  class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
+                />
+                <path
+                  d="M-4,-3 a4,4 0 0 1 8,0"
+                  class="fill-none stroke-base-content/60 [stroke-width:1.3px]"
+                />
+                <rect x="-5" y="-3" width="10" height="7" rx="1.5" class="fill-base-content/60" />
+                <text
+                  text-anchor="middle"
+                  dy="34"
+                  class="fill-base-content/70 text-[10px] font-medium"
+                >
+                  policy gate
+                </text>
+              </g>
+
+              <%= for %{id: server_id, name: server_name} <- @graph do %>
+                <% {sx, sy} = @positions["server-" <> server_id] %>
+                <g
+                  id={"node-server-" <> server_id}
+                  data-key={"server-" <> server_id}
+                  class="mcp-node"
+                  transform={"translate(#{sx},#{sy})"}
+                >
+                  <rect
+                    x="-42"
+                    y="-18"
+                    width="84"
+                    height="36"
+                    rx="9"
+                    class="mcp-node-shape fill-base-100 stroke-base-content/40 [stroke-width:2px] transition-colors duration-300"
+                  />
+                  <line
+                    x1="-32"
+                    y1="-8"
+                    x2="-18"
+                    y2="-8"
+                    class="stroke-base-content/40 [stroke-width:1.2px]"
+                  />
+                  <line
+                    x1="-32"
+                    y1="-2"
+                    x2="-18"
+                    y2="-2"
+                    class="stroke-base-content/40 [stroke-width:1.2px]"
+                  />
+                  <line
+                    x1="-32"
+                    y1="4"
+                    x2="-18"
+                    y2="4"
+                    class="stroke-base-content/40 [stroke-width:1.2px]"
+                  />
+                  <text
+                    x="8"
+                    text-anchor="middle"
+                    dy="4"
+                    class="fill-base-content text-[11px] font-semibold"
+                  >
+                    {server_name}
+                  </text>
+                </g>
+              <% end %>
+
+              <%= for %{id: server_id, tools: tools} <- @graph, tool <- tools do %>
+                <% {tx, ty} = @positions["tool-" <> tool.name] %>
+                <g
+                  id={"node-tool-" <> tool.name}
+                  data-key={"tool-" <> tool.name}
+                  class="mcp-node"
+                  transform={"translate(#{tx},#{ty})"}
+                >
+                  <rect
+                    x="-46"
+                    y="-14"
+                    width="92"
+                    height="28"
+                    rx="14"
+                    class={[
+                      "mcp-node-shape stroke-base-content/30 [stroke-width:1.5px] transition-colors duration-300",
+                      if(tool.tags != [], do: "fill-warning/10", else: "fill-base-200")
+                    ]}
+                  />
+                  <circle
+                    :if={:sensitive_read in tool.tags}
+                    cx="-36"
+                    cy="-9"
+                    r="3.5"
+                    class="fill-warning"
+                  />
+                  <circle
+                    :if={:network_egress in tool.tags}
+                    cx="36"
+                    cy="-9"
+                    r="3.5"
+                    class="fill-none stroke-error [stroke-width:1.3px]"
+                  />
+                  <text
+                    text-anchor="middle"
+                    dy="4"
+                    class="fill-base-content text-[10px] font-medium"
+                  >
+                    {tool.name}
+                  </text>
+                </g>
+              <% end %>
+            </g>
+            <circle id="graph-pulse-dot" r="5" class="opacity-0 transition-opacity duration-150" />
+          </g>
+          <text
+            id="graph-reason-label"
+            text-anchor="middle"
+            x="240"
+            y="880"
+            class="fill-error text-[12px] font-medium opacity-0 transition-opacity duration-300"
+          >
+          </text>
+        </svg>
+      </div>
     </div>
 
     <div :if={@page == "config"} class="space-y-4">
@@ -898,7 +926,32 @@
       >
       </div>
 
-      <div class="rounded-box border border-base-300 bg-base-100">
+      <div class="flex flex-wrap items-center gap-1 rounded-box border border-base-300 bg-base-200/60 p-1">
+        <button
+          :for={
+            {tab, label} <- [
+              {"plugins", "Plugins"},
+              {"policy_changes", "Policy changes"},
+              {"client_keys", "Client keys"},
+              {"servers", "Servers & tools"}
+            ]
+          }
+          type="button"
+          phx-click="nav_config_tab"
+          phx-value-tab={tab}
+          class={[
+            "rounded-md px-3 py-1.5 text-sm font-semibold transition-colors",
+            if(@config_tab == tab,
+              do: "bg-base-100 text-primary shadow-sm",
+              else: "text-base-content/60 hover:text-base-content"
+            )
+          ]}
+        >
+          {label}
+        </button>
+      </div>
+
+      <div :if={@config_tab == "plugins"} class="rounded-box border border-base-300 bg-base-100">
         <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
           <h2 class="text-sm font-semibold">Plugins</h2>
 
@@ -1159,7 +1212,10 @@
         </div>
       </div>
 
-      <div class="rounded-box border border-base-300 bg-base-100">
+      <div
+        :if={@config_tab == "policy_changes"}
+        class="rounded-box border border-base-300 bg-base-100"
+      >
         <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
           <h2 class="text-sm font-semibold">Policy changes</h2>
 
@@ -1201,7 +1257,10 @@
         </div>
       </div>
 
-      <div class="rounded-box border border-base-300 bg-base-100">
+      <div
+        :if={@config_tab == "client_keys"}
+        class="rounded-box border border-base-300 bg-base-100"
+      >
         <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
           <h2 class="text-sm font-semibold">Client keys</h2>
 
@@ -1303,7 +1362,7 @@
         </div>
       </div>
 
-      <div class="rounded-box border border-base-300 bg-base-100">
+      <div :if={@config_tab == "servers"} class="rounded-box border border-base-300 bg-base-100">
         <div class="flex items-center gap-2 border-b border-base-300 px-4 py-2.5">
           <h2 class="text-sm font-semibold">Servers &amp; tools</h2>
 
@@ -1659,12 +1718,44 @@
         let dragging = false
         let last = null
 
+        // Node drag takes over from background pan when the mousedown lands
+        // on a `.mcp-node`: we move that node's own transform (and its
+        // attached edges) instead of panning the whole viewport.
+        let draggingNode = null
+        let draggedNode = false
+
+        const svgPoint = (e) => {
+          const pt = svg.createSVGPoint()
+          pt.x = e.clientX
+          pt.y = e.clientY
+          return pt.matrixTransform(viewport.getScreenCTM().inverse())
+        }
+
         svg.addEventListener("mousedown", (e) => {
+          const node = e.target.closest(".mcp-node")
+          if (node) {
+            draggingNode = node
+            draggedNode = false
+            const p = svgPoint(e)
+            const { x, y } = this.nodeXY(node.dataset.key)
+            draggingNode._offset = { x: p.x - x, y: p.y - y }
+            e.stopPropagation()
+            return
+          }
           dragging = true
           last = { x: e.clientX, y: e.clientY }
         })
-        window.addEventListener("mouseup", () => { dragging = false })
+        window.addEventListener("mouseup", () => {
+          dragging = false
+          draggingNode = null
+        })
         window.addEventListener("mousemove", (e) => {
+          if (draggingNode) {
+            draggedNode = true
+            const p = svgPoint(e)
+            this.moveNode(draggingNode, p.x - draggingNode._offset.x, p.y - draggingNode._offset.y)
+            return
+          }
           if (!dragging) return
           this.view.x += e.clientX - last.x
           this.view.y += e.clientY - last.y
@@ -1676,7 +1767,7 @@
           (e) => {
             e.preventDefault()
             const delta = e.deltaY > 0 ? -0.1 : 0.1
-            this.view.scale = Math.max(0.4, Math.min(2.5, this.view.scale + delta))
+            this.view.scale = Math.max(0.25, Math.min(2.5, this.view.scale + delta))
             apply()
           },
           { passive: false }
@@ -1686,14 +1777,37 @@
           btn.addEventListener("click", () => {
             const action = btn.getAttribute("data-graph-zoom")
             if (action === "in") this.view.scale = Math.min(2.5, this.view.scale + 0.2)
-            else if (action === "out") this.view.scale = Math.max(0.4, this.view.scale - 0.2)
+            else if (action === "out") this.view.scale = Math.max(0.25, this.view.scale - 0.2)
             else this.view = { x: 0, y: 0, scale: 1 }
             apply()
           })
         })
 
         this.el.querySelectorAll(".mcp-node").forEach((node) => {
-          node.addEventListener("click", () => this.inspectNode(node))
+          node.addEventListener("click", () => {
+            if (draggedNode) {
+              draggedNode = false
+              return
+            }
+            this.inspectNode(node)
+          })
+        })
+      },
+
+      // Moves one node to an absolute SVG-space position and keeps every
+      // edge touching it visually attached (edges are separate `<line>`
+      // elements addressed by `data-from`/`data-to`, not children of the
+      // node group).
+      moveNode(node, x, y) {
+        node.setAttribute("transform", `translate(${x},${y})`)
+        const key = node.dataset.key
+        this.el.querySelectorAll(`.mcp-edge[data-from="${key}"]`).forEach((edge) => {
+          edge.setAttribute("x1", x)
+          edge.setAttribute("y1", y)
+        })
+        this.el.querySelectorAll(`.mcp-edge[data-to="${key}"]`).forEach((edge) => {
+          edge.setAttribute("x2", x)
+          edge.setAttribute("y2", y)
         })
       },
 

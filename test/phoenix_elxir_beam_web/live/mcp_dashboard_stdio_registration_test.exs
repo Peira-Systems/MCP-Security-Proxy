@@ -16,7 +16,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardStdioRegistrationTest do
   end
 
   test "toggling to stdio swaps the registration form fields", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/?page=config")
+    {:ok, view, _html} = live(conn, ~p"/?page=config&config_tab=servers")
 
     refute has_element?(view, "#register-stdio-server-form")
     assert has_element?(view, "#register-server-form")
@@ -31,7 +31,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardStdioRegistrationTest do
     node = System.find_executable("node") || raise "node not found on PATH"
     fixture = Path.expand("../../support/fixtures/echo_mcp_server.js", __DIR__)
 
-    {:ok, view, _html} = live(conn, ~p"/?page=config")
+    {:ok, view, _html} = live(conn, ~p"/?page=config&config_tab=servers")
 
     view |> element("#register-transport-stdio") |> render_click()
 
@@ -58,7 +58,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardStdioRegistrationTest do
   end
 
   test "rejects stdio registration with a blank command", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/?page=config")
+    {:ok, view, _html} = live(conn, ~p"/?page=config&config_tab=servers")
 
     view |> element("#register-transport-stdio") |> render_click()
 
