@@ -31,7 +31,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-security-review@main
+      # Pinned to a commit, not @main, since this job holds pull-requests:write
+      # and the ANTHROPIC_API_KEY secret — an upstream main compromise
+      # shouldn't be able to reach either without a manual bump here.
+      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
         if: steps.gate.outputs.enabled == 'true'
         with:
           comment-pr: true
