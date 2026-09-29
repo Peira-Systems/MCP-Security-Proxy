@@ -1,0 +1,9 @@
+MCP Security Proxy
+Copyright 2026 Darshan Gencarelle
+
+This product is licensed under the Apache License, Version 2.0, subject to
+the Commons Clause License Condition v1.0. See the LICENSE file for the full
+terms, including the restriction on selling the software.
+
+This product includes software developed by third parties, distributed
+under their own licenses as declared in mix.exs and mix.lock.
