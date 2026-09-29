@@ -197,6 +197,15 @@ if config_env() == :prod do
       http_1_options: [max_header_length: 16_384],
       thousand_island_options: [num_connections: 16_384]
     ],
+    # Origin check for the LiveView/channel socket. Defaults to just
+    # `url: [host: ...]` (PHX_HOST), which rejects same-box access via
+    # `localhost`/`127.0.0.1` — allow those too alongside the configured host.
+    check_origin: [
+      "//" <> host,
+      "//localhost",
+      "//127.0.0.1",
+      "//[::1]"
+    ],
     secret_key_base: secret_key_base
 
   # TLS termination in the app container. The Docker Compose reference setup
