@@ -20,9 +20,6 @@ if System.get_env("PHX_SERVER") do
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint, server: true
 end
 
-config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
-
 # When the proxy runs in a container it can't reach an MCP server on the
 # *host's* loopback via `127.0.0.1`. Setting this (the compose file sets it to
 # `host.docker.internal`) lets a registered `localhost` / `127.0.0.1` URL be
