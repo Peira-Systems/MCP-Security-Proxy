@@ -97,6 +97,12 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     {:ok, refresh_history(socket)}
   end
 
+  @impl true
+  def handle_params(params, _uri, socket) do
+    page = if params["page"] == "config", do: "config", else: "executive"
+    {:noreply, assign(socket, :page, page)}
+  end
+
   # The graph's server + tool nodes come from the live ServerRegistry —
   # `%{id, name, tools}` per registered server.
   defp build_graph do
@@ -133,6 +139,10 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   end
 
   @impl true
+  def handle_event("nav", %{"page" => page}, socket) do
+    {:noreply, push_patch(socket, to: ~p"/mcp/dashboard?page=#{page}")}
+  end
+
   def handle_event("set_console_mode", %{"mode" => mode}, socket)
       when mode in ["live", "history"] do
     socket = assign(socket, :console_mode, mode)
@@ -939,6 +949,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     _ -> []
   catch
     :exit, _ -> []
+  end
+
+  # ISO-8601 deadline for the client-side countdown ring — `created_at` plus
+  # the hold's own `timeout_ms`, read once into a `data-deadline` attribute.
+  defp hold_deadline(%{created_at: %DateTime{} = created_at, timeout_ms: timeout_ms}) do
+    created_at
+    |> DateTime.add(timeout_ms, :millisecond)
+    |> DateTime.to_iso8601()
   end
 
   defp held_ago(%DateTime{} = ts) do
