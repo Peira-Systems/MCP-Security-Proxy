@@ -65,3 +65,10 @@ Health: `/health/live` (liveness, used by the container healthcheck) and
 ## Stack
 
 Phoenix 1.8 · LiveView · Bandit · Ecto/Postgres. HTTP via `Req`.
+
+## License
+
+Apache License 2.0, subject to the Commons Clause License Condition v1.0.
+You're free to view, fork, modify, and distribute this code for personal or
+internal use — you just can't sell it or offer it as a paid product/service.
+See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) for the full terms.
