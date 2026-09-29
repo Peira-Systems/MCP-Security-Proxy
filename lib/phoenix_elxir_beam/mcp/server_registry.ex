@@ -588,18 +588,32 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
            receive_timeout: HttpTransport.receive_timeout(opts),
            connect_options: HttpTransport.connect_options(opts)
          ) do
-      {:ok, %Req.Response{status: status, body: %{"result" => result}} = resp}
-      when status in 200..299 ->
-        {:ok, result, resp}
-
-      {:ok, %Req.Response{status: status, body: %{"error" => error}}} when status in 200..299 ->
-        {:error, Map.get(error, "message", "server returned an error")}
+      {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+        decode_rpc_response(resp)
 
       {:ok, %Req.Response{status: status}} ->
         {:error, "server responded with HTTP #{status}"}
 
       {:error, reason} ->
         {:error, "connection failed: #{Exception.format(:error, reason)}"}
+    end
+  end
+
+  # A 2xx response may carry its JSON-RPC message as `application/json` or a
+  # single `text/event-stream` frame — see `HttpTransport.decode_body/1`.
+  defp decode_rpc_response(resp) do
+    case HttpTransport.decode_body(resp) do
+      {:ok, %{"result" => result}} ->
+        {:ok, result, resp}
+
+      {:ok, %{"error" => error}} ->
+        {:error, Map.get(error, "message", "server returned an error")}
+
+      {:ok, _decoded} ->
+        {:error, "unexpected response while discovering tools"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

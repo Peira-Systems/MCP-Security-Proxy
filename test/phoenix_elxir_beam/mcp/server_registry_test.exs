@@ -38,6 +38,27 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     assert ServerRegistry.get_server(server.id, name) == server
   end
 
+  test "registering a server that answers over text/event-stream discovers its tools", %{
+    name: name
+  } do
+    base_url = PhoenixElxirBeam.MCPHTTPTestServer.start_sse!()
+
+    assert {:ok, server} = ServerRegistry.register_server("SSE server", base_url, [], name)
+    assert server.name == "SSE server"
+
+    assert Enum.map(server.tools, & &1.name) == [
+             "list_files",
+             "read_secrets",
+             "read_config",
+             "export_all",
+             "post_webhook",
+             "big_export",
+             "progress_export",
+             "progress_then_cut",
+             "cut_before_relay"
+           ]
+  end
+
   test "registering an unreachable server returns an error", %{name: name} do
     assert {:error, reason} =
              ServerRegistry.register_server("Nowhere", "http://127.0.0.1:1/mcp", [], name)

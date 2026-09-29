@@ -109,6 +109,26 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
     "http://127.0.0.1:#{port}/mcp"
   end
 
+  @doc """
+  Same server, but every plain JSON-RPC reply (initialize, tools/list, a
+  non-chunked/non-sse tools/call) is wrapped as a single `text/event-stream`
+  frame instead of a bare `application/json` body — the shape the MCP SDK's
+  `StreamableHTTPServerTransport` uses by default (and so most current
+  spec-compliant servers), which `HttpTransport.decode_body/1` exists to
+  handle. Exercises that decode path against a real Plug/Bandit server
+  rather than a hand-built SSE string.
+  """
+  def start_sse! do
+    port = free_port()
+
+    ExUnit.Callbacks.start_supervised!(
+      {Bandit, plug: {__MODULE__, sse: true}, scheme: :http, ip: {127, 0, 0, 1}, port: port},
+      id: {__MODULE__, port}
+    )
+
+    "http://127.0.0.1:#{port}/mcp"
+  end
+
   defp free_port do
     {:ok, socket} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}])
     {:ok, port} = :inet.port(socket)
@@ -120,9 +140,10 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
 
   def init(opts), do: opts
 
-  def call(conn, _opts) do
+  def call(conn, opts) do
     {:ok, body, conn} = read_body(conn)
     req = Jason.decode!(body)
+    sse_mode? = Keyword.get(opts, :sse, false)
 
     cond do
       chunked_tool?(req) ->
@@ -130,6 +151,13 @@ defmodule PhoenixElxirBeam.MCPHTTPTestServer do
 
       sse_tool?(req) ->
         send_sse_response(conn, req)
+
+      sse_mode? ->
+        payload = respond(req["method"], req["params"] || %{}, req["id"])
+
+        conn
+        |> put_resp_content_type("text/event-stream")
+        |> send_resp(200, "event: message\ndata: #{Jason.encode!(payload)}\n\n")
 
       true ->
         payload = respond(req["method"], req["params"] || %{}, req["id"])

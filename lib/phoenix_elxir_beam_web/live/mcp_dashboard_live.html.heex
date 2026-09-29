@@ -49,7 +49,9 @@
               class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-base-200"
             >
               <.icon
-                name={if @page == "config", do: "hero-arrow-left", else: "hero-adjustments-horizontal"}
+                name={
+                  if @page == "config", do: "hero-arrow-left", else: "hero-adjustments-horizontal"
+                }
                 class="size-4 text-base-content/60"
               />
               {if @page == "config", do: "Executive view", else: "Config"}
@@ -71,8 +73,10 @@
               method="delete"
               class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-base-200"
             >
-              <.icon name="hero-arrow-right-start-on-rectangle" class="size-4 text-base-content/60" />
-              Log out
+              <.icon
+                name="hero-arrow-right-start-on-rectangle"
+                class="size-4 text-base-content/60"
+              /> Log out
             </.link>
           </div>
         </details>

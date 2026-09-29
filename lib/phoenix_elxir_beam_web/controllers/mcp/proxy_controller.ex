@@ -624,8 +624,14 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
              receive_timeout: HttpTransport.receive_timeout(server),
              connect_options: HttpTransport.connect_options(server)
            ) do
-        {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
-        _ -> {:error, "upstream real server error"}
+        {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+          case HttpTransport.decode_body(resp) do
+            {:ok, decoded} -> {:ok, decoded}
+            {:error, _reason} -> {:error, "upstream real server error"}
+          end
+
+        _ ->
+          {:error, "upstream real server error"}
       end
 
     {result, nil}

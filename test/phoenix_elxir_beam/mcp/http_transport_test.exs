@@ -90,4 +90,63 @@ defmodule PhoenixElxirBeam.MCP.HttpTransportTest do
     Application.put_env(:phoenix_elxir_beam, :upstream_tls_verify, false)
     assert HttpTransport.connect_options(%{tls_verify: true}) == []
   end
+
+  # -- decode_body/1 --------------------------------------------------
+
+  test "decode_body/1 passes an already-decoded JSON body through" do
+    resp = %Req.Response{status: 200, body: %{"result" => %{"ok" => true}}}
+    assert HttpTransport.decode_body(resp) == {:ok, %{"result" => %{"ok" => true}}}
+  end
+
+  test "decode_body/1 JSON-decodes a plain application/json string body" do
+    resp =
+      %Req.Response{status: 200, body: ~s({"result":{"ok":true}})}
+      |> Req.Response.put_header("content-type", "application/json")
+
+    assert HttpTransport.decode_body(resp) == {:ok, %{"result" => %{"ok" => true}}}
+  end
+
+  test "decode_body/1 decodes a single text/event-stream frame's data line" do
+    body = "event: message\nid: abc-123\ndata: {\"result\":{\"ok\":true}}\n\n"
+
+    resp =
+      %Req.Response{status: 200, body: body}
+      |> Req.Response.put_header("content-type", "text/event-stream")
+
+    assert HttpTransport.decode_body(resp) == {:ok, %{"result" => %{"ok" => true}}}
+  end
+
+  test "decode_body/1 concatenates multiple data: lines in one SSE frame per spec" do
+    body = "event: message\ndata: {\"result\":\ndata: {\"ok\":true}}\n\n"
+
+    resp =
+      %Req.Response{status: 200, body: body}
+      |> Req.Response.put_header("content-type", "text/event-stream")
+
+    assert HttpTransport.decode_body(resp) == {:ok, %{"result" => %{"ok" => true}}}
+  end
+
+  test "decode_body/1 errors on an event-stream body with no data: line" do
+    resp =
+      %Req.Response{status: 200, body: "event: message\n\n"}
+      |> Req.Response.put_header("content-type", "text/event-stream")
+
+    assert {:error, _reason} = HttpTransport.decode_body(resp)
+  end
+
+  test "decode_body/1 errors on malformed JSON in an event-stream data: line" do
+    resp =
+      %Req.Response{status: 200, body: "data: not json\n\n"}
+      |> Req.Response.put_header("content-type", "text/event-stream")
+
+    assert {:error, _reason} = HttpTransport.decode_body(resp)
+  end
+
+  test "decode_body/1 errors on malformed JSON in a plain-JSON body" do
+    resp =
+      %Req.Response{status: 200, body: "not json"}
+      |> Req.Response.put_header("content-type", "application/json")
+
+    assert {:error, _reason} = HttpTransport.decode_body(resp)
+  end
 end

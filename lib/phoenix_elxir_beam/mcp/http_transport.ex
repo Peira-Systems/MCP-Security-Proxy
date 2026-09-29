@@ -22,6 +22,11 @@ defmodule PhoenixElxirBeam.MCP.HttpTransport do
       `127.0.0.1` (the JetBrains plugin again) answer any non-loopback
       `Host` with HTTP 403. Outside a container the env var is unset and
       loopback URLs are used verbatim.
+
+  `decode_body/1` handles the other half: a POST response may come back as
+  plain `application/json` or as a single `text/event-stream` frame — both
+  are valid per spec, and current MCP servers commonly default to the
+  latter, so a client that only decodes JSON can't talk to them.
   """
 
   @accept "application/json, text/event-stream"
@@ -88,4 +93,65 @@ defmodule PhoenixElxirBeam.MCP.HttpTransport do
   defp loopback_alias do
     Application.get_env(:phoenix_elxir_beam, :host_loopback_alias)
   end
+
+  @doc """
+  Decodes a non-streaming Streamable HTTP response body into the single
+  JSON-RPC message it carries, whichever of the two shapes the spec allows
+  a server to answer a POST with:
+
+    * `application/json` — Req already decoded this into a map; pass through.
+    * `text/event-stream` — one `event: message` frame containing the
+      response. Current MCP servers (the SDK's `StreamableHTTPServerTransport`
+      defaults to this) require the client to accept both types
+      (`prepare/1` sends that `Accept` header) and may answer either way, so
+      a client that only understands `application/json` can no longer talk
+      to a growing share of real servers. This does not handle a genuinely
+      *streaming* SSE response (multiple frames, e.g. progress
+      notifications before a final result) — that path is `ProxyController`'s
+      `StreamProxy` relay, which reads the raw connection instead of Req.
+
+  Returns `{:ok, decoded_map}` or `{:error, reason}`.
+  """
+  def decode_body(%Req.Response{body: body}) when is_map(body) do
+    {:ok, body}
+  end
+
+  def decode_body(%Req.Response{body: body} = resp) when is_binary(body) do
+    if event_stream?(resp) do
+      decode_sse(body)
+    else
+      case Jason.decode(body) do
+        {:ok, decoded} -> {:ok, decoded}
+        {:error, _} -> {:error, "could not decode response body"}
+      end
+    end
+  end
+
+  def decode_body(_resp), do: {:error, "could not decode response body"}
+
+  defp event_stream?(resp) do
+    resp
+    |> Req.Response.get_header("content-type")
+    |> Enum.any?(&String.contains?(&1, "text/event-stream"))
+  end
+
+  # A single-response SSE body is one `event: ...` frame: a handful of
+  # `field: value` lines, blank-line terminated. The JSON-RPC payload lives
+  # in its `data:` line(s) — per the SSE spec, multiple `data:` lines in one
+  # frame concatenate with `\n` before decoding.
+  defp decode_sse(body) do
+    data =
+      body
+      |> String.split("\n")
+      |> Enum.filter(&String.starts_with?(&1, "data:"))
+      |> Enum.map_join("\n", &(&1 |> String.trim_leading("data:") |> String.trim_leading(" ")))
+
+    case data do
+      "" -> {:error, "event-stream response carried no data frame"}
+      json -> Jason.decode(json) |> decode_result("could not decode event-stream data frame")
+    end
+  end
+
+  defp decode_result({:ok, decoded}, _err_msg), do: {:ok, decoded}
+  defp decode_result({:error, _}, err_msg), do: {:error, err_msg}
 end
