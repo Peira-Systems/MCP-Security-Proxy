@@ -57,7 +57,8 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        {:priv, "plugins/injection_rules.json"}
      ],
      config: %{},
-     grants: %{block: true, mutate: [], network: false}},
+     grants: %{block: true, mutate: [], network: false},
+     pin: [code: "sha256:aa5f802f3cdfd99edcb04dd04d233826bbf95fd5e634f634540c2703d9db39bb"]},
     # W4 reference Wasm plugin (docs/wasm-plugin-plan.md) -- a wasm32-wasip1 port of
     # RuleEngine above, verdict-parity-tested against it
     # (rule_engine_wasm_parity_test.exs). Ships alongside, not instead of, the trusted
