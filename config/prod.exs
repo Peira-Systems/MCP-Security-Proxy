@@ -96,7 +96,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
       ],
       config: %{},
       grants: %{block: true, mutate: [], network: false},
-      pin: [code: "sha256:4b2a0d9aadbe64e8ce7cb5fa653d1b90461d1198874406e986ace6aa5f016e28"],
+      pin: [code: "sha256:1f4fdb65e840362a5c000635e80e535b71930af63361f7be1c5c15a6ab3bb2d2"],
       limits: [as_mb: 512, cpu_s: 30]
     }
   ]
