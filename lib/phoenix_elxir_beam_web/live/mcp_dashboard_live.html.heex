@@ -1,13 +1,19 @@
 <Layouts.app flash={@flash}>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-3">
-      <div class="flex items-center gap-2">
+      <button
+        type="button"
+        phx-click="nav"
+        phx-value-page="executive"
+        class="flex items-center gap-2 rounded-md hover:opacity-80"
+        title="Go to Executive view"
+      >
         <span class="flex size-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-content">
           M
         </span>
 
         <h1 class="text-base font-semibold tracking-tight">MCP Security Proxy</h1>
-      </div>
+      </button>
 
       <span class="text-sm text-base-content/50">
         {length(@real_servers)} server(s) · {@session_count} session(s) · {length(@plugins)} plugin(s)
@@ -678,7 +684,7 @@
             type="button"
             data-graph-zoom="reset"
             class="btn btn-ghost btn-xs px-2"
-            title="Reset view"
+            title="Reset view and node positions"
           >
             ⟲
           </button>
@@ -1660,7 +1666,25 @@
         this.pulseToken = 0
         this.handleEvent("mcp_graph_reset", () => this.reset())
         this.handleEvent("mcp_graph_event", (payload) => this.pulse(payload))
+        this.captureInitialLayout()
         this.initPanZoom()
+      },
+
+      // Snapshots each node's server-rendered position so the toolbar's
+      // reset button can snap dragged nodes back without a page reload.
+      captureInitialLayout() {
+        this.initialLayout = {}
+        this.el.querySelectorAll(".mcp-node").forEach((node) => {
+          const xy = this.nodeXY(node.dataset.key)
+          if (xy) this.initialLayout[node.dataset.key] = xy
+        })
+      },
+
+      resetLayout() {
+        Object.entries(this.initialLayout || {}).forEach(([key, { x, y }]) => {
+          const node = this.el.querySelector(`.mcp-node[data-key="${key}"]`)
+          if (node) this.moveNode(node, x, y)
+        })
       },
 
       // Pan/zoom applies a single translate+scale to the `.graph-viewport`
@@ -1743,7 +1767,10 @@
             const action = btn.getAttribute("data-graph-zoom")
             if (action === "in") this.view.scale = Math.min(2.5, this.view.scale + 0.2)
             else if (action === "out") this.view.scale = Math.max(0.25, this.view.scale - 0.2)
-            else this.view = { x: 0, y: 0, scale: 1 }
+            else {
+              this.view = { x: 0, y: 0, scale: 1 }
+              this.resetLayout()
+            }
             apply()
           })
         })
