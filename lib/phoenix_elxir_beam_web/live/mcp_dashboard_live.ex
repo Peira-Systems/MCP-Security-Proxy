@@ -70,6 +70,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:positions, layout_positions(graph))
       |> assign(:real_servers, ServerRegistry.list_servers())
       |> assign(:registering, false)
+      |> assign(:register_transport, "http")
       |> assign(:expanded_server_ids, MapSet.new())
       |> assign(:console_mode, "live")
       |> assign(:history_status, "all")
@@ -519,6 +520,41 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         send(
           liveview,
           {:server_registered, ServerRegistry.register_server(name, base_url, opts)}
+        )
+      end)
+
+      {:noreply, socket |> assign(:registering, true) |> clear_flash()}
+    end
+  end
+
+  def handle_event("set_register_transport", %{"transport" => transport}, socket)
+      when transport in ["http", "stdio"] do
+    {:noreply, assign(socket, :register_transport, transport)}
+  end
+
+  def handle_event(
+        "register_stdio_server",
+        %{"name" => name, "command" => command} = params,
+        socket
+      ) do
+    name = String.trim(name)
+    command = String.trim(command)
+
+    if name == "" or command == "" do
+      {:noreply, put_flash(socket, :error, "Name and command are both required")}
+    else
+      args =
+        params
+        |> Map.get("args", "")
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim/1)
+
+      liveview = self()
+
+      Task.Supervisor.start_child(PhoenixElxirBeam.MCP.TaskSupervisor, fn ->
+        send(
+          liveview,
+          {:server_registered, ServerRegistry.register_stdio_server(name, command, args)}
         )
       end)
 

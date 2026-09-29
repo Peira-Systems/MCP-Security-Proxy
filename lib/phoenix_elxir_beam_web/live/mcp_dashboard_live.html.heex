@@ -1165,7 +1165,41 @@
         </span>
       </div>
 
+      <div class="flex items-center gap-1 border-b border-base-300 px-4 py-2 text-xs">
+        <button
+          type="button"
+          id="register-transport-http"
+          phx-click="set_register_transport"
+          phx-value-transport="http"
+          class={[
+            "rounded px-2 py-1",
+            if(@register_transport == "http",
+              do: "bg-primary text-primary-content",
+              else: "text-base-content/50 hover:bg-base-300"
+            )
+          ]}
+        >
+          HTTP
+        </button>
+        <button
+          type="button"
+          id="register-transport-stdio"
+          phx-click="set_register_transport"
+          phx-value-transport="stdio"
+          class={[
+            "rounded px-2 py-1",
+            if(@register_transport == "stdio",
+              do: "bg-primary text-primary-content",
+              else: "text-base-content/50 hover:bg-base-300"
+            )
+          ]}
+        >
+          stdio
+        </button>
+      </div>
+
       <.form
+        :if={@register_transport == "http"}
         for={to_form(%{})}
         id="register-server-form"
         phx-submit="register_server"
@@ -1206,6 +1240,41 @@
             class="checkbox checkbox-xs"
           /> Skip TLS verify
         </label>
+
+        <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
+          {if @registering, do: "Registering…", else: "Register"}
+        </button>
+      </.form>
+
+      <.form
+        :if={@register_transport == "stdio"}
+        for={to_form(%{})}
+        id="register-stdio-server-form"
+        phx-submit="register_stdio_server"
+        class="flex flex-wrap items-center gap-2 border-b border-base-300 px-4 py-2.5"
+      >
+        <input
+          id="register-stdio-server-name"
+          type="text"
+          name="name"
+          placeholder="Name"
+          class="input input-bordered input-sm w-40"
+        />
+        <input
+          id="register-stdio-server-command"
+          type="text"
+          name="command"
+          placeholder="/path/to/server-binary"
+          class="input input-bordered input-sm min-w-[16rem] flex-1"
+        />
+        <textarea
+          id="register-stdio-server-args"
+          name="args"
+          placeholder="args, one per line"
+          rows="1"
+          title="One argument per line — a path containing spaces is a single argument"
+          class="textarea textarea-bordered textarea-sm min-w-[12rem] flex-1 leading-tight"
+        ></textarea>
 
         <button type="submit" disabled={@registering} class="btn btn-primary btn-sm">
           {if @registering, do: "Registering…", else: "Register"}
