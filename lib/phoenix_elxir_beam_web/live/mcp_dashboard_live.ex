@@ -66,6 +66,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     socket =
       socket
       |> assign(:page_title, "MCP Dashboard")
+      |> assign(:app_version, Application.spec(:phoenix_elxir_beam, :vsn) |> to_string())
       |> assign(:config_tab, "plugins")
       |> assign(:graph, graph)
       |> assign(:positions, layout_positions(graph))

@@ -68,6 +68,16 @@
 
             <div class="my-2 h-px bg-base-300"></div>
 
+            <button
+              type="button"
+              onclick="document.getElementById('settings-menu').removeAttribute('open'); document.getElementById('about-modal').showModal()"
+              class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-base-200"
+            >
+              <.icon name="hero-information-circle" class="size-4 text-base-content/60" /> About
+            </button>
+
+            <div class="my-2 h-px bg-base-300"></div>
+
             <.link
               href={~p"/logout"}
               method="delete"
@@ -82,6 +92,44 @@
         </details>
       </span>
     </div>
+
+    <dialog id="about-modal" class="modal">
+      <div class="modal-box max-w-sm">
+        <button
+          type="button"
+          aria-label="Close"
+          class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+          onclick="document.getElementById('about-modal').close()"
+        >
+          <.icon name="hero-x-mark" class="size-4" />
+        </button>
+
+        <div class="flex flex-col items-center gap-3 py-2 text-center">
+          <span class="flex size-10 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-content">
+            M
+          </span>
+
+          <div>
+            <h3 class="text-base font-semibold">MCP Security Proxy</h3>
+            <p class="text-xs text-base-content/50">Version {@app_version}</p>
+          </div>
+
+          <a
+            href="https://github.com/Peira-Systems/MCP-Security-Proxy"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="link link-primary text-sm"
+          >
+            View on GitHub
+          </a>
+
+          <p class="text-xs text-base-content/40">Created by Darshan Gencarelle</p>
+        </div>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+      </form>
+    </dialog>
 
     <div
       :if={match?({:broken, _}, @integrity)}
