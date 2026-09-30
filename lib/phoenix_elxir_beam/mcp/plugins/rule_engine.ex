@@ -59,8 +59,20 @@ defmodule PhoenixElxirBeam.MCP.Plugins.RuleEngine do
   def evaluate(:pre_call, %CallContext{} = ctx) do
     ctx.plugin_config
     |> Map.get("rules", [])
-    |> Enum.find(&matches?(&1, ctx))
+    |> first_match(ctx)
     |> to_decision()
+  end
+
+  @doc """
+  Returns the first rule in `rules` whose `match` predicates all hold against
+  `ctx` (first-match-wins, same semantics as `evaluate/2`), or `nil` if none
+  match. Exposed so callers outside the plugin pipeline — the rule coverage
+  checker (`PhoenixElxirBeam.MCP.RuleCoverage`) — can ask "what would this
+  engine actually do" without re-implementing predicate matching.
+  """
+  @spec first_match([map()], CallContext.t()) :: map() | nil
+  def first_match(rules, %CallContext{} = ctx) when is_list(rules) do
+    Enum.find(rules, &matches?(&1, ctx))
   end
 
   defp to_decision(nil), do: Decision.allow()
