@@ -111,4 +111,45 @@ defmodule Mix.Tasks.Mcp.Rules.CheckTest do
     assert report =~ "0 servers registered"
     refute report =~ "0 gaps"
   end
+
+  # `run_check/0` calls an unrescued `Repo.query!("SELECT 1")` reachability
+  # probe before `ServerStore.all/0`, specifically so an unreachable Postgres
+  # crashes the task instead of `ServerStore.all/0`'s own rescue-to-`[]`
+  # making "DB is down" indistinguishable from "zero servers registered".
+  #
+  # We can't simulate true unreachability by reconfiguring
+  # `PhoenixElxirBeam.Repo` itself mid-test: it's a pooled, already-started
+  # `Ecto.Adapters.SQL.Sandbox` connection shared (via `DataCase`) with every
+  # other test in this run, so repointing its config wouldn't affect the
+  # live pool without restarting the Repo supervisor — which would tear down
+  # the sandbox out from under concurrently-running tests.
+  #
+  # Instead, this proves the exact failure mechanism the probe relies on
+  # (an unreachable connection exits/crashes loudly rather than returning
+  # an ignorable error value) via a throwaway `Postgrex` connection pointed
+  # at a refused port, independent of the shared test Repo.
+  test "the reachability probe's query raises when Postgres is unreachable" do
+    Process.flag(:trap_exit, true)
+
+    {:ok, conn} =
+      Postgrex.start_link(
+        hostname: "127.0.0.1",
+        port: 1,
+        username: "mcp_proxy",
+        password: "unreachable",
+        database: "unreachable",
+        backoff_type: :stop,
+        sync_connect: false,
+        show_sensitive_data_on_connection_error: false
+      )
+
+    # An unroutable/refused connection surfaces as the (linked) connection
+    # process itself exiting once its supervisor gives up retrying
+    # (`backoff_type: :stop`), rather than as an `{:error, _}` return —
+    # this is the same failure shape `ensure_db_reachable!/0`'s bare
+    # `Repo.query!("SELECT 1")` relies on to bring the whole
+    # `mix mcp.rules.check` task down loudly instead of silently reporting
+    # "0 servers registered".
+    assert_receive {:EXIT, ^conn, _reason}, 2_000
+  end
 end
