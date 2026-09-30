@@ -42,8 +42,19 @@ check, since there's nothing to check against without registrations) and
 reads `PhoenixElxirBeam.MCP.ServerStore.all()` directly, the same source
 `ServerRegistry.handle_continue(:restore, ...)` reads at boot. This avoids
 spinning up the full `ServerRegistry` GenServer / re-running live handshakes
-against upstream servers during CI — the task only needs each tool's
-persisted `name`, `tags` (operator-assigned), and `suggested_tags`.
+against upstream servers during CI.
+
+**Prerequisite schema change:** today `ServerStore.persist/1`'s `tool_state`
+overlay only writes `tags`, `quarantined`, `quarantine_reason`, and `hash`
+per tool — `suggested_tags` is computed by `TagInference.infer/2` at
+handshake time but only ever lives in `ServerRegistry`'s in-memory state,
+never persisted. Without it, gap type B (unreviewed tool) can't be detected
+from Postgres alone. This plan adds `"suggested_tags"` as a fourth key in
+the same `tool_state` map (no migration needed — `tool_state` is already a
+free-form `:map` column), written from the tool's existing in-memory
+`suggested_tags` field, and read back out wherever the overlay is
+reconstituted (`ServerRegistry.rebuild/3`, `rehandshaked/2`) the same way
+`tags` already is.
 
 Rules come from `Application.get_env(:phoenix_elxir_beam,
 PhoenixElxirBeam.MCP)[:plugins]`, compiled at build time for whatever `MIX_ENV`
