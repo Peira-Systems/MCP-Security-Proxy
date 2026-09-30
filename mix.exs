@@ -126,6 +126,10 @@ defmodule PhoenixElxirBeam.MixProject do
         "phx.digest"
       ],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      # mix mcp.rules.check (CI-only, needs a real staging DB with real
+      # server registrations — see .github/workflows/rule-coverage.yml and
+      # docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md)
+      # deliberately isn't in this list.
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
       # The full gate CI runs on every PR. `deps.audit` + `dialyzer` on top of
       # precommit; `format --check-formatted` instead of rewriting in place.
