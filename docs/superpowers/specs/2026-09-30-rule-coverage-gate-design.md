@@ -55,7 +55,9 @@ tuple and its `config["rules"]`.
 For each tool with at least one sensitive tag (assigned or suggested):
 
 **Gap type A — tagged, uncovered.** The tool has an operator-assigned tag in
-`@sensitive_tags` (`:sensitive_read`, `:network_egress`). Build a synthetic
+one of the two tags `TagInference` knows about (`:sensitive_read`,
+`:network_egress` — there's no broader sensitive-tag registry in this
+codebase; these two are the whole set). Build a synthetic
 call context: no `agent_id` set, `tool_name` set to the tool's name, call
 tags set to its assigned `tags`, empty session (no taint, no seen_tags). Run
 it through the **real** first-match-wins resolution (see below). If the
