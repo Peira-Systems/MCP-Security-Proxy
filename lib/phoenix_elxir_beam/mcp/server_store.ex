@@ -95,6 +95,7 @@ defmodule PhoenixElxirBeam.MCP.ServerStore do
       {tool.name,
        %{
          "tags" => Enum.map(tool.tags || [], &to_string/1),
+         "suggested_tags" => Enum.map(tool[:suggested_tags] || [], &to_string/1),
          "quarantined" => tool[:quarantined] || false,
          "quarantine_reason" => tool[:quarantine_reason],
          "hash" => tool[:description_hash]

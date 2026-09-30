@@ -54,6 +54,24 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryDurabilityTest do
     assert Enum.find(restored.tools, &(&1.name == "read_secrets")).tags == [:sensitive_read]
   end
 
+  test "suggested_tags is persisted in the tool_state overlay" do
+    base_url = PhoenixElxirBeam.MCPHTTPTestServer.start!()
+
+    {:ok, server} =
+      ServerRegistry.register_server(
+        "dur-suggested-#{System.unique_integer([:positive])}",
+        base_url,
+        [],
+        @name
+      )
+
+    tool = Enum.find(server.tools, &(&1.name == "read_secrets"))
+    assert :sensitive_read in tool.suggested_tags
+
+    row = Repo.get(ServerRegistration, server.id)
+    assert "sensitive_read" in row.tool_state["read_secrets"]["suggested_tags"]
+  end
+
   test "a stdio server is re-spawned and its quarantine restored after a restart" do
     node = System.find_executable("node") || raise "node not found on PATH"
     fixture = Path.expand("../../support/fixtures/echo_mcp_server.js", __DIR__)
