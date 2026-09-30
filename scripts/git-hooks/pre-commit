@@ -25,7 +25,8 @@ git diff --cached --name-only --diff-filter=ACM | while IFS= read -r file; do
   if grep -Eq "$regex" "$file"; then
     tmp="$(mktemp)"
     grep -Ev "$regex" "$file" > "$tmp"
-    mv "$tmp" "$file"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
     git add "$file"
     echo "pre-commit: stripped watermark line(s) from $file"
   fi

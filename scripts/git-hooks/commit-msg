@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# message before it is recorded. Never blocks the commit.
+# Strips AI-attribution trailers (see lib-watermark.sh for the patterns)
+# from the commit message before it is recorded. Never blocks the commit.
 set -euo pipefail
 
 hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
