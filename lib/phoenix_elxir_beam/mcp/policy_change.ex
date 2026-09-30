@@ -20,7 +20,14 @@ defmodule PhoenixElxirBeam.MCP.PolicyChange do
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:policy"
 
-  @type kind :: :plugin_enabled | :plugin_order | :plugin_config | :tool_tags | :tool_quarantine
+  @type kind ::
+          :plugin_enabled
+          | :plugin_order
+          | :plugin_config
+          | :tool_tags
+          | :tool_quarantine
+          | :dry_run_mode
+          | :plugin_mode
 
   def topic, do: @topic
 
@@ -100,10 +107,25 @@ defmodule PhoenixElxirBeam.MCP.PolicyChange do
     "#{actor} cleared the quarantine on #{target}"
   end
 
+  defp summarize(:dry_run_mode, _target, actor, _before, after_val) do
+    "#{actor} set the proxy to #{dry_run_word(after_val)}"
+  end
+
+  defp summarize(:plugin_mode, target, actor, _before, nil) do
+    "#{actor} cleared plugin #{target}'s mode override (inherit)"
+  end
+
+  defp summarize(:plugin_mode, target, actor, _before, after_val) do
+    "#{actor} pinned plugin #{target} to #{dry_run_word(after_val)}"
+  end
+
   defp summarize(kind, target, actor, before_val, after_val) do
     "#{actor} changed #{kind} #{target}: #{fmt(before_val)} → #{fmt(after_val)}"
   end
 
   defp fmt(v) when is_list(v), do: "[" <> Enum.join(v, ", ") <> "]"
   defp fmt(v), do: to_string(v)
+
+  defp dry_run_word(:dry_run), do: "dry-run"
+  defp dry_run_word(:enforcing), do: "enforcing"
 end

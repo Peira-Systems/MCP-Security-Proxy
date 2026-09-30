@@ -54,7 +54,8 @@ defmodule PhoenixElxirBeam.MCP.PipelinePostCallTest do
       can_mutate: [],
       can_block: Keyword.get(opts, :can_block, false),
       order: Keyword.get(opts, :order, 0),
-      enabled: Keyword.get(opts, :enabled, true)
+      enabled: Keyword.get(opts, :enabled, true),
+      mode: Keyword.get(opts, :mode, nil)
     }
   end
 
@@ -69,7 +70,7 @@ defmodule PhoenixElxirBeam.MCP.PipelinePostCallTest do
   test "merges findings, redactions and taint sources and allows" do
     entries = [entry(RedactScanner, order: 0), entry(PlainScanner, order: 1)]
 
-    assert {:allow, [%{type: "secret_leak"}], [redaction], [taint], nil} =
+    assert {:allow, [%{type: "secret_leak"}], [redaction], [taint], nil, nil} =
              Pipeline.run_post_call(ctx(), entries)
 
     assert redaction.path == "content[0].text"
@@ -77,38 +78,68 @@ defmodule PhoenixElxirBeam.MCP.PipelinePostCallTest do
   end
 
   test "a scanner :deny is ignored without the can_block grant" do
-    assert {:allow, _findings, _redactions, _taint, nil} =
+    assert {:allow, _findings, _redactions, _taint, nil, nil} =
              Pipeline.run_post_call(ctx(), [entry(BlockingScanner)])
   end
 
   test "a can_block scanner :deny withholds the response" do
-    assert {:deny, _findings, _redactions, _taint, "not allowed"} =
+    assert {:deny, _findings, _redactions, _taint, "not allowed", nil} =
              Pipeline.run_post_call(ctx(), [entry(BlockingScanner, can_block: true)])
   end
 
   test "a policy :deny withholds the response" do
-    assert {:deny, _findings, _redactions, _taint, "response withheld by policy"} =
+    assert {:deny, _findings, _redactions, _taint, "response withheld by policy", nil} =
              Pipeline.run_post_call(ctx(), [entry(WithholdPolicy, kind: :policy)])
   end
 
   test "an entry without the :post_call phase is skipped" do
-    assert {:allow, [], [], [], nil} =
+    assert {:allow, [], [], [], nil, nil} =
              Pipeline.run_post_call(ctx(), [entry(RedactScanner, phases: [:discovery])])
   end
 
   test "a raising scanner is dropped (fail_open) with a plugin_error finding" do
     capture_log(fn ->
-      assert {:allow, [%{type: "plugin_error"}], [], [], nil} =
+      assert {:allow, [%{type: "plugin_error"}], [], [], nil, nil} =
                Pipeline.run_post_call(ctx(), [entry(BoomScanner, name: "boom")])
     end)
   end
 
   test "a raising scanner with fail_closed withholds the response" do
     capture_log(fn ->
-      assert {:deny, [%{type: "plugin_error"}], [], [], _reason} =
+      assert {:deny, [%{type: "plugin_error"}], [], [], _reason, nil} =
                Pipeline.run_post_call(ctx(), [
                  entry(BoomScanner, name: "boom", fail_mode: :fail_closed)
                ])
     end)
+  end
+
+  describe "dry-run mode" do
+    test "global dry_run downgrades a would-be withhold to allow with a shadow reason" do
+      entries = [entry(WithholdPolicy, kind: :policy)]
+
+      assert {:allow, _findings, _redactions, _taint, nil, "response withheld by policy"} =
+               Pipeline.run_post_call(ctx(), entries, global_mode: :dry_run)
+    end
+
+    test "global enforcing (default) still withholds for real, with no shadow reason" do
+      entries = [entry(WithholdPolicy, kind: :policy)]
+
+      assert {:deny, _findings, _redactions, _taint, "response withheld by policy", nil} =
+               Pipeline.run_post_call(ctx(), entries)
+    end
+
+    test "a plugin pinned :dry_run is downgraded even when the global mode is enforcing" do
+      entries = [entry(WithholdPolicy, kind: :policy, mode: :dry_run)]
+
+      assert {:allow, _findings, _redactions, _taint, nil, "response withheld by policy"} =
+               Pipeline.run_post_call(ctx(), entries)
+    end
+
+    test "a can_block scanner pinned :enforcing still withholds when the global mode is dry_run" do
+      entries = [entry(BlockingScanner, can_block: true, mode: :enforcing)]
+
+      assert {:deny, _findings, _redactions, _taint, "not allowed", nil} =
+               Pipeline.run_post_call(ctx(), entries, global_mode: :dry_run)
+    end
   end
 end

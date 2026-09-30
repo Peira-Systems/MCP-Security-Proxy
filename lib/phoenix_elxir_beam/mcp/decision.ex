@@ -14,6 +14,12 @@ defmodule PhoenixElxirBeam.MCP.Decision do
 
   `mutations` are *proposals*. `PhoenixElxirBeam.MCP.Pipeline` applies only the
   ones the operator granted for the deciding plugin.
+
+  `shadow_verdict` is set by `PhoenixElxirBeam.MCP.Pipeline`, never by a plugin's
+  `evaluate/2` — a plugin is unaware of dry-run mode. When a plugin's real
+  verdict was `:deny` or `:hold` but the effective mode (global or per-plugin)
+  is `:dry_run`, the pipeline downgrades `verdict` to `:allow`/`:annotate` and
+  records what it *would* have been here instead.
   """
 
   alias PhoenixElxirBeam.MCP.Finding
@@ -25,7 +31,8 @@ defmodule PhoenixElxirBeam.MCP.Decision do
             findings: [],
             mutations: %{},
             hold: nil,
-            cache_ttl_ms: 0
+            cache_ttl_ms: 0,
+            shadow_verdict: nil
 
   @type verdict :: :allow | :deny | :hold | :annotate
 
@@ -44,7 +51,8 @@ defmodule PhoenixElxirBeam.MCP.Decision do
           mutations: mutations(),
           hold:
             %{prompt: String.t(), timeout_ms: non_neg_integer(), on_timeout: :deny | :allow} | nil,
-          cache_ttl_ms: non_neg_integer()
+          cache_ttl_ms: non_neg_integer(),
+          shadow_verdict: :deny | :hold | nil
         }
 
   @doc "An unconditional allow."

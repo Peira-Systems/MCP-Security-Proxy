@@ -15,14 +15,18 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   """
   require Logger
 
-  alias PhoenixElxirBeam.MCP.Plugin.PluginState
+  alias PhoenixElxirBeam.MCP.Plugin.{ProxySetting, PluginState}
   alias PhoenixElxirBeam.Repo
+
+  @proxy_settings_key "global"
+  @default_proxy_mode :enforcing
 
   @type overlay :: %{
           optional(String.t()) => %{
             enabled: boolean(),
             position: integer() | nil,
-            config: map() | nil
+            config: map() | nil,
+            mode: String.t() | nil
           }
         }
 
@@ -30,7 +34,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   def all do
     Repo.all(PluginState)
     |> Map.new(fn s ->
-      {s.name, %{enabled: s.enabled, position: s.position, config: s.config}}
+      {s.name, %{enabled: s.enabled, position: s.position, config: s.config, mode: s.mode}}
     end)
   rescue
     e -> soft("load", e, %{})
@@ -55,6 +59,42 @@ defmodule PhoenixElxirBeam.MCP.Plugin.StateStore do
   @spec put_config(String.t(), map()) :: :ok
   def put_config(name, config) when is_binary(name) and is_map(config) do
     upsert(%{name: name, config: config}, [:config])
+  end
+
+  @doc """
+  Persists `name`'s dry-run override: `"enforcing"` | `"dry_run"` pins it
+  regardless of the global proxy mode, `nil` clears the override (inherit).
+  """
+  @spec put_mode(String.t(), String.t() | nil) :: :ok
+  def put_mode(name, mode) when is_binary(name) and (is_binary(mode) or is_nil(mode)) do
+    upsert(%{name: name, mode: mode}, [:mode])
+  end
+
+  @doc "The global proxy mode, `:enforcing` by default when no override has been saved."
+  @spec proxy_mode() :: :enforcing | :dry_run
+  def proxy_mode do
+    case Repo.get(ProxySetting, @proxy_settings_key) do
+      nil -> @default_proxy_mode
+      %ProxySetting{mode: mode} -> String.to_existing_atom(mode)
+    end
+  rescue
+    e -> soft("load", e, @default_proxy_mode)
+  catch
+    :exit, e -> soft("load", e, @default_proxy_mode)
+  end
+
+  @doc "Persists the global proxy mode (`:enforcing` | `:dry_run`)."
+  @spec put_proxy_mode(:enforcing | :dry_run) :: :ok
+  def put_proxy_mode(mode) when mode in [:enforcing, :dry_run] do
+    %ProxySetting{}
+    |> ProxySetting.changeset(%{key: @proxy_settings_key, mode: to_string(mode)})
+    |> Repo.insert(on_conflict: {:replace, [:mode, :updated_at]}, conflict_target: :key)
+
+    :ok
+  rescue
+    e -> soft("write", e, :ok)
+  catch
+    :exit, e -> soft("write", e, :ok)
   end
 
   @spec upsert(map(), [atom()]) :: :ok

@@ -488,6 +488,7 @@ curl -s -X DELETE "$BASE" -H "$AUTH" -H "mcp-session-id: $SID"
 | No/!bad bearer token | HTTP `401` + `WWW-Authenticate: Bearer` |
 | Body over `max_body_bytes` | HTTP `413` |
 | Over the per-key rate budget | HTTP `429` + `Retry-After` |
+| Would have denied/held, but in **dry-run mode** (§6.8) | the upstream's result, delivered normally — logged as `would block` / `would hold` instead |
 
 If the client's `Accept` header includes `text/event-stream` and the upstream
 emits `notifications/progress`, the proxy relays those frames live over a chunked
@@ -503,7 +504,7 @@ audit-chain status pill, and the signed-in identity.
 | **Tool graph + live feed** | real-time visualization of calls flowing agent → gate → server; pulses red on a block | all |
 | **Operational alerts / Approval required** banners | active `MCP.Alerts` and parked holds with Approve / Deny | operator resolves holds |
 | **Event history** | filterable, sortable, paginated audit history; **verify audit chain** button | all |
-| **Plugins** | every plugin + each sidecar's health; enable / disable / ▲▼ reorder | operator |
+| **Plugins** | every plugin + each sidecar's health; enable / disable / ▲▼ reorder; global dry-run toggle + per-plugin mode pin (§6.8) | operator |
 | **Policy changes** | every runtime change (actor, before → after) with one-click **revert** | operator reverts |
 | **Client keys** | issued keys; **Issue** / **Revoke** | admin |
 | **Servers & tools** | register / remove servers; expand to classify tools, re-handshake, clear a quarantine | operator classifies; admin registers |
@@ -517,6 +518,36 @@ revert button.
 
 Still needs a config change + redeploy: `RuleEngine` rule edits, and the
 `UnclassifiedGuard` `mode`.
+
+### 6.8 Dry-run mode
+
+**Dashboard → Plugins (operator).** Turns the proxy's enforcement into
+observe-only: a plugin's `deny`/`hold` is logged instead of acted on, and the
+call proceeds exactly as an `allow` would. Use it to see what a new rule, or
+the whole pipeline, *would* do against real traffic before it can actually
+block anything.
+
+- **Global switch + per-plugin override.** The header toggle
+  (Enforcing / Dry-run) sets the default for every plugin. Any single plugin
+  can still be pinned to `enforcing` or `dry-run` from its row, regardless of
+  the global switch — roll out one new rule in shadow mode while everything
+  else keeps enforcing, or vice versa. A plugin left on "inherit" follows the
+  global switch.
+- **What shows up.** A call that would have been denied or held appears in the
+  live feed and event history as `would block` / `would hold` (amber, not
+  red) instead of `blocked` / `held` — the reason is the same one the plugin
+  would have given for real. The response is still delivered, or the stream
+  still completes, exactly as if nothing had objected.
+- **Durable, not best-effort.** A dry-run verdict is receipted to the same
+  hash-chained audit log as a real one, so "how often would this have fired
+  over the last week" is a real query against `policy_events`, not something
+  you have to have been watching live to catch.
+- **Persists across restarts.** Both the global switch and any per-plugin pin
+  are stored the same way plugin enable/disable state already is
+  (`plugin_states` / a `proxy_settings` row) — no redeploy needed to flip it,
+  and it survives one.
+- Every flip is audited in **Policy changes** with actor, before → after, and
+  a revert button, same as any other runtime policy edit.
 
 ---
 

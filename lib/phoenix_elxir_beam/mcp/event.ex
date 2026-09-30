@@ -20,7 +20,18 @@ defmodule PhoenixElxirBeam.MCP.Event do
   ]
 
   @type status ::
-          :session_start | :ok | :blocked | :held | :session_complete | :policy_change
+          :session_start
+          | :ok
+          | :blocked
+          | :held
+          # `:shadow_blocked` / `:shadow_held` — the plugin pipeline computed a
+          # real `:deny` / `:hold`, but its effective mode was `:dry_run`, so
+          # the call proceeded like an allow. `reason` carries what it would
+          # have been. See `PhoenixElxirBeam.MCP.Decision.shadow_verdict`.
+          | :shadow_blocked
+          | :shadow_held
+          | :session_complete
+          | :policy_change
 
   @type t :: %__MODULE__{
           id: String.t(),

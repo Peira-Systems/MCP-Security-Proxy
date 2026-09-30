@@ -109,14 +109,14 @@ defmodule PhoenixElxirBeam.MCP.PipelineWasmTest do
   test "run_post_call routes to a wasm scanner and returns its allow verdict" do
     name = start_wasm(@allow_fixture)
 
-    assert {:allow, [], [], [], nil} =
+    assert {:allow, [], [], [], nil, nil} =
              Pipeline.run_post_call(post_call_ctx(), [scanner_entry(name, phases: [:post_call])])
   end
 
   test "run_post_call routes to a wasm policy and withholds on its deny verdict" do
     name = start_wasm(@deny_fixture)
 
-    assert {:deny, [], [], [], "denied by wasm-deny-policy (test fixture)"} =
+    assert {:deny, [], [], [], "denied by wasm-deny-policy (test fixture)", nil} =
              Pipeline.run_post_call(post_call_ctx(), [policy_entry(name, phases: [:post_call])])
   end
 
@@ -125,7 +125,7 @@ defmodule PhoenixElxirBeam.MCP.PipelineWasmTest do
     :ok = stop_supervised(name)
 
     capture_log(fn ->
-      assert {:allow, [%{type: "plugin_error"}], [], [], nil} =
+      assert {:allow, [%{type: "plugin_error"}], [], [], nil, nil} =
                Pipeline.run_post_call(post_call_ctx(), [scanner_entry(name, phases: [:post_call])])
     end)
   end

@@ -86,6 +86,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       |> assign(:history_sort_dir, "desc")
       |> assign(:server_options, EventLog.distinct_server_ids())
       |> assign(:plugins, plugins)
+      |> assign(:proxy_mode, safe_proxy_mode())
       |> assign(:open_plugin, nil)
       |> assign(:rules_draft, load_rules_draft(plugins))
       |> assign(:can_operate, Accounts.role_at_least?(socket.assigns.current_user, :operator))
@@ -306,6 +307,50 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
             before: current.enabled,
             after: want
           })
+        end
+      end
+
+      assign(socket, :plugins, plugin_rows())
+    end)
+  end
+
+  def handle_event("toggle_dry_run", _params, socket) do
+    with_operator(socket, fn user ->
+      current = socket.assigns.proxy_mode
+      want = if current == :enforcing, do: :dry_run, else: :enforcing
+
+      :ok = Registry.set_proxy_mode(want)
+
+      PolicyChange.record(%{
+        kind: :dry_run_mode,
+        target: "global",
+        actor: user.email,
+        before: current,
+        after: want
+      })
+
+      assign(socket, :proxy_mode, want)
+    end)
+  end
+
+  def handle_event("set_plugin_mode", %{"name" => name, "mode" => mode}, socket) do
+    with_operator(socket, fn user ->
+      want = if mode == "inherit", do: nil, else: String.to_existing_atom(mode)
+      current = Enum.find(socket.assigns.plugins, &(&1.name == name))
+
+      if current && current.mode != want do
+        case Registry.set_mode(name, want) do
+          :ok ->
+            PolicyChange.record(%{
+              kind: :plugin_mode,
+              target: name,
+              actor: user.email,
+              before: current.mode,
+              after: want
+            })
+
+          {:error, :not_found} ->
+            :ok
         end
       end
 
@@ -1051,6 +1096,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
         kind: to_string(entry.kind),
         source: source,
         enabled: entry.enabled,
+        mode: entry.mode,
         health: health,
         note: plugin_note(entry),
         description: plugin_description(entry.name),
@@ -1060,6 +1106,14 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     end)
   rescue
     _ -> []
+  end
+
+  defp safe_proxy_mode do
+    Registry.proxy_mode()
+  rescue
+    _ -> :enforcing
+  catch
+    :exit, _ -> :enforcing
   end
 
   defp plugin_note(%{name: "rule-engine", config: %{"rules" => rules}}) when is_list(rules) do
@@ -1798,6 +1852,13 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
     stream_insert(socket, :events, event, at: 0)
   end
 
+  defp apply_event(socket, %{status: status} = event)
+       when status in [:shadow_blocked, :shadow_held] do
+    # A dry-run verdict never really blocked/held the call, so no graph pulse
+    # (nothing was denied on the wire) — just the feed row, same as :held.
+    stream_insert(socket, :events, event, at: 0)
+  end
+
   defp apply_event(socket, _event), do: socket
 
   defp format_time(%DateTime{} = ts) do
@@ -1816,14 +1877,25 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
   defp status_label(:ok), do: "allowed"
   defp status_label(:blocked), do: "blocked"
   defp status_label(:held), do: "held"
+  defp status_label(:shadow_blocked), do: "would block"
+  defp status_label(:shadow_held), do: "would hold"
   defp status_label("ok"), do: "allowed"
   defp status_label("blocked"), do: "blocked"
   defp status_label("held"), do: "held"
+  defp status_label("shadow_blocked"), do: "would block"
+  defp status_label("shadow_held"), do: "would hold"
   defp status_label(other), do: other
 
   defp console_status_class(status) when status in [:ok, "ok"], do: "text-success"
   defp console_status_class(status) when status in [:blocked, "blocked"], do: "text-error"
   defp console_status_class(status) when status in [:held, "held"], do: "text-warning"
+
+  defp console_status_class(status) when status in [:shadow_blocked, "shadow_blocked"],
+    do: "text-warning"
+
+  defp console_status_class(status) when status in [:shadow_held, "shadow_held"],
+    do: "text-warning"
+
   defp console_status_class(_), do: "text-base-content/50"
 
   defp sort_caret_class(sort_by, column) when sort_by == column, do: "text-primary"

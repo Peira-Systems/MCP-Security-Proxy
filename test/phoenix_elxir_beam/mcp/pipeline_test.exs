@@ -67,7 +67,8 @@ defmodule PhoenixElxirBeam.MCP.PipelineTest do
       fail_mode: Keyword.get(opts, :fail_mode, :fail_closed),
       can_mutate: Keyword.get(opts, :can_mutate, []),
       order: Keyword.get(opts, :order, 0),
-      enabled: Keyword.get(opts, :enabled, true)
+      enabled: Keyword.get(opts, :enabled, true),
+      mode: Keyword.get(opts, :mode, nil)
     }
   end
 
@@ -181,5 +182,89 @@ defmodule PhoenixElxirBeam.MCP.PipelineTest do
     entries = [entry(Holder, order: 0), entry(Recorder, order: 1)]
     assert {:hold, _, _} = Pipeline.run(:pre_call, ctx(), entries)
     refute_receive {:invoked, Recorder}
+  end
+
+  describe "dry-run mode" do
+    test "global dry_run downgrades a deny to allow with a shadow_verdict" do
+      entries = [entry(DenyAll, name: "denier")]
+
+      assert {:allow, decision, _} =
+               Pipeline.run(:pre_call, ctx(), entries, global_mode: :dry_run)
+
+      assert decision.shadow_verdict == :deny
+      assert decision.deciding_plugin == "denier"
+      assert decision.reason == "denied by DenyAll"
+    end
+
+    test "global dry_run downgrades a hold to allow with a shadow_verdict" do
+      entries = [entry(Holder, name: "holder")]
+
+      assert {:allow, decision, _} =
+               Pipeline.run(:pre_call, ctx(), entries, global_mode: :dry_run)
+
+      assert decision.shadow_verdict == :hold
+      assert decision.deciding_plugin == "holder"
+    end
+
+    test "global enforcing mode is unaffected (default) — a deny still blocks for real" do
+      entries = [entry(DenyAll, name: "denier")]
+
+      assert {:deny, decision, _} = Pipeline.run(:pre_call, ctx(), entries)
+      assert decision.shadow_verdict == nil
+    end
+
+    test "a plugin pinned :dry_run is downgraded even when the global mode is enforcing" do
+      entries = [entry(DenyAll, name: "denier", mode: :dry_run)]
+
+      assert {:allow, decision, _} = Pipeline.run(:pre_call, ctx(), entries)
+      assert decision.shadow_verdict == :deny
+    end
+
+    test "a plugin pinned :enforcing still blocks for real even when the global mode is dry_run" do
+      entries = [entry(DenyAll, name: "denier", mode: :enforcing)]
+
+      assert {:deny, decision, _} =
+               Pipeline.run(:pre_call, ctx(), entries, global_mode: :dry_run)
+
+      assert decision.shadow_verdict == nil
+    end
+
+    test "the chain continues past a shadow deny so later plugins still run" do
+      entries = [
+        entry(DenyAll, name: "denier", order: 0),
+        %{entry(Recorder, order: 1) | config: %{notify: self()}}
+      ]
+
+      assert {:allow, _decision, _} =
+               Pipeline.run(:pre_call, ctx(), entries, global_mode: :dry_run)
+
+      assert_receive {:invoked, Recorder}
+    end
+
+    test "the first shadow verdict wins deciding_plugin; a later real deny does not override it" do
+      entries = [
+        entry(DenyAll, name: "first-denier", order: 0),
+        entry(DenyAll, name: "second-denier", order: 1)
+      ]
+
+      assert {:allow, decision, _} =
+               Pipeline.run(:pre_call, ctx(), entries, global_mode: :dry_run)
+
+      assert decision.shadow_verdict == :deny
+      assert decision.deciding_plugin == "first-denier"
+    end
+
+    test "mutations from a plugin allowed for real (before a later shadow deny) still apply" do
+      entries = [
+        entry(Tagger, order: 0, can_mutate: [:add_tags]),
+        entry(TagObserver, order: 1)
+      ]
+
+      assert {:allow, decision, _} =
+               Pipeline.run(:pre_call, ctx(seen_tags: []), entries, global_mode: :dry_run)
+
+      assert decision.shadow_verdict == :deny
+      assert decision.reason == "saw :tainted"
+    end
   end
 end

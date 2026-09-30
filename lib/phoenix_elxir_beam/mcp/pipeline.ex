@@ -51,21 +51,27 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
 
   Returns `{verdict, decision, findings}`:
 
-    * `verdict` — `:allow`, `:deny`, or `:hold`;
+    * `verdict` — `:allow`, `:deny`, or `:hold`. A plugin's real `:deny`/`:hold`
+      is downgraded to `:allow` when its effective mode (`opts[:global_mode]`,
+      default `:enforcing`, overridden per-entry by `entry.mode`) is `:dry_run`
+      — see `decision.shadow_verdict` for what it would have been;
     * `decision` — on `:deny` / `:hold`, carries `reason`, `severity`,
-      `deciding_plugin` (and `hold` for `:hold`); on `:allow`, a merged decision;
+      `deciding_plugin` (and `hold` for `:hold`); on `:allow`, a merged decision,
+      with `shadow_verdict` set if a dry-run plugin would have denied/held;
     * `findings` — every finding collected along the chain.
   """
-  @spec run(CallContext.phase(), CallContext.t(), [entry()]) ::
+  @spec run(CallContext.phase(), CallContext.t(), [entry()], keyword()) ::
           {:allow | :deny | :hold, Decision.t(), [Finding.t()]}
-  def run(phase, %CallContext{} = ctx, entries) when is_list(entries) do
+  def run(phase, %CallContext{} = ctx, entries, opts \\ []) when is_list(entries) do
+    global_mode = Keyword.get(opts, :global_mode, :enforcing)
+
     Telemetry.span([:pipeline, :run], %{phase: phase}, fn ->
       {verdict, decision, _findings} =
         result =
         entries
         |> Enum.filter(&applies?(&1, phase, ctx))
         |> Enum.sort_by(& &1.order)
-        |> evaluate_chain(phase, ctx, [])
+        |> evaluate_chain(phase, ctx, [], global_mode, nil)
 
       Telemetry.decision(verdict, decision.deciding_plugin, phase)
       {result, %{phase: phase, verdict: verdict}}
@@ -99,18 +105,26 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   Runs every enabled `:post_call` `scanner` / `policy` in `entries` over `ctx`
   (a `phase: :post_call` context, `response` populated), concurrently.
 
-  Returns `{verdict, findings, redactions, taint_sources, reason}`:
+  Returns `{verdict, findings, redactions, taint_sources, reason, shadow_reason}`:
 
-    * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied
-      (the response is then withheld), else `:allow`;
+    * `verdict` — `:deny` if any *enforcing-mode* `policy` (or a `can_block`
+      scanner) denied (the response is then withheld), else `:allow`. A denial
+      whose effective mode (`opts[:global_mode]`, overridden per-entry by
+      `entry.mode`) is `:dry_run` does not withhold the response — see
+      `shadow_reason`;
     * `redactions` — every `redact_response` mutation, to feed
       `PhoenixElxirBeam.MCP.Redaction`;
     * `taint_sources` — every `add_taint_sources` mutation, to fold into the
-      session's taint provenance.
+      session's taint provenance;
+    * `shadow_reason` — the reason of the first dry-run denial that would have
+      withheld the response, or `nil` if none.
   """
-  @spec run_post_call(CallContext.t(), [entry()]) ::
-          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
-  def run_post_call(%CallContext{phase: :post_call} = ctx, entries) when is_list(entries) do
+  @spec run_post_call(CallContext.t(), [entry()], keyword()) ::
+          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil, String.t() | nil}
+  def run_post_call(%CallContext{phase: :post_call} = ctx, entries, opts \\ [])
+      when is_list(entries) do
+    global_mode = Keyword.get(opts, :global_mode, :enforcing)
+
     Telemetry.span([:pipeline, :run], %{phase: :post_call}, fn ->
       results =
         entries
@@ -123,18 +137,32 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
       findings = Enum.flat_map(results, & &1.findings)
       redactions = Enum.flat_map(results, & &1.redactions)
       taint_sources = Enum.flat_map(results, & &1.taint_sources)
-      denial = Enum.find(results, &(&1.verdict == :deny))
+
+      {real, shadow} = split_denials(results, global_mode)
 
       result =
-        if denial do
+        if real do
           {:deny, findings, redactions, taint_sources,
-           denial.reason || "response withheld by policy"}
+           real.reason || "response withheld by policy", nil}
         else
-          {:allow, findings, redactions, taint_sources, nil}
+          shadow_reason = shadow && (shadow.reason || "response withheld by policy")
+          {:allow, findings, redactions, taint_sources, nil, shadow_reason}
         end
 
       {result, %{phase: :post_call, verdict: elem(result, 0)}}
     end)
+  end
+
+  # Splits denying results into the first "real" (enforcing-mode) denial and
+  # the first "shadow" (dry-run-mode) denial — a real denial always wins
+  # (withholds for real) even if a shadow one appears earlier in entry order.
+  defp split_denials(results, global_mode) do
+    denials = Enum.filter(results, &(&1.verdict == :deny))
+
+    real = Enum.find(denials, &(effective_mode(&1.entry, global_mode) == :enforcing))
+    shadow = Enum.find(denials, &(effective_mode(&1.entry, global_mode) == :dry_run))
+
+    {real, shadow}
   end
 
   @doc """
@@ -143,17 +171,24 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   chunk plus what has been delivered so far), concurrently — invoked once
   per chunk of a streamed tool response.
 
-  Returns `{verdict, findings, redactions, taint_sources, reason}`:
+  Returns `{verdict, findings, redactions, taint_sources, reason, shadow_reason}`:
 
-    * `verdict` — `:deny` if any `policy` (or a `can_block` scanner) denied,
-      which tells the proxy to **cut the stream** (deliver nothing further);
+    * `verdict` — `:deny` if any *enforcing-mode* `policy` (or a `can_block`
+      scanner) denied, which tells the proxy to **cut the stream** (deliver
+      nothing further). A denial whose effective mode (`opts[:global_mode]`,
+      overridden per-entry by `entry.mode`) is `:dry_run` does not cut the
+      stream — see `shadow_reason`;
     * `redactions` — `redact_response` mutations for the current chunk;
     * `taint_sources` — `add_taint_sources` mutations, folded into the
-      session's taint provenance as the stream flows.
+      session's taint provenance as the stream flows;
+    * `shadow_reason` — the reason of the first dry-run denial that would have
+      cut the stream, or `nil` if none.
   """
-  @spec run_chunk(CallContext.t(), [entry()]) ::
-          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil}
-  def run_chunk(%CallContext{phase: :chunk} = ctx, entries) when is_list(entries) do
+  @spec run_chunk(CallContext.t(), [entry()], keyword()) ::
+          {:allow | :deny, [Finding.t()], [map()], [map()], String.t() | nil, String.t() | nil}
+  def run_chunk(%CallContext{phase: :chunk} = ctx, entries, opts \\ []) when is_list(entries) do
+    global_mode = Keyword.get(opts, :global_mode, :enforcing)
+
     Telemetry.span([:pipeline, :run], %{phase: :chunk}, fn ->
       results =
         entries
@@ -164,14 +199,16 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
       findings = Enum.flat_map(results, & &1.findings)
       redactions = Enum.flat_map(results, & &1.redactions)
       taint_sources = Enum.flat_map(results, & &1.taint_sources)
-      denial = Enum.find(results, &(&1.verdict == :deny))
+
+      {real, shadow} = split_denials(results, global_mode)
 
       result =
-        if denial do
+        if real do
           {:deny, findings, redactions, taint_sources,
-           denial.reason || "stream terminated by policy"}
+           real.reason || "stream terminated by policy", nil}
         else
-          {:allow, findings, redactions, taint_sources, nil}
+          shadow_reason = shadow && (shadow.reason || "stream terminated by policy")
+          {:allow, findings, redactions, taint_sources, nil, shadow_reason}
         end
 
       {result, %{phase: :chunk, verdict: elem(result, 0)}}
@@ -229,7 +266,7 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
       System.monotonic_time() - started
     )
 
-    result
+    Map.put(result, :entry, entry)
   end
 
   defp post_call_eval(%{impl: {:module, mod}, kind: :scanner} = entry, ctx, phase, _method) do
@@ -409,25 +446,38 @@ defmodule PhoenixElxirBeam.MCP.Pipeline do
   defp tag_match?([], _call_tags), do: true
   defp tag_match?(tool_tags, call_tags), do: Enum.any?(tool_tags, &(&1 in call_tags))
 
-  defp evaluate_chain([], _phase, _ctx, findings) do
-    {:allow, %Decision{verdict: :allow, findings: findings}, findings}
+  # `shadow` accumulates the *first* would-be deny/hold seen in dry-run mode —
+  # once set, later plugins keep running (the operator sees the whole chain's
+  # real behavior), but it's never overwritten, so `deciding_plugin`/`reason`
+  # stay pinned to the first plugin that would have stopped the call.
+  defp evaluate_chain([], _phase, _ctx, findings, _global_mode, shadow) do
+    decision = shadow || %Decision{verdict: :allow}
+    {:allow, %{decision | verdict: :allow, findings: findings}, findings}
   end
 
-  defp evaluate_chain([entry | rest], phase, ctx, findings) do
+  defp evaluate_chain([entry | rest], phase, ctx, findings, global_mode, shadow) do
     decision = invoke(entry, phase, ctx)
     findings = findings ++ decision.findings
 
     case decision.verdict do
-      :deny ->
-        {:deny, %{decision | deciding_plugin: entry.name, findings: findings}, findings}
+      verdict when verdict in [:deny, :hold] ->
+        decided = %{decision | deciding_plugin: entry.name, findings: findings}
 
-      :hold ->
-        {:hold, %{decision | deciding_plugin: entry.name, findings: findings}, findings}
+        if effective_mode(entry, global_mode) == :dry_run do
+          shadow = shadow || %{decided | shadow_verdict: verdict}
+          evaluate_chain(rest, phase, ctx, findings, global_mode, shadow)
+        else
+          {verdict, decided, findings}
+        end
 
       verdict when verdict in [:allow, :annotate] ->
-        evaluate_chain(rest, phase, apply_mutations(ctx, entry, decision), findings)
+        ctx = apply_mutations(ctx, entry, decision)
+        evaluate_chain(rest, phase, ctx, findings, global_mode, shadow)
     end
   end
+
+  defp effective_mode(%{mode: mode}, _global_mode) when mode in [:enforcing, :dry_run], do: mode
+  defp effective_mode(_entry, global_mode), do: global_mode
 
   defp invoke(entry, phase, ctx) do
     started = System.monotonic_time()

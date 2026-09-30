@@ -5,7 +5,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
 
   import PhoenixElxirBeam.MCPProxyHelpers
 
-  alias PhoenixElxirBeam.MCP.{ApiKey, ServerRegistry, SessionStore}
+  alias PhoenixElxirBeam.MCP.{ApiKey, EventLog, ServerRegistry, SessionStore}
+  alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @catalog_fixture Path.expand("../../../support/fixtures/catalog_mcp_server.js", __DIR__)
 
@@ -197,6 +198,25 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
 
     assert %{"error" => %{"code" => -32002, "message" => message}} = json_response(conn, 200)
     assert message =~ "bulk exfiltration"
+  end
+
+  test "in global dry_run mode, an oversized response is delivered, not withheld, and shadow-logged",
+       %{sid: sid, token: token} do
+    :ok = PluginRegistry.set_proxy_mode(:dry_run)
+    on_exit(fn -> PluginRegistry.set_proxy_mode(:enforcing) end)
+
+    session_id = handshake(token, sid)
+    conn = tool_call(token, session_id, sid, "export_all")
+
+    assert %{"result" => %{"content" => [%{"text" => _text}]}} = json_response(conn, 200)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+
+    assert Enum.any?(
+             entries,
+             &(&1.session_id == session_id and &1.status == "shadow_blocked" and
+                 &1.reason =~ "bulk exfiltration")
+           )
   end
 
   test "a secret leaked by an untagged tool taints the session and blocks later egress", %{
