@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# message before it is recorded. Never blocks the commit.
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-watermark.sh
+source "$hook_dir/lib-watermark.sh"
+
+msg_file="$1"
+regex="$(watermark_regex)"
+
+if grep -Eq "$regex" "$msg_file"; then
+  tmp="$(mktemp)"
+  grep -Ev "$regex" "$msg_file" > "$tmp"
+  # Trim trailing blank lines left behind by the strip.
+  sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$tmp" > "$msg_file"
+  rm -f "$tmp"
+fi
+
+exit 0

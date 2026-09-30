@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Strips AI-attribution watermark lines from staged file content before
+# commit. Never blocks the commit — matched lines are removed in place
+# and the file is re-staged.
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-watermark.sh
+source "$hook_dir/lib-watermark.sh"
+
+regex="$(watermark_regex)"
+
+git diff --cached --name-only --diff-filter=ACM | while IFS= read -r file; do
+  [ -f "$file" ] || continue
+
+  case "$file" in
+    _build/*|deps/*|.git/*) continue ;;
+  esac
+
+  # Skip binary files.
+  if git diff --cached --numstat -- "$file" | grep -q '^-\s*-\s'; then
+    continue
+  fi
+
+  if grep -Eq "$regex" "$file"; then
+    tmp="$(mktemp)"
+    grep -Ev "$regex" "$file" > "$tmp"
+    mv "$tmp" "$file"
+    git add "$file"
+    echo "pre-commit: stripped watermark line(s) from $file"
+  fi
+done
+
+exit 0
