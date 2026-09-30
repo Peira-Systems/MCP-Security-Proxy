@@ -1,13 +1,26 @@
 # MCP Security Proxy
 
-A policy-enforcing proxy between an AI agent (MCP client) and the MCP servers
-it calls tools on. Every `tools/call` runs through a plugin pipeline — policy
-decisions, content scanners, tamper-evident audit — before it is forwarded.
-A LiveView dashboard visualizes traffic and lets an operator curate policy.
+An AI agent reads a sensitive file, then gets tricked — by a prompt injection
+buried in a document, a web page, or a tool's own description — into sending
+what it just read somewhere it shouldn't. This is **tool-chaining
+exfiltration**, and it's the attack this proxy is built to stop.
 
-![MCP Security Proxy dashboard](priv/static/images/dashboard-screenshot.jpg)
+It sits between an MCP client (the agent) and the MCP servers it calls tools
+on. Every `tools/call` runs through a plugin pipeline — policy rules, session
+taint tracking, response scanning, human-in-the-loop approval — before it's
+forwarded. A blocked call never reaches the upstream server. A LiveView
+dashboard shows the traffic live and turns a tool red the moment it's denied:
 
-See [`Project.md`](Project.md) for an overview and [`docs/adr/`](docs/adr) for
+![Dashboard blocking a tool-chaining exfiltration attempt](priv/static/images/tool-chaining-demo.gif)
+
+*A session reads `read_secrets`, then tries to chain that into `post_webhook`
+— an external network call. The proxy holds it for operator approval, the
+operator denies it, and the call never reaches the upstream server.*
+
+This isn't a demo scaffold — it runs against **real MCP traffic**: real
+session lifecycle, API-key auth + RBAC, tamper-evident audit, metrics and
+alerts, and a measured prompt-injection ruleset. See
+[`Project.md`](Project.md) for an overview and [`docs/adr/`](docs/adr) for
 the architecture and productionization decisions.
 
 **Start here:** [product guide](docs/product-guide.md) — deploy, configure, and use it end to end.
