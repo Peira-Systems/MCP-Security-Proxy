@@ -10,7 +10,11 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageCorpus do
       name: "tagged and covered by an agent-agnostic deny rule",
       tool: %{name: "read_secrets", tags: [:sensitive_read], suggested_tags: [:sensitive_read]},
       rules: [
-        %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "deny", "reason" => "r"}
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
       ],
       unclassified_guard_mode: "off",
       expected_gap_types: []
@@ -33,7 +37,11 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageCorpus do
       tool: %{name: "read_secrets", tags: [:sensitive_read], suggested_tags: [:sensitive_read]},
       rules: [
         %{"match" => %{}, "action" => "allow", "reason" => "catch-all"},
-        %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "deny", "reason" => "r"}
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
       ],
       unclassified_guard_mode: "off",
       expected_gap_types: [:uncovered_tag]
@@ -42,7 +50,11 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageCorpus do
       name: "tagged but the matching rule's action is allow (explicit shield)",
       tool: %{name: "read_secrets", tags: [:sensitive_read], suggested_tags: [:sensitive_read]},
       rules: [
-        %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "allow", "reason" => "r"}
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "allow",
+          "reason" => "r"
+        }
       ],
       unclassified_guard_mode: "off",
       expected_gap_types: [:uncovered_tag]
@@ -55,7 +67,11 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageCorpus do
         suggested_tags: [:sensitive_read, :network_egress]
       },
       rules: [
-        %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "deny", "reason" => "r"}
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
       ],
       unclassified_guard_mode: "off",
       expected_gap_types: [:uncovered_tag]
@@ -85,7 +101,11 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageCorpus do
       name: "tagged and covered, suggested_tags now irrelevant",
       tool: %{name: "read_secrets", tags: [:sensitive_read], suggested_tags: []},
       rules: [
-        %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "deny", "reason" => "r"}
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
       ],
       unclassified_guard_mode: "off",
       expected_gap_types: []
