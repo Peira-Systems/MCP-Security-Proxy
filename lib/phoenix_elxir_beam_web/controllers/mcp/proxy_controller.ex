@@ -428,7 +428,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           error(jsonrpc, id, @response_withheld_code, reason)
         )
 
-      {{:ok, %{"result" => result} = resp_body, chunk_findings, chunk_taint}, relay_conn}
+      {{:ok, %{"result" => result} = resp_body, chunk_findings, chunk_taint, chunk_shadow_reason},
+       relay_conn}
       when is_map(result) ->
         scan_response(
           conn,
@@ -442,10 +443,11 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           resp_body,
           result,
           chunk_findings,
-          chunk_taint
+          chunk_taint,
+          chunk_shadow_reason
         )
 
-      {{:ok, resp_body, chunk_findings, chunk_taint}, relay_conn} ->
+      {{:ok, resp_body, chunk_findings, chunk_taint, chunk_shadow_reason}, relay_conn} ->
         # Error result or an unexpected shape — nothing to scan, but still
         # receipt anything the chunk phase collected on the way.
         PolicyEngine.record_response_scan(
@@ -454,7 +456,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           scan_label,
           chunk_findings,
           nil,
-          chunk_taint
+          chunk_taint,
+          PolicyEngine,
+          chunk_shadow_reason
         )
 
         deliver(conn, relay_conn, resp_body)
@@ -478,7 +482,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       %{transport: :stdio, pid: pid} ->
         measured_upstream(:stdio, fn ->
           case StdioServer.request(pid, body) do
-            {:ok, resp_body} -> {{:ok, resp_body, [], []}, nil}
+            {:ok, resp_body} -> {{:ok, resp_body, [], [], nil}, nil}
             {:error, _reason} -> {{:error, "upstream real server error"}, nil}
           end
         end)
@@ -532,7 +536,8 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
          resp_body,
          result,
          chunk_findings,
-         chunk_taint
+         chunk_taint,
+         chunk_shadow_reason
        ) do
     case ResponseContent.extract(method, result) do
       :skip ->
@@ -542,7 +547,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           scan_label,
           chunk_findings,
           nil,
-          chunk_taint
+          chunk_taint,
+          PolicyEngine,
+          chunk_shadow_reason
         )
 
         deliver(conn, relay_conn, resp_body)
@@ -560,11 +567,16 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
             response: %{is_error: false, content: content}
           })
 
-        {verdict, findings, redactions, taint_sources, reason} =
-          Pipeline.run_post_call(ctx, PluginRegistry.active_post_call())
+        {verdict, findings, redactions, taint_sources, reason, post_call_shadow_reason} =
+          Pipeline.run_post_call(ctx, PluginRegistry.active_post_call(),
+            global_mode: PluginRegistry.proxy_mode()
+          )
 
         all_findings = chunk_findings ++ findings
         all_taint = chunk_taint ++ taint_sources
+        # The chunk phase ran first — its shadow verdict (if any) is what the
+        # operator would have seen first in a real enforcing run, so it wins.
+        shadow_reason = chunk_shadow_reason || post_call_shadow_reason
 
         case verdict do
           :deny ->
@@ -586,7 +598,9 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               scan_label,
               all_findings,
               nil,
-              all_taint
+              all_taint,
+              PolicyEngine,
+              shadow_reason
             )
 
             redacted = Redaction.apply(content, redactions)

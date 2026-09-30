@@ -995,9 +995,35 @@
             {length(@plugins)} registered — the proxy pipeline, in evaluation order
           </span>
 
-          <span :if={not @can_operate} class="ml-auto text-[10px] text-base-content/40">
-            read-only (operator role required to change)
-          </span>
+          <div class="ml-auto flex items-center gap-2">
+            <span :if={not @can_operate} class="text-[10px] text-base-content/40">
+              read-only (operator role required to change)
+            </span>
+
+            <span class={[
+              "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              if(@proxy_mode == :dry_run,
+                do: "bg-warning/20 text-warning",
+                else: "bg-base-200 text-base-content/50"
+              )
+            ]}>
+              {if @proxy_mode == :dry_run, do: "Dry-run", else: "Enforcing"}
+            </span>
+
+            <button
+              :if={@can_operate}
+              type="button"
+              id="dry-run-toggle"
+              phx-click="toggle_dry_run"
+              class={[
+                "btn btn-xs",
+                if(@proxy_mode == :dry_run, do: "btn-warning", else: "btn-ghost")
+              ]}
+              title="When dry-run, a plugin's deny/hold is logged as shadow_blocked/shadow_held instead of enforced — the call still goes through."
+            >
+              {if @proxy_mode == :dry_run, do: "back to enforcing", else: "switch to dry-run"}
+            </button>
+          </div>
         </div>
 
         <div class="divide-y divide-base-300/60">
@@ -1068,6 +1094,19 @@
               >
                 ▼
               </button>
+
+              <select
+                id={"plugin-mode-" <> plugin.name}
+                name="mode"
+                class="select select-ghost select-xs font-mono text-[11px]"
+                phx-change="set_plugin_mode"
+                phx-value-name={plugin.name}
+                title="Pin this plugin's dry-run mode regardless of the global switch, or inherit it."
+              >
+                <option value="inherit" selected={plugin.mode == nil}>inherit</option>
+                <option value="enforcing" selected={plugin.mode == :enforcing}>enforcing</option>
+                <option value="dry_run" selected={plugin.mode == :dry_run}>dry-run</option>
+              </select>
 
               <button
                 type="button"

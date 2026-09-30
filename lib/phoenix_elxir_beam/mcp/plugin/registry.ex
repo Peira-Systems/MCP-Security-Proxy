@@ -99,6 +99,25 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
   def enable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, true})
   def disable(name, server \\ __MODULE__), do: GenServer.call(server, {:set_enabled, name, false})
 
+  @doc """
+  Pins `name`'s dry-run mode to `:enforcing` or `:dry_run` regardless of the
+  global proxy mode, or clears the pin with `nil` (inherit the global mode).
+  """
+  @spec set_mode(String.t(), :enforcing | :dry_run | nil, atom()) :: :ok | {:error, :not_found}
+  def set_mode(name, mode, server \\ __MODULE__) when mode in [:enforcing, :dry_run, nil] do
+    GenServer.call(server, {:set_mode, name, mode})
+  end
+
+  @doc "The global proxy mode (`:enforcing` by default)."
+  @spec proxy_mode(atom()) :: :enforcing | :dry_run
+  def proxy_mode(server \\ __MODULE__), do: GenServer.call(server, :proxy_mode)
+
+  @doc "Sets the global proxy mode, persisted (when `persist: true`) so it survives a restart."
+  @spec set_proxy_mode(:enforcing | :dry_run, atom()) :: :ok
+  def set_proxy_mode(mode, server \\ __MODULE__) when mode in [:enforcing, :dry_run] do
+    GenServer.call(server, {:set_proxy_mode, mode})
+  end
+
   @doc "Reassigns `order` to match the given list of plugin names. Unlisted entries keep their slot after listed ones."
   def reorder(names, server \\ __MODULE__) when is_list(names) do
     GenServer.call(server, {:reorder, names})
@@ -140,7 +159,8 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       wasm_supervisor: Keyword.get(opts, :wasm_supervisor, @wasm_supervisor),
       # Only the real, singleton registry reads/writes the persisted overlay
       # (M3.4b). Named test instances stay in-memory.
-      persist?: Keyword.get(opts, :persist, table == __MODULE__)
+      persist?: Keyword.get(opts, :persist, table == __MODULE__),
+      proxy_mode: :enforcing
     }
 
     {:ok, state, {:continue, {:start_plugins, sidecars, wasm}}}
@@ -158,7 +178,13 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
 
     # Overlay the operator's persisted enable/disable + order (M3.4b) on top of
     # the config-declared defaults, now that every entry is in the table.
-    if state.persist?, do: apply_persisted_overlay(state.table)
+    state =
+      if state.persist? do
+        apply_persisted_overlay(state.table)
+        %{state | proxy_mode: StateStore.proxy_mode()}
+      else
+        state
+      end
 
     {:noreply, state}
   end
@@ -174,6 +200,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         |> then(&if is_boolean(s.enabled), do: %{&1 | enabled: s.enabled}, else: &1)
         |> then(&if is_integer(s.position), do: %{&1 | order: s.position}, else: &1)
         |> then(&if is_map(s.config), do: %{&1 | config: s.config}, else: &1)
+        |> then(
+          &if is_binary(s.mode), do: %{&1 | mode: String.to_existing_atom(s.mode)}, else: &1
+        )
 
       :ets.insert(table, {name, entry})
     end
@@ -201,6 +230,28 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       [] ->
         {:reply, {:error, :not_found}, state}
     end
+  end
+
+  @impl true
+  def handle_call({:set_mode, name, mode}, _from, state) do
+    case :ets.lookup(state.table, name) do
+      [{^name, entry}] ->
+        :ets.insert(state.table, {name, %{entry | mode: mode}})
+        if state.persist?, do: StateStore.put_mode(name, mode && to_string(mode))
+        {:reply, :ok, state}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(:proxy_mode, _from, state), do: {:reply, state.proxy_mode, state}
+
+  @impl true
+  def handle_call({:set_proxy_mode, mode}, _from, state) do
+    if state.persist?, do: StateStore.put_proxy_mode(mode)
+    {:reply, :ok, %{state | proxy_mode: mode}}
   end
 
   @impl true
@@ -456,7 +507,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
         can_block: false,
         order: 0,
         enabled: false,
-        note: nil
+        note: nil,
+        # nil = inherit the global proxy mode; :enforcing / :dry_run pins it.
+        mode: nil
       },
       fields
     )

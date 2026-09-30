@@ -77,7 +77,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
         }
 
   @type result ::
-          {:ok, map(), [map()], [map()]}
+          {:ok, map(), [map()], [map()], String.t() | nil}
           | {:cut, String.t(), [map()], [map()], non_neg_integer()}
           | {:error, String.t()}
 
@@ -86,8 +86,10 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
   reply. Returns `result()` — see the moduledoc — or, when `opts[:conn]` is
   given, `{result(), Plug.Conn.t() | nil}`:
 
-    * `{:ok, response_map, chunk_findings, chunk_taint_sources}` — the full
-      JSON-RPC response, plus anything the chunk phase collected on the way;
+    * `{:ok, response_map, chunk_findings, chunk_taint_sources, shadow_reason}` —
+      the full JSON-RPC response, plus anything the chunk phase collected on
+      the way; `shadow_reason` is the reason a `:dry_run`-mode chunk policy
+      would have cut the stream, or `nil` if none did;
     * `{:cut, reason, findings, taint_sources, bytes_read}` — a chunk policy
       denied mid-stream; nothing further was read;
     * `{:error, message}` — transport failure, timeout, buffer ceiling, or an
@@ -116,6 +118,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
       findings: [],
       taint: [],
       reason: nil,
+      shadow_reason: nil,
       call_meta: call_meta,
       entries: PluginRegistry.active_chunk(),
       request_id: body["id"],
@@ -210,13 +213,17 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
         }
       })
 
-    {verdict, findings, _redactions, taint, reason} = Pipeline.run_chunk(ctx, st.entries)
+    {verdict, findings, _redactions, taint, reason, shadow_reason} =
+      Pipeline.run_chunk(ctx, st.entries, global_mode: PluginRegistry.proxy_mode())
 
     st = %{
       st
       | findings: st.findings ++ findings,
         taint: st.taint ++ taint,
-        delivered: st.delivered ++ [part]
+        delivered: st.delivered ++ [part],
+        # First shadow reason wins — later chunks may also carry one, but the
+        # operator only needs to know it *would* have been cut, and when.
+        shadow_reason: st.shadow_reason || shadow_reason
     }
 
     case verdict do
@@ -308,8 +315,11 @@ defmodule PhoenixElxirBeam.MCP.StreamProxy do
 
       true ->
         case decode_body(resp, st.buffer, st.request_id) do
-          {:ok, response_map} -> wrap({:ok, response_map, st.findings, st.taint}, st)
-          :error -> wrap({:error, "upstream returned an unparseable MCP response"}, st)
+          {:ok, response_map} ->
+            wrap({:ok, response_map, st.findings, st.taint, st.shadow_reason}, st)
+
+          :error ->
+            wrap({:error, "upstream returned an unparseable MCP response"}, st)
         end
     end
   end

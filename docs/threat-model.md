@@ -46,6 +46,17 @@ call into a *send it somewhere* call.
 | Prompt-injection detection | M4.3 | maintained ruleset over tool descriptions (`discovery`, quarantines) and responses (`post_call`, finding + redaction) — see [injection-detection.md](injection-detection.md) |
 | Default-deny | M4.2 | `UnclassifiedGuard` (prod: `hold`) parks calls to tools the operator has not classified |
 
+**Dry-run mode is a rollout tool, not a weaker mode of these defences.** An
+operator can put the whole pipeline, or a single plugin, into observe-only
+mode to see what it *would* have blocked against real traffic before trusting
+it to enforce — every would-be verdict is still durably audited
+(`shadow_blocked` / `shadow_held` on the same hash chain as a real one). While
+a plugin is in dry-run, though, it provides **no actual protection** — a call
+it would have denied still reaches the upstream, or a response it would have
+withheld is still delivered. Nothing here is in dry-run by default; a plugin
+stays enforcing unless an operator explicitly turns dry-run on globally or
+pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
+
 ## Other threats in scope
 
 - **Unauthenticated access.** Every proxy request needs a signed API key

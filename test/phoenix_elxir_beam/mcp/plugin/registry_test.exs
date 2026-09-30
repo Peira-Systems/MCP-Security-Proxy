@@ -253,4 +253,43 @@ defmodule PhoenixElxirBeam.MCP.Plugin.RegistryTest do
     :ok = Registry.disable("event-log", reg)
     assert [] = Registry.active_sinks(reg)
   end
+
+  describe "dry-run mode" do
+    test "an entry defaults to mode: nil (inherit the global switch)" do
+      reg = start_registry([{ChainExfil, []}])
+      assert [%{mode: nil}] = Registry.list(reg)
+    end
+
+    test "the registry's global proxy_mode/1 defaults to :enforcing" do
+      reg = start_registry([{ChainExfil, []}])
+      assert Registry.proxy_mode(reg) == :enforcing
+    end
+
+    test "set_proxy_mode/2 flips the global mode" do
+      reg = start_registry([{ChainExfil, []}])
+
+      :ok = Registry.set_proxy_mode(:dry_run, reg)
+      assert Registry.proxy_mode(reg) == :dry_run
+    end
+
+    test "set_mode/3 pins a plugin's mode regardless of the global switch" do
+      reg = start_registry([{ChainExfil, []}])
+
+      :ok = Registry.set_mode("chain-exfil", :dry_run, reg)
+      assert [%{name: "chain-exfil", mode: :dry_run}] = Registry.list(reg)
+    end
+
+    test "set_mode/3 on an unknown plugin returns an error" do
+      reg = start_registry([{ChainExfil, []}])
+      assert {:error, :not_found} = Registry.set_mode("nope", :dry_run, reg)
+    end
+
+    test "set_mode/3 can clear a pin back to nil (inherit)" do
+      reg = start_registry([{ChainExfil, []}])
+
+      :ok = Registry.set_mode("chain-exfil", :dry_run, reg)
+      :ok = Registry.set_mode("chain-exfil", nil, reg)
+      assert [%{name: "chain-exfil", mode: nil}] = Registry.list(reg)
+    end
+  end
 end

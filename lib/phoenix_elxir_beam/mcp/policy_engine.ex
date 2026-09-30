@@ -146,8 +146,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   Receipts the result of a `post_call` response scan and folds any
   `taint_sources` the scan produced into the session's taint provenance.
   Skipped entirely when the scan was clean (no findings, no taint, not
-  withheld). `withheld` is `nil` for a delivered response, or the reason
-  string when the whole response was discarded → a `:blocked` event.
+  withheld, no shadow withhold). `withheld` is `nil` for a delivered response,
+  or the reason string when the whole response was discarded → a `:blocked`
+  event. `shadow_withheld` is the reason a `:dry_run`-mode plugin would have
+  withheld the response — `withheld` and `shadow_withheld` are never both set
+  (`PhoenixElxirBeam.MCP.Pipeline.run_post_call/3`'s real denial always wins)
+  — and produces a `:shadow_blocked` event instead, with the response still
+  delivered.
   """
   def record_response_scan(
         session_id,
@@ -156,10 +161,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         findings,
         withheld,
         taint_sources \\ [],
-        name \\ __MODULE__
+        name \\ __MODULE__,
+        shadow_withheld \\ nil
       )
 
-  def record_response_scan(_s, _sv, _t, [], nil, [], _name), do: :ok
+  def record_response_scan(_s, _sv, _t, [], nil, [], _name, nil), do: :ok
 
   def record_response_scan(
         session_id,
@@ -168,11 +174,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         findings,
         withheld,
         taint_sources,
-        name
+        name,
+        shadow_withheld
       ) do
     GenServer.call(
       name,
-      {:record_response_scan, session_id, server_id, tool_name, findings, withheld, taint_sources}
+      {:record_response_scan, session_id, server_id, tool_name, findings, withheld, taint_sources,
+       shadow_withheld}
     )
   end
 
@@ -314,7 +322,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
   def handle_call(
         {:record_response_scan, session_id, server_id, tool_name, findings, withheld,
-         taint_sources},
+         taint_sources, shadow_withheld},
         _from,
         state
       ) do
@@ -324,7 +332,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     persist_session(state, session_id)
 
     {status, reason} =
-      if withheld, do: {:blocked, withheld}, else: {:ok, nil}
+      cond do
+        withheld -> {:blocked, withheld}
+        shadow_withheld -> {:shadow_blocked, shadow_withheld}
+        true -> {:ok, nil}
+      end
 
     event = %Event{
       id: generate_id(),
@@ -391,15 +403,43 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
           })
 
         {pipeline_verdict, decision, findings} =
-          Pipeline.run(:pre_call, ctx, PluginRegistry.active_policies(:pre_call, state.registry))
+          Pipeline.run(
+            :pre_call,
+            ctx,
+            PluginRegistry.active_policies(:pre_call, state.registry),
+            global_mode: PluginRegistry.proxy_mode(state.registry)
+          )
 
         opts = [decisions: decisions_from(decision), findings: findings]
         meta = {session, session_id, server_id, tool_name, tags}
 
-        case pipeline_verdict do
-          :hold -> reply_hold(meta, decision, opts, state)
-          :deny -> reply_verdict(meta, :blocked, decision.reason, opts, state)
-          :allow -> reply_verdict(meta, :ok, nil, opts, accumulate_tags(state, session_id, tags))
+        case {pipeline_verdict, decision.shadow_verdict} do
+          {:hold, _} ->
+            reply_hold(meta, decision, opts, state)
+
+          {:deny, _} ->
+            reply_verdict(meta, :blocked, decision.reason, opts, state)
+
+          {:allow, :deny} ->
+            reply_verdict(
+              meta,
+              :shadow_blocked,
+              decision.reason,
+              opts,
+              accumulate_tags(state, session_id, tags)
+            )
+
+          {:allow, :hold} ->
+            reply_verdict(
+              meta,
+              :shadow_held,
+              decision.reason,
+              opts,
+              accumulate_tags(state, session_id, tags)
+            )
+
+          {:allow, nil} ->
+            reply_verdict(meta, :ok, nil, opts, accumulate_tags(state, session_id, tags))
         end
     end
   end
@@ -606,7 +646,9 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
     persist_session(state, session_id)
     receipt(event, state, opts)
-    {:reply, {if(status == :ok, do: :allow, else: :block), event}, state}
+
+    {:reply,
+     {if(status in [:ok, :shadow_blocked, :shadow_held], do: :allow, else: :block), event}, state}
   end
 
   defp reply_hold({session, session_id, server_id, tool_name, tags}, decision, opts, state) do

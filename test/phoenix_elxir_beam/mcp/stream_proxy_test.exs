@@ -20,7 +20,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxyTest do
   end
 
   test "returns the full reassembled response for a small reply", %{server: server} do
-    assert {:ok, %{"id" => 7, "result" => %{"content" => [%{"text" => text}]}}, [], []} =
+    assert {:ok, %{"id" => 7, "result" => %{"content" => [%{"text" => text}]}}, [], [], nil} =
              StreamProxy.run(server, tool_body("list_files"), @meta)
 
     assert text =~ "directory listing"
@@ -46,7 +46,7 @@ defmodule PhoenixElxirBeam.MCP.StreamProxyTest do
     # `initialize` on this fixture returns valid JSON; force a bad shape by
     # asking for a method it answers with an error envelope — still valid JSON,
     # so this really checks the ok-path decode. A truncated cut is covered above.
-    assert {:ok, %{"error" => _}, [], []} =
+    assert {:ok, %{"error" => _}, [], [], nil} =
              StreamProxy.run(
                server,
                %{"jsonrpc" => "2.0", "id" => 1, "method" => "bogus/method", "params" => %{}},
