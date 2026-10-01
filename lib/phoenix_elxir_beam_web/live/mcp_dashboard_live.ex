@@ -1842,6 +1842,7 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp tag_atom("sensitive_read"), do: :sensitive_read
   defp tag_atom("network_egress"), do: :network_egress
+  defp tag_atom("untrusted_source"), do: :untrusted_source
 
   defp apply_event(socket, %{status: status} = event) when status in [:ok, :blocked] do
     socket = stream_insert(socket, :events, event, at: 0)
@@ -1921,10 +1922,12 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
 
   defp tag_pill_class("sensitive_read"), do: "bg-warning/20 text-warning"
   defp tag_pill_class("network_egress"), do: "bg-error/20 text-error"
+  defp tag_pill_class("untrusted_source"), do: "bg-warning/20 text-warning"
   defp tag_pill_class(_), do: "bg-base-300 text-base-content/50"
 
   defp tag_label("sensitive_read"), do: "sensitive"
   defp tag_label("network_egress"), do: "egress"
+  defp tag_label("untrusted_source"), do: "untrusted"
   defp tag_label(other), do: other
 
   # A finding is a `Finding` struct on the live feed (broadcast straight from

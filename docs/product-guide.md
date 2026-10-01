@@ -400,6 +400,12 @@ an unclassified tool is parked** until an operator classifies it.
   config, or private data.
 - **`network egress`** (`:network_egress`) — the tool sends data somewhere you
   can't see.
+- **`untrusted source`** (`:untrusted_source`) — the tool's response should be
+  treated as untrusted regardless of content (an unvetted upstream, a web
+  scraper, anything that can return a prompt-injection payload with nothing
+  credential-shaped in it for `SecretLeak` to catch). Tagging it taints the
+  session the same way a leaked secret does — opt-in, nothing is untrusted by
+  default. See [threat-model.md](threat-model.md) "Provenance taint tracking".
 
 Where the name/description heuristics have a suggestion, an **apply suggested**
 button assigns tags in one click. A tool that is neither (a pure computation, a
@@ -503,7 +509,7 @@ audit-chain status pill, and the signed-in identity.
 |---|---|---|
 | **Tool graph + live feed** | real-time visualization of calls flowing agent → gate → server; pulses red on a block | all |
 | **Operational alerts / Approval required** banners | active `MCP.Alerts` and parked holds with Approve / Deny | operator resolves holds |
-| **Event history** | filterable, sortable, paginated audit history; **verify audit chain** button | all |
+| **Event history** | filterable, sortable, paginated audit history; **verify audit chain** button; a blocked/held row has a collapsed **chain** disclosure listing the session's prior calls that led to it | all |
 | **Plugins** | every plugin + each sidecar's health; enable / disable / ▲▼ reorder; global dry-run toggle + per-plugin mode pin (§6.8) | operator |
 | **Policy changes** | every runtime change (actor, before → after) with one-click **revert** | operator reverts |
 | **Client keys** | issued keys; **Issue** / **Revoke** | admin |
@@ -571,6 +577,7 @@ run in list order and short-circuit on the first `deny`/`hold`; `post_call` and
 | **MetadataEgressGuard** | `pre_call` policy (`:network_egress` only) | SSRF guard: resolves every `http(s)://` host in a call's arguments and denies if it lands in loopback, link-local (incl. the cloud metadata address), or RFC1918 — no prior sensitive read required. Registered enabled, not dry-run-pinned by default — pin it from the Plugins panel before trusting it to enforce. | — |
 | **RugPull** | `discovery` scanner | Pins each tool's `description_hash` at registration; quarantines a tool whose definition changed on re-handshake (→ `-32003`). | — |
 | **SecretLeak** | `post_call` scanner | Finds credentials in a tool/resource/prompt response, redacts them in place, and records HMAC taint markers (never the raw secret). | — |
+| **ProvenanceTaint** | `post_call` scanner | Taints the session whenever a tool tagged `:untrusted_source` returns a response, independent of content — catches what `SecretLeak`'s regexes can't (paraphrase, un-fingerprintable payloads). | — |
 | **ResponseSizeGuard** | `post_call` policy | Withholds a response whose text content exceeds a byte budget (→ `-32002`) — blunt bulk-exfil guard. | `config: %{"max_bytes" => 4000}` |
 | **StreamGuard** | `chunk` policy | The streaming analogue of ResponseSizeGuard — cuts an `:http` response mid-transfer once the running byte count passes a budget. | `config: %{"max_bytes" => 1200}` |
 | **EventLogSink** | `auditSink` | Persists every `AuditEvent` to the hash-chained `policy_events` table. | — |

@@ -39,6 +39,7 @@ call into a *send it somewhere* call.
 |---|---|---|
 | Tag-based chaining rules | pre-existing | `ChainExfil` / `RuleEngine` deny egress after a `:sensitive_read`, per operator tags |
 | Session taint tracking | pre-existing + M4.1 | `SecretLeak` marks a leaked credential with per-session **HMAC markers**; `TaintedArgGuard` blocks a later call whose arguments carry that secret *or a base64/hex/URL-encoded copy*; `TaintGuard` is the coarse backstop (any egress after any leak) |
+| Provenance taint tracking | new | `ProvenanceTaint` taints the session whenever a tool tagged `:untrusted_source` returns a response, **independent of content**. Value-fingerprinting (above) is blind to a paraphrased secret and to untrusted content that was never credential-shaped to begin with (a prompt-injection payload in a scraped page); tagging the *source* instead of the value closes that gap. Operator opt-in per tool/server, same place tool tags are already assigned — nothing is untrusted by default |
 | Response scanning | pre-existing + M1.2 | `SecretLeak` redacts credentials out of `tools/call` / `resources/read` / `prompts/get` content before the agent sees them |
 | Streaming early-cut | M1.3 | `StreamGuard` inspects an `:http` response incrementally and cuts the stream mid-transfer once a budget is exceeded — the rest never crosses |
 | Behavioural baseline | pre-existing | `BaselineGuard` denies once the rate of watched calls exceeds a baseline |
@@ -71,6 +72,13 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 - **Audit tampering.** Rows are hash-chained; `AuditIntegrity` verifies the
   chain every 15 min and against an off-DB signed checkpoint, so a truncated log
   is caught even if it verifies internally (M2.3).
+- **Tracing a block back to its cause.** A `blocked` / `held` / `shadow_blocked`
+  / `shadow_held` row carries a `call_chain` — the session's prior calls (tool,
+  tags, timestamp) in the 60s/50-call window `BaselineGuard` already tracks —
+  so an operator doesn't have to manually correlate `session_id` across the raw
+  log to see what led to the block. Excluded from the hash chain (it's context
+  for a verdict, not an input the verdict depended on) and only attached to
+  block/hold-shaped events, not every `ok`.
 - **Resource exhaustion.** Body-size cap (413), per-key rate limit (429),
   per-stream buffer ceiling + deadline, sidecar `prlimit` caps, DB queue
   fail-fast (M1.5 / M3.5).
