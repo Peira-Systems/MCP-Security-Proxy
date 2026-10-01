@@ -2,10 +2,10 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
   @shortdoc "Fails if a registered tool's sensitive tags aren't actually enforced"
 
   @moduledoc """
-  Audits every tool on every currently-registered MCP server (read from
-  Postgres via `PhoenixElxirBeam.MCP.ServerStore`) against the compiled
-  `RuleEngine` config, and fails the build if any sensitive tool isn't
-  actually enforced for an arbitrary agent.
+  Audits every tool on every currently-registered MCP server (read directly
+  from Postgres via `PhoenixElxirBeam.Repo.all(PhoenixElxirBeam.MCP.ServerRegistration)`)
+  against the compiled `RuleEngine` config, and fails the build if any
+  sensitive tool isn't actually enforced for an arbitrary agent.
 
   See `docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md` for
   the full design, and `PhoenixElxirBeam.MCP.RuleCoverage` for the
@@ -24,7 +24,7 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
 
   use Mix.Task
 
-  alias PhoenixElxirBeam.MCP.{RuleCoverage, ServerStore}
+  alias PhoenixElxirBeam.MCP.{RuleCoverage, ServerRegistration}
   alias PhoenixElxirBeam.Repo
 
   @generated_fixtures_path "test/support/generated_rule_fixtures.ex"
@@ -52,18 +52,19 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
   `RuleCoverage.Gap` and adds `server_name`, since `RuleCoverage` itself
   has no notion of which server a tool came from).
 
-  Raises if Postgres is unreachable (see `ensure_db_reachable!/0`) — this is
-  deliberate: `ServerStore.all/0` itself rescues every DB error to `[]` (it
-  favors the running proxy's registration availability over durability), so
-  without an unrescued probe here, "Postgres is down" and "zero servers are
-  registered" would be indistinguishable, and a CI gate whose only job is to
-  catch missing coverage would silently pass during an infra outage.
+  Queries `Repo.all(ServerRegistration)` directly and unrescued, rather than
+  going through `PhoenixElxirBeam.MCP.ServerStore.all/0` — that function
+  deliberately rescues every DB error to `[]` (it favors the running proxy's
+  registration availability over durability), which would make "Postgres is
+  down" and "zero servers are registered" indistinguishable here. A CI gate
+  whose only job is to catch missing coverage must not silently pass during
+  an infra outage or a schema mismatch, so any failure in this query — a
+  dropped connection, a migration drift, anything — propagates as an
+  exception and fails the build loudly instead.
   """
   @spec run_check() :: {[map()], String.t()}
   def run_check do
-    ensure_db_reachable!()
-
-    registrations = ServerStore.all()
+    registrations = Repo.all(ServerRegistration)
 
     if registrations == [] do
       {[], "mcp.rules.check: 0 servers registered in this database — nothing to check."}
@@ -89,15 +90,6 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
       {gaps, format_report(gaps, length(registrations))}
     end
   end
-
-  # `ServerStore.all/0` rescues every error and returns `[]` on both a
-  # genuinely-empty table and an unreachable Postgres, since its own
-  # design goal (registration availability for the running proxy) means
-  # it must never raise. That's the wrong trade-off for a CI gate: this
-  # probe runs first, unrescued, so an unreachable database crashes this
-  # task loudly (non-zero exit, exception in the CI log) instead of
-  # silently reporting "0 servers registered" as if it were a clean pass.
-  defp ensure_db_reachable!, do: Repo.query!("SELECT 1")
 
   defp tool_from_overlay(name, overlay) do
     %{
@@ -183,7 +175,16 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
     end
     """
 
-    File.write!(@generated_fixtures_path, contents)
+    # Run the generated source through the formatter before writing so the
+    # file is always `mix format`-clean regardless of gap count — the raw
+    # interpolated string above is not format-clean when `gaps` is empty
+    # (`def cases, do: [\n\n  ]` fails `format --check-formatted`).
+    formatted =
+      contents
+      |> Code.format_string!()
+      |> IO.iodata_to_binary()
+
+    File.write!(@generated_fixtures_path, formatted <> "\n")
   end
 
   defp fixture_case(%{type: :uncovered_tag} = g) do

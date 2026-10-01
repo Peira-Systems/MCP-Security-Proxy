@@ -14,8 +14,14 @@ name: Rule coverage
 # to check" here and exit 0 trivially. This job is NOT yet a meaningful
 # coverage gate for that reason — the wiring is in place, but seeding real
 # (or realistic) server registrations into a persistent/staging database is
-# a separate, later effort. Until then, this job mainly documents intent and
-# exercises the drift-detection step below.
+# a separate, later effort. Until then, this job mainly documents intent.
+#
+# `test/support/generated_rule_fixtures.ex` is intentionally NOT committed
+# to the repo (see Task 5's ruling) — it's a regenerated-every-run, human-
+# readable report of the gaps found, not a tracked artifact to diff against.
+# There is deliberately no "drift detection" step comparing it to a
+# committed copy; instead this job uploads it as a build artifact (below)
+# so a human can download and inspect it after any run.
 
 on:
   pull_request:
@@ -82,12 +88,14 @@ jobs:
       # See the KNOWN LIMITATION comment at the top of this file: this
       # ephemeral Postgres has no real server registrations, so this
       # currently always reports "0 servers registered" and passes
-      # trivially. Kept here so the wiring (and drift-detection below) is in
-      # place ahead of a future effort to seed real registrations.
+      # trivially. Kept here so the wiring is in place ahead of a future
+      # effort to seed real registrations.
       - name: Run rule coverage check
         run: mix mcp.rules.check
 
-      - name: Fail if the generated fixture report is out of date
-        run: |
-          git diff --exit-code test/support/generated_rule_fixtures.ex || \
-            (echo "::error::generated_rule_fixtures.ex is out of date — run 'mix mcp.rules.check' locally and commit the result" && exit 1)
+      - name: Upload generated rule fixtures report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-rule-fixtures
+          path: test/support/generated_rule_fixtures.ex

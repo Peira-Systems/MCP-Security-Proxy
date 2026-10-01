@@ -1,17 +1,31 @@
 defmodule Mix.Tasks.Mcp.Rules.CheckTest do
   use PhoenixElxirBeam.DataCase, async: false
 
-  alias PhoenixElxirBeam.MCP.{ServerRegistration, ServerStore}
+  import ExUnit.CaptureIO
+
+  alias PhoenixElxirBeam.MCP.ServerRegistration
   alias PhoenixElxirBeam.Repo
+
+  @generated_fixtures_path "test/support/generated_rule_fixtures.ex"
 
   setup do
     original = Application.get_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP)
+
+    pre_existing? = File.exists?(@generated_fixtures_path)
+
+    pre_existing_contents =
+      if pre_existing?, do: File.read!(@generated_fixtures_path)
 
     on_exit(fn ->
       if original do
         Application.put_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP, original)
       else
         Application.delete_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP)
+      end
+
+      cond do
+        pre_existing? -> File.write!(@generated_fixtures_path, pre_existing_contents)
+        true -> File.rm(@generated_fixtures_path)
       end
     end)
 
@@ -112,44 +126,126 @@ defmodule Mix.Tasks.Mcp.Rules.CheckTest do
     refute report =~ "0 gaps"
   end
 
-  # `run_check/0` calls an unrescued `Repo.query!("SELECT 1")` reachability
-  # probe before `ServerStore.all/0`, specifically so an unreachable Postgres
-  # crashes the task instead of `ServerStore.all/0`'s own rescue-to-`[]`
-  # making "DB is down" indistinguishable from "zero servers registered".
+  # `run_check/0` used to call a separate `ensure_db_reachable!/0` probe
+  # (`Repo.query!("SELECT 1")`) before `ServerStore.all/0`, specifically so
+  # an unreachable Postgres crashed the task instead of `ServerStore.all/0`'s
+  # own rescue-to-`[]` masking the failure as "zero servers registered".
   #
-  # We can't simulate true unreachability by reconfiguring
-  # `PhoenixElxirBeam.Repo` itself mid-test: it's a pooled, already-started
-  # `Ecto.Adapters.SQL.Sandbox` connection shared (via `DataCase`) with every
-  # other test in this run, so repointing its config wouldn't affect the
-  # live pool without restarting the Repo supervisor — which would tear down
-  # the sandbox out from under concurrently-running tests.
+  # That probe only proved the connection worked, not that the actual query
+  # `run_check/0` depends on (`Repo.all(ServerRegistration)`) would succeed —
+  # a schema mismatch or any other query-specific failure would still have
+  # been swallowed by `ServerStore.all/0`'s rescue. The fix (final
+  # whole-branch review, finding 3) removes `ensure_db_reachable!/0` and
+  # `ServerStore.all/0` from this task entirely: `run_check/0` now calls
+  # `Repo.all(ServerRegistration)` directly and unrescued, so *any* failure
+  # in the real query path — connection, schema, anything — propagates as an
+  # exception exactly like the old probe did for connection failures alone.
   #
-  # Instead, this proves the exact failure mechanism the probe relies on
-  # (an unreachable connection exits/crashes loudly rather than returning
-  # an ignorable error value) via a throwaway `Postgrex` connection pointed
-  # at a refused port, independent of the shared test Repo.
-  test "the reachability probe's query raises when Postgres is unreachable" do
-    Process.flag(:trap_exit, true)
+  # The dedicated Postgrex-against-a-refused-port test that lived here only
+  # ever exercised Postgrex in isolation, never the shipped function, and
+  # the function it was testing (`ensure_db_reachable!/0`) no longer exists.
+  # It is removed rather than adapted: there is no separate "probe" left to
+  # test, and the "zero registered servers" test above plus the two "has
+  # gaps" tests below already exercise the unrescued `Repo.all/1` happy
+  # path. A dedicated unreachable-DB test would need to tear down/repoint
+  # the shared sandboxed `Repo` connection, which (as the removed test's own
+  # comment noted) risks breaking other concurrently-running tests.
 
-    {:ok, conn} =
-      Postgrex.start_link(
-        hostname: "127.0.0.1",
-        port: 1,
-        username: "mcp_proxy",
-        password: "unreachable",
-        database: "unreachable",
-        backoff_type: :stop,
-        sync_connect: false,
-        show_sensitive_data_on_connection_error: false
-      )
+  describe "run/1 (end to end: exit behavior + generated fixture file)" do
+    test "raises and writes a syntactically valid generated fixture file when gaps exist" do
+      seed_server("srv-e2e-gap", "server-e2e-gap", %{
+        "read_secrets" => %{
+          "tags" => ["sensitive_read"],
+          "suggested_tags" => ["sensitive_read"],
+          "quarantined" => false,
+          "quarantine_reason" => nil,
+          "hash" => "h"
+        }
+      })
 
-    # An unroutable/refused connection surfaces as the (linked) connection
-    # process itself exiting once its supervisor gives up retrying
-    # (`backoff_type: :stop`), rather than as an `{:error, _}` return —
-    # this is the same failure shape `ensure_db_reachable!/0`'s bare
-    # `Repo.query!("SELECT 1")` relies on to bring the whole
-    # `mix mcp.rules.check` task down loudly instead of silently reporting
-    # "0 servers registered".
-    assert_receive {:EXIT, ^conn, _reason}, 2_000
+      configure_rules([
+        %{
+          "match" => %{"agent" => "agent://ci-runner", "tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
+      ])
+
+      output =
+        capture_io(fn ->
+          assert_raise Mix.Error, ~r/coverage gap/, fn ->
+            Mix.Tasks.Mcp.Rules.Check.run([])
+          end
+        end)
+
+      assert output =~ "uncovered_tag"
+      assert output =~ "server-e2e-gap/read_secrets"
+
+      assert File.exists?(@generated_fixtures_path)
+      file_contents = File.read!(@generated_fixtures_path)
+      assert file_contents =~ "server-e2e-gap/read_secrets"
+      assert file_contents =~ "sensitive_read"
+
+      # Syntactically valid, loadable Elixir — not just a string that
+      # happens to look right.
+      [{module, _bytecode}] = Code.compile_string(file_contents)
+      assert module == PhoenixElxirBeam.MCP.GeneratedRuleFixtures
+
+      [case] = module.cases()
+      assert case.gap_type == :uncovered_tag
+      assert case.call.tool_name == "read_secrets"
+      assert case.call.tags == [:sensitive_read]
+
+      # Regression test for finding 1: the generated file must always be
+      # mix-format-clean, regardless of gap count.
+      assert file_contents == format_elixir(file_contents)
+    end
+
+    test "exits cleanly and writes a format-clean, valid, empty-cases file when there are no gaps" do
+      seed_server("srv-e2e-clean", "server-e2e-clean", %{
+        "read_secrets" => %{
+          "tags" => ["sensitive_read"],
+          "suggested_tags" => ["sensitive_read"],
+          "quarantined" => false,
+          "quarantine_reason" => nil,
+          "hash" => "h"
+        }
+      })
+
+      configure_rules([
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
+      ])
+
+      output =
+        capture_io(fn ->
+          Mix.Tasks.Mcp.Rules.Check.run([])
+        end)
+
+      assert output =~ "0 gaps"
+
+      assert File.exists?(@generated_fixtures_path)
+      file_contents = File.read!(@generated_fixtures_path)
+
+      [{module, _bytecode}] = Code.compile_string(file_contents)
+      assert module == PhoenixElxirBeam.MCP.GeneratedRuleFixtures
+      assert module.cases() == []
+
+      # This is the direct regression test for finding 1: the raw
+      # interpolated `def cases, do: [\n\n  ]` output is not
+      # `mix format`-clean when there are zero gaps. Confirm the file as
+      # written is already formatted.
+      assert file_contents == format_elixir(file_contents)
+    end
+  end
+
+  defp format_elixir(source) do
+    source
+    |> Code.format_string!()
+    |> IO.iodata_to_binary()
+    |> Kernel.<>("\n")
   end
 end
