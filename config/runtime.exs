@@ -33,6 +33,43 @@ case System.get_env("MCP_HOST_LOOPBACK_ALIAS") do
     :ok
 end
 
+# Lets the rule-coverage CI job (`.github/workflows/rule-coverage.yml`)
+# give `mix mcp.rules.check` one extra, agent-agnostic `RuleEngine` rule
+# covering `PhoenixElxirBeam.MCP.CiFixtureServer`'s seeded tags, WITHOUT
+# touching `config/test.exs` — that file is shared by the whole `mix test`
+# suite, and many unrelated tests reuse tool names like `"read_secrets"`;
+# a broad covering rule added there would deny those tests' own calls
+# before their actual scenario even runs (confirmed: broke 16 unrelated
+# tests on a first attempt). This env var is set only in that one CI
+# workflow step, in its own separate `mix mcp.rules.check` process — no
+# other test or task ever sets it, so it never applies anywhere else.
+# Appends to (never replaces) the compiled `RuleEngine` plugin entry's
+# existing rules, leaving every other plugin entry untouched.
+case System.get_env("MCP_RULE_COVERAGE_EXTRA_RULE") do
+  json when is_binary(json) and json != "" ->
+    extra_rule = Jason.decode!(json)
+
+    plugins =
+      :phoenix_elxir_beam
+      |> Application.get_env(PhoenixElxirBeam.MCP, [])
+      |> Keyword.get(:plugins, [])
+      |> Enum.map(fn
+        {PhoenixElxirBeam.MCP.Plugins.RuleEngine, opts} ->
+          existing_rules = get_in(opts, [:config, "rules"]) || []
+          updated_config = Map.put(opts[:config] || %{}, "rules", existing_rules ++ [extra_rule])
+          {PhoenixElxirBeam.MCP.Plugins.RuleEngine, Keyword.put(opts, :config, updated_config)}
+
+        other ->
+          other
+      end)
+
+    existing = Application.get_env(:phoenix_elxir_beam, PhoenixElxirBeam.MCP, [])
+    config :phoenix_elxir_beam, PhoenixElxirBeam.MCP, Keyword.put(existing, :plugins, plugins)
+
+  _ ->
+    :ok
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,

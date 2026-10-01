@@ -4,17 +4,21 @@ name: Rule coverage
 # against a database and fails if any registered tool's sensitive tags
 # aren't actually enforced by the RuleEngine config.
 #
-# KNOWN LIMITATION: this repo has no staging DB secret configured in CI
-# today (only GITHUB_TOKEN and ANTHROPIC_API_KEY exist — checked against
-# ci.yml, security-review.yml, and release.yml). Rather than invent one or
-# leave this job blocked, it points at the same ephemeral, empty Postgres
-# service container that ci.yml's `test` job spins up for `mix test`. That
-# database always has zero `ServerStore` registrations, so
-# `mix mcp.rules.check` will always report "0 servers registered — nothing
-# to check" here and exit 0 trivially. This job is NOT yet a meaningful
-# coverage gate for that reason — the wiring is in place, but seeding real
-# (or realistic) server registrations into a persistent/staging database is
-# a separate, later effort. Until then, this job mainly documents intent.
+# This repo has no staging DB secret configured in CI (only GITHUB_TOKEN
+# and ANTHROPIC_API_KEY exist — checked against ci.yml, security-review.yml,
+# and release.yml). Rather than invent one, this job points at the same
+# ephemeral Postgres service container ci.yml's `test` job spins up for
+# `mix test`, and seeds it with one real, representative registration via
+# `mix mcp.rules.seed_fixtures` (registers `PhoenixElxirBeam.MCP.
+# CiFixtureServer`'s 3-tool catalog through a genuine handshake, then tags
+# the two sensitive tools as an operator would). That makes this a real
+# regression test: `MCP_RULE_COVERAGE_EXTRA_RULE` below gives
+# `mix mcp.rules.check` one extra rule covering that seeded catalog (see
+# `config/runtime.exs` for why this lives in an env var rather than
+# `config/test.exs` — the shared test config can't carry it without
+# breaking unrelated tests that reuse the same tool names), so a correctly-
+# configured run finds zero gaps. If a future config edit stops covering
+# `read_secrets`/`post_webhook`, this job is what turns red.
 #
 # `test/support/generated_rule_fixtures.ex` is intentionally NOT committed
 # to the repo (see Task 5's ruling) — it's a regenerated-every-run, human-
@@ -85,13 +89,15 @@ jobs:
       - run: mix ecto.create
       - run: mix ecto.migrate
 
-      # See the KNOWN LIMITATION comment at the top of this file: this
-      # ephemeral Postgres has no real server registrations, so this
-      # currently always reports "0 servers registered" and passes
-      # trivially. Kept here so the wiring is in place ahead of a future
-      # effort to seed real registrations.
+      - name: Seed a representative server registration
+        run: mix mcp.rules.seed_fixtures
+
       - name: Run rule coverage check
         run: mix mcp.rules.check
+        env:
+          MCP_RULE_COVERAGE_EXTRA_RULE: >-
+            {"match": {"tool_tags_any": ["sensitive_read", "network_egress"]},
+             "action": "deny", "reason": "CI fixture coverage baseline"}
 
       - name: Upload generated rule fixtures report
         if: always()
