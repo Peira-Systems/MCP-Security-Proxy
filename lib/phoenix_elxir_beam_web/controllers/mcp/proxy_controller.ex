@@ -407,6 +407,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
   defp forward_and_scan(conn, server_id, session_id, method, scan_label, id, jsonrpc, rpc_params) do
     meta = %{session_id: session_id, server_id: server_id, tool_name: scan_label, method: method}
     relay = if accepts_event_stream?(conn), do: conn
+    tags = tool_tags(server_id, scan_label)
 
     case fetch_streamed(server_id, envelope(jsonrpc, id, method, rpc_params), meta, relay) do
       {{:error, message}, relay_conn} ->
@@ -438,6 +439,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
           session_id,
           method,
           scan_label,
+          tags,
           id,
           jsonrpc,
           resp_body,
@@ -531,6 +533,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
          session_id,
          method,
          scan_label,
+         tags,
          id,
          jsonrpc,
          resp_body,
@@ -562,6 +565,7 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
               session_id: session_id,
               server_id: server_id,
               tool_name: scan_label,
+              tags: tags,
               method: method
             },
             response: %{is_error: false, content: content}

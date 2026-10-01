@@ -373,7 +373,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
       session ->
         now = DateTime.utc_now()
-        call_log = prune_call_log([%{tags: tags, at: now} | session.call_log], now)
+        call_id = generate_id()
+        prior_calls = session.call_log
+
+        call_log =
+          prune_call_log(
+            [%{call_id: call_id, tool_name: tool_name, tags: tags, at: now} | prior_calls],
+            now
+          )
+
         call_count = session.call_count + 1
 
         state =
@@ -385,7 +393,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
           CallContext.new(%{
             phase: :pre_call,
             call: %{
-              id: generate_id(),
+              id: call_id,
               session_id: session_id,
               agent_id: session.agent_id,
               server_id: server_id,
@@ -410,7 +418,12 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
             global_mode: PluginRegistry.proxy_mode(state.registry)
           )
 
-        opts = [decisions: decisions_from(decision), findings: findings]
+        opts = [
+          decisions: decisions_from(decision),
+          findings: findings,
+          call_chain: prior_calls
+        ]
+
         meta = {session, session_id, server_id, tool_name, tags}
 
         case {pipeline_verdict, decision.shadow_verdict} do
@@ -706,6 +719,8 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     [%{plugin: plugin, verdict: verdict, reason: reason}]
   end
 
+  @chain_worthy_statuses [:blocked, :held, :shadow_blocked, :shadow_held]
+
   # `event` already carries its final verdict by the time this runs. This
   # only broadcasts it and fans it out to the audit sinks — a failure in any
   # of those is swallowed rather than crashing the GenServer or the caller.
@@ -716,6 +731,12 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     # construction site — stamp it here, on the way out.
     agent_id = event.agent_id || get_in(state.sessions, [event.session_id, :agent_id])
     event = %{event | agent_id: agent_id}
+
+    opts =
+      if event.status in @chain_worthy_statuses,
+        do: opts,
+        else: Keyword.delete(opts, :call_chain)
+
     audit_event = AuditEvent.from_event(event, Keyword.put_new(opts, :agent_id, agent_id))
 
     try do

@@ -23,7 +23,7 @@ defmodule PhoenixElxirBeam.MCP.AuditEventTest do
     )
   end
 
-  test "from_event/2 maps Event fields and defaults decisions/findings to []" do
+  test "from_event/2 maps Event fields and defaults decisions/findings/call_chain to []" do
     audit = AuditEvent.from_event(event())
 
     assert audit.event_id == "evt-1"
@@ -33,6 +33,22 @@ defmodule PhoenixElxirBeam.MCP.AuditEventTest do
     assert audit.decisions == []
     assert audit.findings == []
     assert audit.call_id == nil
+    assert audit.call_chain == []
+  end
+
+  test "from_event/2 carries call_chain from opts" do
+    chain = [
+      %{
+        call_id: "c-1",
+        tool_name: "read_secrets",
+        tags: [:sensitive_read],
+        at: ~U[2026-08-28 09:59:00.000000Z]
+      }
+    ]
+
+    audit = AuditEvent.from_event(event(), call_chain: chain)
+
+    assert audit.call_chain == chain
   end
 
   test "from_event/2 carries decisions, findings, call_id, agent_id from opts" do

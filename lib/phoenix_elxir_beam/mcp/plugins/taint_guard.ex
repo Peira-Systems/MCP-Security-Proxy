@@ -50,8 +50,16 @@ defmodule PhoenixElxirBeam.MCP.Plugins.TaintGuard do
   defp reason(source, count) do
     origin = get(source, :origin_tool) || "an earlier tool"
     tail = if count > 1, do: " (+#{count - 1} more)", else: ""
+    what = what(source)
 
-    "network egress blocked: this session handled a secret via #{origin}#{age(source)}#{tail}"
+    "network egress blocked: this session handled #{what} via #{origin}#{age(source)}#{tail}"
+  end
+
+  defp what(source) do
+    case get(source, :finding_type) do
+      "untrusted_provenance" -> "untrusted content"
+      _ -> "a secret"
+    end
   end
 
   defp age(source) do

@@ -37,6 +37,21 @@ defmodule PhoenixElxirBeam.MCP.Plugins.TaintGuardTest do
     assert reason =~ "fetch"
   end
 
+  test "denies egress with untrusted-content wording when the taint source is provenance-based" do
+    source = %{
+      origin_tool: "scrape_page",
+      finding_type: "untrusted_provenance",
+      at: DateTime.utc_now()
+    }
+
+    assert %{verdict: :deny, severity: :high, reason: reason} =
+             TaintGuard.evaluate(:pre_call, ctx([source]))
+
+    assert reason =~ "scrape_page"
+    assert reason =~ "untrusted content"
+    refute reason =~ "secret"
+  end
+
   test "manifest: pre_call policy scoped to network_egress, fail_closed" do
     manifest = TaintGuard.manifest()
 

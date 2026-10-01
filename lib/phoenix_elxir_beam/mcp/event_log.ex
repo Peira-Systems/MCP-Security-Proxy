@@ -33,7 +33,11 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
   # Fields covered by the chain hash (everything meaningful except the
   # chain columns themselves and the row id / inserted_at). `agent_id` is
   # deliberately excluded so rows written before it existed still verify;
-  # it is request metadata, not a verdict-determining field.
+  # it is request metadata, not a verdict-determining field. `call_chain` is
+  # excluded for the same reason — it's context for *how* a verdict was
+  # reached (what else ran in this session beforehand), not an input the
+  # verdict itself depended on, so it can be backfilled or widened later
+  # without invalidating every row's hash.
   @hashed_keys ~w(event_id session_id scenario server_id tool_name tags status
                   reason occurred_at decisions findings)a
 
@@ -144,7 +148,8 @@ defmodule PhoenixElxirBeam.MCP.EventLog do
       reason: e.reason,
       occurred_at: e.occurred_at,
       decisions: Enum.map(e.decisions, &to_plain/1),
-      findings: Enum.map(e.findings, &to_plain/1)
+      findings: Enum.map(e.findings, &to_plain/1),
+      call_chain: Enum.map(e.call_chain, &to_plain/1)
     }
   end
 

