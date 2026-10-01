@@ -4,8 +4,12 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
   @moduledoc """
   Audits every tool on every currently-registered MCP server (read directly
   from Postgres via `PhoenixElxirBeam.Repo.all(PhoenixElxirBeam.MCP.ServerRegistration)`)
-  against the compiled `RuleEngine` config, and fails the build if any
-  sensitive tool isn't actually enforced for an arbitrary agent.
+  against the `RuleEngine` config actually enforced right now, and fails
+  the build if any sensitive tool isn't actually enforced for an arbitrary
+  agent. "Actually enforced" means the compiled config, overridden by
+  whatever an operator has saved from the dashboard (`enabled`/`config`) —
+  the same merge `PhoenixElxirBeam.MCP.Plugin.Registry` applies at runtime
+  — not just what's compiled in, which may be stale.
 
   See `docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md` for
   the full design, and `PhoenixElxirBeam.MCP.RuleCoverage` for the
@@ -126,7 +130,30 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
     end)
   end
 
+  # `Plugin.Registry` seeds each plugin from this compiled config at boot,
+  # then overlays whatever an operator has saved via the dashboard
+  # (`Plugin.Registry.apply_persisted_overlay/1`) — an `enabled`/`config`/
+  # `mode` edit there is what's actually enforced at runtime, and survives
+  # restarts. This task doesn't boot `Plugin.Registry`'s GenServer/ETS
+  # table (see the comment on `run/1` — only `Repo` is started), so it
+  # replicates that same merge directly against `StateStore.all()`
+  # instead, which is itself just a plain `Repo.all/1` query.
   defp rule_engine_rules do
+    overlay = PhoenixElxirBeam.MCP.Plugin.StateStore.all()["rule-engine"]
+
+    cond do
+      match?(%{enabled: false}, overlay) ->
+        []
+
+      match?(%{config: config} when is_map(config), overlay) ->
+        overlay.config["rules"] || []
+
+      true ->
+        compiled_rule_engine_rules()
+    end
+  end
+
+  defp compiled_rule_engine_rules do
     :phoenix_elxir_beam
     |> Application.get_env(PhoenixElxirBeam.MCP, [])
     |> Keyword.get(:plugins, [])
@@ -140,6 +167,21 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
   end
 
   defp unclassified_guard_mode do
+    overlay = PhoenixElxirBeam.MCP.Plugin.StateStore.all()["unclassified-guard"]
+
+    cond do
+      match?(%{enabled: false}, overlay) ->
+        "off"
+
+      match?(%{config: config} when is_map(config), overlay) ->
+        overlay.config["mode"] || "off"
+
+      true ->
+        compiled_unclassified_guard_mode()
+    end
+  end
+
+  defp compiled_unclassified_guard_mode do
     :phoenix_elxir_beam
     |> Application.get_env(PhoenixElxirBeam.MCP, [])
     |> Keyword.get(:plugins, [])

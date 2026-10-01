@@ -95,6 +95,84 @@ defmodule Mix.Tasks.Mcp.Rules.CheckTest do
     assert [%{type: :uncovered_tag, tool_name: "read_secrets", server_name: "server-b"}] = gaps
   end
 
+  test "an operator-saved rule override is audited instead of the stale compiled config" do
+    seed_server("srv-overlay", "server-overlay", %{
+      "read_secrets" => %{
+        "tags" => ["sensitive_read"],
+        "suggested_tags" => ["sensitive_read"],
+        "quarantined" => false,
+        "quarantine_reason" => nil,
+        "hash" => "h"
+      }
+    })
+
+    # Compiled config has no covering rule at all — if the task reads
+    # only this, it should report a gap.
+    configure_rules([])
+
+    # But an operator saved a real deny rule from the dashboard, which
+    # Plugin.Registry's own apply_persisted_overlay/1 would have merged
+    # in at runtime — the mix task must see this, not the stale compiled
+    # config, since this is what's actually enforced.
+    PhoenixElxirBeam.MCP.Plugin.StateStore.put_config("rule-engine", %{
+      "rules" => [
+        %{
+          "match" => %{"tool_tags_any" => ["sensitive_read"]},
+          "action" => "deny",
+          "reason" => "r"
+        }
+      ]
+    })
+
+    {gaps, _report} = Mix.Tasks.Mcp.Rules.Check.run_check()
+    assert gaps == []
+  end
+
+  test "an operator-disabled RuleEngine means zero rules are enforced, not the stale compiled config" do
+    seed_server("srv-disabled", "server-disabled", %{
+      "read_secrets" => %{
+        "tags" => ["sensitive_read"],
+        "suggested_tags" => ["sensitive_read"],
+        "quarantined" => false,
+        "quarantine_reason" => nil,
+        "hash" => "h"
+      }
+    })
+
+    # Compiled config has a real covering rule...
+    configure_rules([
+      %{"match" => %{"tool_tags_any" => ["sensitive_read"]}, "action" => "deny", "reason" => "r"}
+    ])
+
+    # ...but an operator disabled the plugin entirely from the dashboard.
+    # active_policies/2 would never run it, so every call falls through to
+    # implicit allow — the gate must report this as uncovered, not as
+    # covered-by-the-config-that-no-longer-applies.
+    PhoenixElxirBeam.MCP.Plugin.StateStore.put_enabled("rule-engine", false)
+
+    {gaps, _report} = Mix.Tasks.Mcp.Rules.Check.run_check()
+    assert [%{type: :uncovered_tag, tool_name: "read_secrets"}] = gaps
+  end
+
+  test "an operator-saved UnclassifiedGuard mode is audited instead of the stale compiled config" do
+    seed_server("srv-guard-overlay", "server-guard-overlay", %{
+      "send_email" => %{
+        "tags" => [],
+        "suggested_tags" => ["network_egress"],
+        "quarantined" => false,
+        "quarantine_reason" => nil,
+        "hash" => "h"
+      }
+    })
+
+    configure_rules([], "off")
+
+    PhoenixElxirBeam.MCP.Plugin.StateStore.put_config("unclassified-guard", %{"mode" => "deny"})
+
+    {gaps, _report} = Mix.Tasks.Mcp.Rules.Check.run_check()
+    assert [%{type: :unreviewed, unclassified_guard_mode: "deny"}] = gaps
+  end
+
   test "a server-scoped deny rule covers its own server's tool" do
     seed_server("srv-scoped", "server-scoped", %{
       "read_secrets" => %{
