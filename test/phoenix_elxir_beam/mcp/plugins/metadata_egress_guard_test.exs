@@ -1,0 +1,91 @@
+defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
+  use ExUnit.Case, async: true
+
+  alias PhoenixElxirBeam.MCP.CallContext
+  alias PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard
+
+  defp ctx(arguments) do
+    CallContext.new(%{
+      phase: :pre_call,
+      call: %{
+        session_id: "s",
+        server_id: "net",
+        tool_name: "fetch_url",
+        tags: [:network_egress],
+        arguments: arguments
+      },
+      session: %{seen_tags: []}
+    })
+  end
+
+  test "denies a call whose argument targets the cloud metadata address" do
+    ctx = ctx(%{"url" => "http://169.254.169.254/latest/meta-data/"})
+
+    assert %{verdict: :deny, severity: :high, reason: reason} =
+             MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+    assert reason =~ "169.254.169.254"
+  end
+
+  test "allows a call to an ordinary public URL" do
+    ctx = ctx(%{"url" => "https://api.example.com/v1/widgets"})
+    assert %{verdict: :allow} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "denies a call whose argument targets a loopback address" do
+    ctx = ctx(%{"url" => "http://127.0.0.1:8080/admin"})
+
+    assert %{verdict: :deny, severity: :high, reason: reason} =
+             MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+    assert reason =~ "127.0.0.1"
+  end
+
+  test "denies a call whose argument targets an RFC1918 private address" do
+    ctx = ctx(%{"url" => "http://10.0.0.5/internal"})
+
+    assert %{verdict: :deny, severity: :high} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "denies a call whose argument targets a link-local address (not just the metadata IP)" do
+    ctx = ctx(%{"url" => "http://169.254.1.1/"})
+
+    assert %{verdict: :deny, severity: :high} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "allows a URL whose path merely contains private-looking digits, not a private host" do
+    ctx = ctx(%{"url" => "https://api.example.com/orders/10.0.0.5/receipt"})
+    assert %{verdict: :allow} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "denies a hostname that resolves to loopback (DNS rebinding toward a forbidden range)" do
+    ctx = ctx(%{"url" => "http://localhost:9999/"})
+
+    assert %{verdict: :deny, severity: :high, reason: reason} =
+             MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+    assert reason =~ "localhost"
+    assert reason =~ "127.0.0.1"
+  end
+
+  test "allows a hostname that fails to resolve (left to fail upstream, not this guard's job)" do
+    ctx = ctx(%{"url" => "http://this-host-does-not-exist.invalid/"})
+    assert %{verdict: :allow} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "finds a forbidden target nested inside the arguments map" do
+    ctx = ctx(%{"request" => %{"headers" => %{}, "url" => "http://169.254.169.254/"}})
+    assert %{verdict: :deny} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "manifest declares a fail_closed pre_call policy scoped to :network_egress" do
+    manifest = MetadataEgressGuard.manifest()
+
+    assert manifest.plugin.name == "metadata-egress-guard"
+    assert %{policy: policy} = manifest.capabilities
+    assert policy.phases == [:pre_call]
+    assert policy.tool_tags == [:network_egress]
+    assert policy.fail_mode == :fail_closed
+    assert "call.arguments" in policy.data_needs
+  end
+end

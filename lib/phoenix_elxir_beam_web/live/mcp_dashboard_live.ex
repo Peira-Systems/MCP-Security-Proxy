@@ -1161,6 +1161,18 @@ defmodule PhoenixElxirBeamWeb.MCPDashboardLive do
       "sinks, no core changes required, just two entries in the plugin list."
   end
 
+  defp plugin_description("metadata-egress-guard") do
+    "A pre-call policy that denies a network_egress-tagged call whose " <>
+      "arguments target the cloud metadata address, loopback, or an " <>
+      "RFC1918 private range — SSRF via an agent-controlled destination. " <>
+      "Extracts every http(s) host from call.arguments, resolves it (an IP " <>
+      "literal directly, a hostname via DNS), and denies if the resolved " <>
+      "address lands in a disallowed range. Unlike chain-exfil or " <>
+      "taint-guard, it doesn't need a prior sensitive read — the risk is in " <>
+      "the destination of this call alone. A hostname that fails to " <>
+      "resolve is allowed, left to fail at the upstream server."
+  end
+
   defp plugin_description("response-size-guard") do
     "A post-call policy that withholds a tool response whose text content " <>
       "exceeds a byte budget — a blunt bulk-exfiltration guard: a tool " <>

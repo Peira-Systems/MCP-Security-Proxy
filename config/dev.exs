@@ -42,6 +42,9 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
      }},
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
+    # New (unreviewed in prod traffic yet): pin to dry-run from the dashboard
+    # before trusting it to enforce — see docs/threat-model.md "Dry-run mode".
+    {PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
     {PhoenixElxirBeam.MCP.Plugins.SecretLeak, []},
     {PhoenixElxirBeam.MCP.Plugins.ResponseSizeGuard, []},

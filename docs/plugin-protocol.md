@@ -48,7 +48,16 @@ catches leaks the operator's `:sensitive_read` tag missed; `MCP.Plugins.TaintedA
 the exact secret bytes — precise, byte-for-byte. (Session/byte provenance is built; HMAC
 markers proper are not — substring match on the retained raw secret stands in.
 Scanner-proposed mutations are applied without an operator `canMutate` grant — a known
-simplification carried from the redaction path.)
+simplification carried from the redaction path.) `MCP.Plugins.MetadataEgressGuard`
+(`toolTags: [network_egress]`) is a fourth `pre_call` policy in this family, but keys off
+the call's **destination** rather than session taint: it extracts every `http(s)://` host
+from `call.arguments`, resolves it (an IP literal directly, a hostname via `:inet.gethostbyname`),
+and denies if the resolved address is loopback, link-local (`169.254.0.0/16`, which includes
+the cloud metadata address `169.254.169.254`), or RFC1918 private — the SSRF-via-agent class,
+independent of whether any sensitive read happened first. A hostname that fails to resolve is
+allowed (left to fail at the upstream server). Registered enabled in `dev`/`test`; ships
+without a seeded `dry_run` pin — flip it from the dashboard before trusting it to enforce
+(`docs/threat-model.md` "Dry-run mode").
 
 Agent identity: the proxy reads an `mcp-agent-id` request header, records it on the session
 the first time it is seen (fixed thereafter), and threads it into every `CallContext`

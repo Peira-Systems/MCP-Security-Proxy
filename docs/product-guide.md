@@ -568,6 +568,7 @@ run in list order and short-circuit on the first `deny`/`hold`; `post_call` and
 | **ApprovalGate** | `pre_call` policy | Human-in-the-loop: `hold` egress after a sensitive read for operator sign-off; `on_timeout` → deny. | `config: %{"timeout_ms" => 120_000}` |
 | **ChainExfil** | `pre_call` policy (`:network_egress` only) | Hard block: egress denied iff a `:sensitive_read` occurred earlier this session. (Test env; dev/prod use `ApprovalGate`.) | — |
 | **TaintGuard** | `pre_call` policy (`:network_egress` only) | Coarse backstop: deny any egress once **any** secret has flowed this session (catches leaks the operator's tags missed). | — |
+| **MetadataEgressGuard** | `pre_call` policy (`:network_egress` only) | SSRF guard: resolves every `http(s)://` host in a call's arguments and denies if it lands in loopback, link-local (incl. the cloud metadata address), or RFC1918 — no prior sensitive read required. Registered enabled, not dry-run-pinned by default — pin it from the Plugins panel before trusting it to enforce. | — |
 | **RugPull** | `discovery` scanner | Pins each tool's `description_hash` at registration; quarantines a tool whose definition changed on re-handshake (→ `-32003`). | — |
 | **SecretLeak** | `post_call` scanner | Finds credentials in a tool/resource/prompt response, redacts them in place, and records HMAC taint markers (never the raw secret). | — |
 | **ResponseSizeGuard** | `post_call` policy | Withholds a response whose text content exceeds a byte budget (→ `-32002`) — blunt bulk-exfil guard. | `config: %{"max_bytes" => 4000}` |

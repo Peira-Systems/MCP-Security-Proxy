@@ -81,6 +81,13 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   (M3.4c).
 - **Secrets on the host.** `SECRET_KEY_BASE` / `AUDIT_CHECKPOINT_KEY` / DB
   password are Docker secret files, not in `.env` or `docker inspect` (M3.4d).
+- **SSRF via an agent-controlled destination.** An agent (manipulated or not)
+  calls an egress-tagged tool with a URL targeting the cloud metadata address,
+  loopback, or an internal RFC1918 host. `MetadataEgressGuard` resolves every
+  `http(s)://` host in a call's arguments and denies if it lands in a
+  disallowed range — independent of `ChainExfil`'s session-taint logic above,
+  since this risk exists on the very first call, with no prior sensitive read
+  required.
 
 ## Explicitly out of scope (non-goals)
 
@@ -103,6 +110,11 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 - **Splitting a secret across multiple calls / arguments.** Taint markers catch
   encodings of a whole secret, not a secret chunked into pieces reassembled
   downstream.
+- **DNS rebinding between check and request.** `MetadataEgressGuard` resolves
+  a hostname at `pre_call` time; a resolver that returns a public address on
+  that lookup and a private one moments later (TTL-based rebinding) is not
+  caught. Closing this needs the resolved address pinned through to the
+  actual upstream request, which the proxy does not currently do.
 - **A compromised operator account with `admin`.** An admin can disable every
   plugin and issue keys. The mitigation is the audit chain (the actions are
   recorded and checkpointed off-DB), not prevention.
