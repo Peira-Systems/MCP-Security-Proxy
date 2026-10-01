@@ -79,4 +79,51 @@ defmodule PhoenixElxirBeam.MCP.Plugins.RuleEngineTest do
     assert policy.tool_tags == []
     assert policy.fail_mode == :fail_closed
   end
+
+  describe "first_match/2" do
+    test "returns the matching rule map, not a Decision" do
+      %{call: call_overrides, session: session_overrides, rules: rules} =
+        RuleEngineCorpus.fetch!("agent and tag both match")
+
+      call =
+        Map.merge(
+          %{
+            session_id: "s",
+            agent_id: "agent://demo",
+            server_id: "net",
+            tool_name: "post_webhook",
+            tags: [:network_egress]
+          },
+          call_overrides
+        )
+
+      context =
+        CallContext.new(%{
+          phase: :pre_call,
+          call: call,
+          session: Map.merge(%{seen_tags: [], taint: %{sources: []}}, session_overrides),
+          plugin_config: %{"rules" => rules}
+        })
+
+      assert %{"action" => "deny", "reason" => "no egress for ci-runner"} =
+               RuleEngine.first_match(rules, context)
+    end
+
+    test "returns nil when nothing matches" do
+      %{call: call_overrides, session: session_overrides, rules: rules} =
+        RuleEngineCorpus.fetch!("no rules")
+
+      call = Map.merge(%{agent_id: "agent://demo", tool_name: "x", tags: []}, call_overrides)
+
+      context =
+        CallContext.new(%{
+          phase: :pre_call,
+          call: call,
+          session: Map.merge(%{seen_tags: [], taint: %{sources: []}}, session_overrides),
+          plugin_config: %{"rules" => rules}
+        })
+
+      assert RuleEngine.first_match(rules, context) == nil
+    end
+  end
 end

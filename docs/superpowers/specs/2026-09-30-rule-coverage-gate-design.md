@@ -171,3 +171,5 @@ merges the same way the existing `security-review.yml` / `ci.yml` jobs do.
 Exact trigger (every PR vs. on a schedule vs. on deploy) is a rollout
 decision for the implementation plan, not the design — the mechanism above
 works the same regardless of when it's invoked.
+
+Implemented as `.github/workflows/rule-coverage.yml`.

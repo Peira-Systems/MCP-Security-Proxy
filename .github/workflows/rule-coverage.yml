@@ -1,0 +1,101 @@
+name: Rule coverage
+
+# Runs `mix mcp.rules.check` (see docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md)
+# against a database and fails if any registered tool's sensitive tags
+# aren't actually enforced by the RuleEngine config.
+#
+# KNOWN LIMITATION: this repo has no staging DB secret configured in CI
+# today (only GITHUB_TOKEN and ANTHROPIC_API_KEY exist — checked against
+# ci.yml, security-review.yml, and release.yml). Rather than invent one or
+# leave this job blocked, it points at the same ephemeral, empty Postgres
+# service container that ci.yml's `test` job spins up for `mix test`. That
+# database always has zero `ServerStore` registrations, so
+# `mix mcp.rules.check` will always report "0 servers registered — nothing
+# to check" here and exit 0 trivially. This job is NOT yet a meaningful
+# coverage gate for that reason — the wiring is in place, but seeding real
+# (or realistic) server registrations into a persistent/staging database is
+# a separate, later effort. Until then, this job mainly documents intent.
+#
+# `test/support/generated_rule_fixtures.ex` is intentionally NOT committed
+# to the repo (see Task 5's ruling) — it's a regenerated-every-run, human-
+# readable report of the gaps found, not a tracked artifact to diff against.
+# There is deliberately no "drift detection" step comparing it to a
+# committed copy; instead this job uploads it as a build artifact (below)
+# so a human can download and inspect it after any run.
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: rule-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELIXIR_VERSION: "1.18.5"
+  OTP_VERSION: "27.3.4.17"
+  MIX_ENV: test
+  ImageOS: ubuntu26
+
+jobs:
+  rule-coverage:
+    name: rule coverage check
+    runs-on: self-hosted
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Restore deps / build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.environment }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.environment }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+
+      - run: mix deps.get
+      - run: mix ecto.create
+      - run: mix ecto.migrate
+
+      # See the KNOWN LIMITATION comment at the top of this file: this
+      # ephemeral Postgres has no real server registrations, so this
+      # currently always reports "0 servers registered" and passes
+      # trivially. Kept here so the wiring is in place ahead of a future
+      # effort to seed real registrations.
+      - name: Run rule coverage check
+        run: mix mcp.rules.check
+
+      - name: Upload generated rule fixtures report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-rule-fixtures
+          path: test/support/generated_rule_fixtures.ex

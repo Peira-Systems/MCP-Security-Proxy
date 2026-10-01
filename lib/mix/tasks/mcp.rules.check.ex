@@ -1,0 +1,211 @@
+defmodule Mix.Tasks.Mcp.Rules.Check do
+  @shortdoc "Fails if a registered tool's sensitive tags aren't actually enforced"
+
+  @moduledoc """
+  Audits every tool on every currently-registered MCP server (read directly
+  from Postgres via `PhoenixElxirBeam.Repo.all(PhoenixElxirBeam.MCP.ServerRegistration)`)
+  against the compiled `RuleEngine` config, and fails the build if any
+  sensitive tool isn't actually enforced for an arbitrary agent.
+
+  See `docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md` for
+  the full design, and `PhoenixElxirBeam.MCP.RuleCoverage` for the
+  detection logic this task is a thin wrapper around.
+
+      mix mcp.rules.check
+
+  Reads DB connection config the normal way for whatever `MIX_ENV` it's
+  invoked under (`config/runtime.exs` / `DATABASE_URL`) — no new connection
+  config is introduced. Exits 1 and prints every gap if any are found,
+  exits 0 and prints a summary otherwise. Also writes
+  `test/support/generated_rule_fixtures.ex`, a `RuleEngineCorpus`-shaped,
+  fully-regenerated-every-run report of the same gaps, for human review in
+  a PR diff — this file is never read by `mix test`.
+  """
+
+  use Mix.Task
+
+  alias PhoenixElxirBeam.MCP.{RuleCoverage, ServerRegistration}
+  alias PhoenixElxirBeam.Repo
+
+  @generated_fixtures_path "test/support/generated_rule_fixtures.ex"
+
+  @impl true
+  def run(_args) do
+    Mix.Task.run("app.start")
+
+    {gaps, report} = run_check()
+
+    Mix.shell().info(report)
+    write_generated_fixtures(gaps)
+
+    if gaps != [] do
+      Mix.raise("mcp.rules.check found #{length(gaps)} coverage gap(s) — see report above")
+    end
+  end
+
+  @doc """
+  Runs the check against the currently configured Repo and app config,
+  without printing or exiting — used by the task's own tests and by
+  `run/1` itself. Returns `{gaps, report_text}` where each gap is
+  `%{type:, tool_name:, server_name:, tag:, shadowing_rule:,
+  unclassified_guard_mode:}` (a plain map — the task flattens
+  `RuleCoverage.Gap` and adds `server_name`, since `RuleCoverage` itself
+  has no notion of which server a tool came from).
+
+  Queries `Repo.all(ServerRegistration)` directly and unrescued, rather than
+  going through `PhoenixElxirBeam.MCP.ServerStore.all/0` — that function
+  deliberately rescues every DB error to `[]` (it favors the running proxy's
+  registration availability over durability), which would make "Postgres is
+  down" and "zero servers are registered" indistinguishable here. A CI gate
+  whose only job is to catch missing coverage must not silently pass during
+  an infra outage or a schema mismatch, so any failure in this query — a
+  dropped connection, a migration drift, anything — propagates as an
+  exception and fails the build loudly instead.
+  """
+  @spec run_check() :: {[map()], String.t()}
+  def run_check do
+    registrations = Repo.all(ServerRegistration)
+
+    if registrations == [] do
+      {[], "mcp.rules.check: 0 servers registered in this database — nothing to check."}
+    else
+      rules = rule_engine_rules()
+      unclassified_mode = unclassified_guard_mode()
+
+      gaps =
+        for reg <- registrations,
+            {tool_name, overlay} <- reg.tool_state || %{},
+            tool = tool_from_overlay(tool_name, overlay),
+            gap <- RuleCoverage.check_tool(tool, rules, unclassified_mode) do
+          %{
+            type: gap.type,
+            tool_name: tool_name,
+            server_name: reg.name,
+            tag: gap.tag,
+            shadowing_rule: gap.shadowing_rule,
+            unclassified_guard_mode: gap.unclassified_guard_mode
+          }
+        end
+
+      {gaps, format_report(gaps, length(registrations))}
+    end
+  end
+
+  defp tool_from_overlay(name, overlay) do
+    %{
+      name: name,
+      tags: atoms(overlay["tags"]),
+      suggested_tags: atoms(overlay["suggested_tags"])
+    }
+  end
+
+  defp atoms(nil), do: []
+
+  defp atoms(list) do
+    Enum.flat_map(list, fn s ->
+      try do
+        [String.to_existing_atom(s)]
+      rescue
+        ArgumentError -> []
+      end
+    end)
+  end
+
+  defp rule_engine_rules do
+    :phoenix_elxir_beam
+    |> Application.get_env(PhoenixElxirBeam.MCP, [])
+    |> Keyword.get(:plugins, [])
+    |> Enum.find_value([], fn
+      {PhoenixElxirBeam.MCP.Plugins.RuleEngine, opts} ->
+        Keyword.get(opts, :config, %{})["rules"] || []
+
+      _ ->
+        false
+    end)
+  end
+
+  defp unclassified_guard_mode do
+    :phoenix_elxir_beam
+    |> Application.get_env(PhoenixElxirBeam.MCP, [])
+    |> Keyword.get(:plugins, [])
+    |> Enum.find_value("off", fn
+      {PhoenixElxirBeam.MCP.Plugins.UnclassifiedGuard, opts} ->
+        Keyword.get(opts, :config, %{})["mode"] || "off"
+
+      _ ->
+        false
+    end)
+  end
+
+  defp format_report([], count) do
+    "mcp.rules.check: #{count} server(s) checked, 0 gaps."
+  end
+
+  defp format_report(gaps, count) do
+    lines =
+      Enum.map(gaps, fn
+        %{type: :uncovered_tag} = g ->
+          "  [uncovered_tag] #{g.server_name}/#{g.tool_name} tag=#{g.tag} " <>
+            "— first matching rule: #{inspect(g.shadowing_rule)}"
+
+        %{type: :unreviewed} = g ->
+          "  [unreviewed]    #{g.server_name}/#{g.tool_name} " <>
+            "(UnclassifiedGuard mode=#{g.unclassified_guard_mode})"
+      end)
+
+    "mcp.rules.check: #{count} server(s) checked, #{length(gaps)} gap(s):\n" <>
+      Enum.join(lines, "\n")
+  end
+
+  defp write_generated_fixtures(gaps) do
+    body =
+      gaps
+      |> Enum.map(&(&1 |> fixture_case() |> String.trim_trailing()))
+      |> Enum.join(",\n")
+
+    contents = """
+    # Auto-generated by `mix mcp.rules.check` — do not hand-edit, regenerated
+    # every run. A case disappears once the underlying gap is closed.
+    defmodule PhoenixElxirBeam.MCP.GeneratedRuleFixtures do
+      @moduledoc "Coverage gaps from the most recent `mix mcp.rules.check` run."
+
+      def cases, do: [
+    #{body}
+      ]
+    end
+    """
+
+    # Run the generated source through the formatter before writing so the
+    # file is always `mix format`-clean regardless of gap count — the raw
+    # interpolated string above is not format-clean when `gaps` is empty
+    # (`def cases, do: [\n\n  ]` fails `format --check-formatted`).
+    formatted =
+      contents
+      |> Code.format_string!()
+      |> IO.iodata_to_binary()
+
+    File.write!(@generated_fixtures_path, formatted <> "\n")
+  end
+
+  defp fixture_case(%{type: :uncovered_tag} = g) do
+    """
+        %{
+          name: #{inspect("gap: #{g.server_name}/#{g.tool_name} — #{g.tag} uncovered for unknown agents")},
+          call: %{tool_name: #{inspect(g.tool_name)}, tags: [#{inspect(g.tag)}]},
+          session: %{},
+          gap_type: :uncovered_tag
+        }
+    """
+  end
+
+  defp fixture_case(%{type: :unreviewed} = g) do
+    """
+        %{
+          name: #{inspect("gap: #{g.server_name}/#{g.tool_name} — suggested tag never reviewed")},
+          call: %{tool_name: #{inspect(g.tool_name)}, tags: []},
+          session: %{},
+          gap_type: :unreviewed
+        }
+    """
+  end
+end
