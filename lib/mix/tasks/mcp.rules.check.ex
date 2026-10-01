@@ -31,7 +31,22 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
 
   @impl true
   def run(_args) do
-    Mix.Task.run("app.start")
+    # Deliberately does not call `Mix.Task.run("app.start")` — that boots
+    # the full supervision tree, including `ServerRegistry`, whose
+    # `handle_continue(:restore, ...)` re-handshakes every stored server
+    # (and spawns stdio commands) on every invocation. Dangerous once real
+    # registrations exist on a CI runner. This task only ever needs
+    # `Repo.all/2`, so it starts just the Repo and its own dependency apps
+    # (`mix app.config` loads config without starting any app at all).
+    Mix.Task.run("app.config")
+    {:ok, _} = Application.ensure_all_started(:ecto_sql)
+
+    case PhoenixElxirBeam.Repo.start_link() do
+      {:ok, _} -> :ok
+      # Already running — e.g. under `mix test`, where the suite's own
+      # boot started it. Nothing further to do.
+      {:error, {:already_started, _pid}} -> :ok
+    end
 
     {gaps, report} = run_check()
 

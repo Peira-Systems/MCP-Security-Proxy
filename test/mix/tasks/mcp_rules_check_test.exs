@@ -240,6 +240,94 @@ defmodule Mix.Tasks.Mcp.Rules.CheckTest do
       # written is already formatted.
       assert file_contents == format_elixir(file_contents)
     end
+
+    @tag timeout: 30_000
+    test "a genuinely fresh `mix mcp.rules.check` process never attempts to spawn a stored stdio server" do
+      # Regression test for the app-boot finding: run/1 must not call
+      # `Mix.Task.run("app.start")`, since that boots ServerRegistry, whose
+      # `handle_continue(:restore, ...)` re-handshakes every stored server —
+      # including spawning stdio commands — on every invocation. Inside
+      # `mix test` the app is already running by the time any test executes,
+      # so observing a pid change in-process can't tell old vs. fixed code
+      # apart (`Mix.Task.run("app.start")` is a no-op on an already-started
+      # app). The only way to actually observe this is a brand-new OS
+      # process where the app has never booted — exactly the real CI
+      # scenario.
+      #
+      # The sandboxed `Repo` pool this file's other tests share is wrapped
+      # in a transaction the subprocess's own fresh connection can never
+      # see, and manipulating `Ecto.Adapters.SQL.Sandbox`'s global mode to
+      # work around that leaks into every other test using the same pool
+      # (confirmed: doing so here made an unrelated "zero registered
+      # servers" test see this row). So this test seeds and cleans up
+      # through its own raw `Postgrex` connection instead — entirely
+      # outside Ecto's sandbox, never touching `Repo`'s pool or mode.
+      pg_opts = [
+        hostname: System.get_env("PGHOST", "localhost"),
+        port: String.to_integer(System.get_env("PGPORT", "5432")),
+        username: System.get_env("PGUSER", "postgres"),
+        password: System.get_env("PGPASSWORD", "postgres"),
+        database: "phoenix_elxir_beam_test#{System.get_env("MIX_TEST_PARTITION")}"
+      ]
+
+      # `Postgrex.start_link/1` only offers a linked start, but `on_exit`
+      # callbacks run in a separate process *after* this test process has
+      # already exited — a connection still linked to this test would
+      # already be dead by the time `on_exit` tried to use it for cleanup
+      # (confirmed: that's exactly what silently dropped the DELETE below
+      # on an earlier attempt, leaking rows across runs). `Process.unlink/1`
+      # immediately after start detaches it so it outlives this test.
+      {:ok, pg} = Postgrex.start_link(pg_opts)
+      Process.unlink(pg)
+
+      id = "srv-subprocess-stdio-#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Postgrex.query(
+          pg,
+          """
+          INSERT INTO server_registrations
+            (id, name, transport, command, args, tool_state, inserted_at, updated_at)
+          VALUES ($1, $2, 'stdio', $3, '{}', '{}', $4, $4)
+          """,
+          [
+            id,
+            "subprocess-stdio-check",
+            # A command that cannot exist on any PATH — if ServerRegistry's
+            # restore path ever runs, this spawn fails and logs a warning.
+            "/nonexistent/#{System.unique_integer([:positive])}/definitely-not-a-real-binary",
+            now
+          ]
+        )
+
+      on_exit(fn ->
+        Postgrex.query!(pg, "DELETE FROM server_registrations WHERE id = $1", [id])
+        GenServer.stop(pg)
+      end)
+
+      env =
+        [
+          {"MIX_ENV", "test"},
+          {"PGUSER", System.get_env("PGUSER", "postgres")},
+          {"PGPASSWORD", System.get_env("PGPASSWORD", "postgres")},
+          {"PGHOST", System.get_env("PGHOST", "localhost")},
+          {"PGPORT", System.get_env("PGPORT", "5432")}
+        ]
+
+      {output, _exit_code} =
+        System.cmd("mix", ["mcp.rules.check"],
+          env: env,
+          stderr_to_stdout: true,
+          cd: File.cwd!()
+        )
+
+      refute output =~ "ServerRegistry: restored",
+             "mix mcp.rules.check must not boot ServerRegistry's restore path"
+
+      refute output =~ "could not restore",
+             "mix mcp.rules.check must not attempt to spawn a stored stdio server"
+    end
   end
 
   defp format_elixir(source) do
