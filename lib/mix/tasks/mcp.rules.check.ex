@@ -91,7 +91,7 @@ defmodule Mix.Tasks.Mcp.Rules.Check do
         for reg <- registrations,
             {tool_name, overlay} <- reg.tool_state || %{},
             tool = tool_from_overlay(tool_name, overlay),
-            gap <- RuleCoverage.check_tool(tool, rules, unclassified_mode) do
+            gap <- RuleCoverage.check_tool(tool, reg.id, rules, unclassified_mode) do
           %{
             type: gap.type,
             tool_name: tool_name,

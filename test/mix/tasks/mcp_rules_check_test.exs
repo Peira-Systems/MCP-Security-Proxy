@@ -95,6 +95,54 @@ defmodule Mix.Tasks.Mcp.Rules.CheckTest do
     assert [%{type: :uncovered_tag, tool_name: "read_secrets", server_name: "server-b"}] = gaps
   end
 
+  test "a server-scoped deny rule covers its own server's tool" do
+    seed_server("srv-scoped", "server-scoped", %{
+      "read_secrets" => %{
+        "tags" => ["sensitive_read"],
+        "suggested_tags" => ["sensitive_read"],
+        "quarantined" => false,
+        "quarantine_reason" => nil,
+        "hash" => "h"
+      }
+    })
+
+    configure_rules([
+      %{
+        "match" => %{"server" => "srv-scoped", "tool_tags_any" => ["sensitive_read"]},
+        "action" => "deny",
+        "reason" => "r"
+      }
+    ])
+
+    {gaps, _report} = Mix.Tasks.Mcp.Rules.Check.run_check()
+    assert gaps == []
+  end
+
+  test "a server-scoped deny rule for a DIFFERENT server leaves this one uncovered" do
+    seed_server("srv-other", "server-other", %{
+      "read_secrets" => %{
+        "tags" => ["sensitive_read"],
+        "suggested_tags" => ["sensitive_read"],
+        "quarantined" => false,
+        "quarantine_reason" => nil,
+        "hash" => "h"
+      }
+    })
+
+    configure_rules([
+      %{
+        "match" => %{"server" => "srv-not-this-one", "tool_tags_any" => ["sensitive_read"]},
+        "action" => "deny",
+        "reason" => "r"
+      }
+    ])
+
+    {gaps, _report} = Mix.Tasks.Mcp.Rules.Check.run_check()
+
+    assert [%{type: :uncovered_tag, tool_name: "read_secrets", server_name: "server-other"}] =
+             gaps
+  end
+
   test "disambiguates identically-named tools on two different servers" do
     tool_state = %{
       "send_email" => %{

@@ -11,29 +11,42 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverageTest do
 
   for %{name: name} <- RuleCoverageCorpus.cases() do
     test "case: #{name}" do
-      %{tool: tool, rules: rules, unclassified_guard_mode: mode, expected_gap_types: expected} =
-        RuleCoverageCorpus.fetch!(unquote(name))
+      %{
+        tool: tool,
+        server_id: server_id,
+        rules: rules,
+        unclassified_guard_mode: mode,
+        expected_gap_types: expected
+      } = RuleCoverageCorpus.fetch!(unquote(name))
 
-      gaps = RuleCoverage.check_tool(tool, rules, mode)
+      gaps = RuleCoverage.check_tool(tool, server_id, rules, mode)
       assert Enum.sort(Enum.map(gaps, & &1.type)) == Enum.sort(expected)
     end
   end
 
+  test "case: two tags, only one covered — the uncovered gap names the correct tag" do
+    %{tool: tool, server_id: server_id, rules: rules, unclassified_guard_mode: mode} =
+      RuleCoverageCorpus.fetch!("two tags, only one covered")
+
+    assert [%RuleCoverage.Gap{type: :uncovered_tag, tag: :network_egress}] =
+             RuleCoverage.check_tool(tool, server_id, rules, mode)
+  end
+
   test "an uncovered_tag gap names the tag and the shadowing rule, if any" do
-    %{tool: tool, rules: rules, unclassified_guard_mode: mode} =
+    %{tool: tool, server_id: server_id, rules: rules, unclassified_guard_mode: mode} =
       RuleCoverageCorpus.fetch!("tagged but shadowed by an earlier catch-all allow")
 
     assert [%RuleCoverage.Gap{type: :uncovered_tag, tag: :sensitive_read, shadowing_rule: rule}] =
-             RuleCoverage.check_tool(tool, rules, mode)
+             RuleCoverage.check_tool(tool, server_id, rules, mode)
 
     assert rule["action"] == "allow"
   end
 
   test "an unreviewed gap carries the unclassified_guard_mode for the caller to report" do
-    %{tool: tool, rules: rules, unclassified_guard_mode: mode} =
+    %{tool: tool, server_id: server_id, rules: rules, unclassified_guard_mode: mode} =
       RuleCoverageCorpus.fetch!("untagged but suggested, unclassified guard deny")
 
     assert [%RuleCoverage.Gap{type: :unreviewed, unclassified_guard_mode: "deny"}] =
-             RuleCoverage.check_tool(tool, rules, mode)
+             RuleCoverage.check_tool(tool, server_id, rules, mode)
   end
 end

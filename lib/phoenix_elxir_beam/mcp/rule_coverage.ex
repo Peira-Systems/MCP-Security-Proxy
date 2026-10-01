@@ -40,22 +40,26 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverage do
   @doc """
   Gaps for a single tool. `tool` is `%{name:, tags:, suggested_tags:}`
   (atoms in the tag lists, matching `ServerRegistry`'s in-memory shape).
-  `rules` is the `RuleEngine` plugin's raw `config["rules"]` list.
-  `unclassified_guard_mode` is whatever `UnclassifiedGuard`'s plugin config
-  currently has for `"mode"` (`"off"` | `"deny"` | `"hold"`), threaded
-  through only to annotate `:unreviewed` gaps — it doesn't change whether a
-  gap is reported, only what the caller prints about it.
+  `server_id` is the registration's own id (`ServerRegistration.id` /
+  `ServerRegistry`'s `server_id` — the same value a real call's
+  `ctx.call[:server_id]` carries), threaded into the synthetic call so a
+  `"server"`-scoped rule can match it, exactly as it would for a real call
+  to this tool. `rules` is the `RuleEngine` plugin's raw `config["rules"]`
+  list. `unclassified_guard_mode` is whatever `UnclassifiedGuard`'s plugin
+  config currently has for `"mode"` (`"off"` | `"deny"` | `"hold"`),
+  threaded through only to annotate `:unreviewed` gaps — it doesn't change
+  whether a gap is reported, only what the caller prints about it.
   """
-  @spec check_tool(map(), [map()], String.t()) :: [Gap.t()]
-  def check_tool(tool, rules, unclassified_guard_mode) do
-    uncovered_tag_gaps(tool, rules) ++ unreviewed_gap(tool, unclassified_guard_mode)
+  @spec check_tool(map(), String.t(), [map()], String.t()) :: [Gap.t()]
+  def check_tool(tool, server_id, rules, unclassified_guard_mode) do
+    uncovered_tag_gaps(tool, server_id, rules) ++ unreviewed_gap(tool, unclassified_guard_mode)
   end
 
-  defp uncovered_tag_gaps(tool, rules) do
+  defp uncovered_tag_gaps(tool, server_id, rules) do
     tool.tags
     |> Enum.filter(&(&1 in @sensitive_tags))
     |> Enum.flat_map(fn tag ->
-      ctx = synthetic_context(tool.name, [tag])
+      ctx = synthetic_context(tool.name, server_id, [tag])
 
       case RuleEngine.first_match(rules, ctx) do
         %{"action" => action} = rule when action in ["deny", "hold"] ->
@@ -82,10 +86,10 @@ defmodule PhoenixElxirBeam.MCP.RuleCoverage do
 
   defp unreviewed_gap(_tool, _mode), do: []
 
-  defp synthetic_context(tool_name, tags) do
+  defp synthetic_context(tool_name, server_id, tags) do
     CallContext.new(%{
       phase: :pre_call,
-      call: %{tool_name: tool_name, tags: tags},
+      call: %{tool_name: tool_name, server_id: server_id, tags: tags},
       session: %{seen_tags: [], taint: %{sources: []}},
       plugin_config: %{}
     })
