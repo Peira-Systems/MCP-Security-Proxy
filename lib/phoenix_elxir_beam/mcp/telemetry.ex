@@ -21,6 +21,12 @@ defmodule PhoenixElxirBeam.MCP.Telemetry do
 
     * `[:mcp, :decision]` — `%{count: 1}` · `%{verdict, deciding_plugin, phase}`
     * `[:mcp, :alert]` — `%{count: 1}` · `%{key, severity}` (see `MCP.Alerts`)
+    * `[:mcp, :hold, :resolved]` — `%{count: 1}` · `%{outcome, tool_name}`.
+      `outcome` ∈ `:approved | :denied | :timeout | :orphaned` — how an
+      `ApprovalGate` hold was resolved, not just that one fired (which
+      `[:mcp, :decision]` with `verdict: :hold` already counts). A sustained
+      high `:approved` rate is the signal that the gate is being rubber-stamped
+      rather than actually reviewed.
 
   ## Gauge events (emitted from `measurements/0` on the poller period)
 
@@ -56,6 +62,15 @@ defmodule PhoenixElxirBeam.MCP.Telemetry do
       [:mcp, :plugin, :run, :stop],
       %{duration: duration_native},
       %{plugin: plugin, kind: kind, phase: phase, outcome: outcome, verdict: verdict}
+    )
+  end
+
+  @doc "Emits a `[:mcp, :hold, :resolved]` counter event."
+  def hold_resolved(outcome, tool_name) do
+    :telemetry.execute(
+      [:mcp, :hold, :resolved],
+      %{count: 1},
+      %{outcome: outcome, tool_name: tool_name || "-"}
     )
   end
 

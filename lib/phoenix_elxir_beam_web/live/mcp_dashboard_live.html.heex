@@ -665,6 +665,26 @@
                   >
                     {finding_field(finding, :type)}
                   </span>
+
+                  <details :if={entry.call_chain != []} class="mt-0.5">
+                    <summary class="cursor-pointer text-[10px] text-neutral-content/40 hover:text-neutral-content/70">
+                      chain ({length(entry.call_chain)})
+                    </summary>
+                    <div class="mt-0.5 ml-2 border-l border-neutral-content/10 pl-2">
+                      <div
+                        :for={call <- entry.call_chain}
+                        class="text-[10px] text-neutral-content/50"
+                      >
+                        {call["tool_name"] || "?"}
+                        <span
+                          :for={tag <- call["tags"] || []}
+                          class={["ml-1 rounded-full px-1 py-0.5", tag_pill_class(tag)]}
+                        >
+                          {tag_label(tag)}
+                        </span>
+                      </div>
+                    </div>
+                  </details>
                 </td>
 
                 <td class="px-3 py-1.5 text-right text-neutral-content/40">
@@ -1572,6 +1592,7 @@
         <div :for={server <- @real_servers} class="border-t border-base-300 first:border-t-0">
           <button
             type="button"
+            id={"toggle-server-drawer-" <> server.id}
             phx-click="toggle_server_drawer"
             phx-value-server_id={server.id}
             class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-base-200/50"
@@ -1705,6 +1726,7 @@
 
                   <button
                     type="button"
+                    id={"toggle-tag-sensitive_read-" <> server.id <> "-" <> tool.name}
                     phx-click="toggle_tool_tag"
                     phx-value-server_id={server.id}
                     phx-value-tool_name={tool.name}
@@ -1722,6 +1744,7 @@
 
                   <button
                     type="button"
+                    id={"toggle-tag-network_egress-" <> server.id <> "-" <> tool.name}
                     phx-click="toggle_tool_tag"
                     phx-value-server_id={server.id}
                     phx-value-tool_name={tool.name}
@@ -1735,6 +1758,25 @@
                     ]}
                   >
                     network egress
+                  </button>
+
+                  <button
+                    type="button"
+                    id={"toggle-tag-untrusted_source-" <> server.id <> "-" <> tool.name}
+                    phx-click="toggle_tool_tag"
+                    phx-value-server_id={server.id}
+                    phx-value-tool_name={tool.name}
+                    phx-value-tag="untrusted_source"
+                    title="responses from this tool are treated as untrusted, independent of content"
+                    class={[
+                      "rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
+                      if(:untrusted_source in tool.tags,
+                        do: "bg-warning/20 text-warning",
+                        else: "bg-base-300 text-base-content/50"
+                      )
+                    ]}
+                  >
+                    untrusted source
                   </button>
                 </span>
               </div>

@@ -82,4 +82,41 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistryTest do
   test "await on an already-resolved or unknown hold returns immediately", %{reg: reg} do
     assert HoldRegistry.await("hold-nope", 2_000, reg) == {:ok, :denied}
   end
+
+  test "resolving a hold emits a [:mcp, :hold, :resolved] telemetry event", %{reg: reg} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mcp, :hold, :resolved]])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    id = HoldRegistry.park(spec(), reg)
+    task = Task.async(fn -> HoldRegistry.await(id, 5_000, reg) end)
+    Process.sleep(20)
+    :ok = HoldRegistry.resolve(id, :approve, reg)
+    Task.await(task)
+
+    assert_receive {[:mcp, :hold, :resolved], ^ref, %{count: 1},
+                    %{outcome: :approved, tool_name: "post_webhook"}}
+  end
+
+  test "a denied hold's telemetry event carries outcome :denied", %{reg: reg} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mcp, :hold, :resolved]])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    id = HoldRegistry.park(spec(), reg)
+    task = Task.async(fn -> HoldRegistry.await(id, 5_000, reg) end)
+    Process.sleep(20)
+    :ok = HoldRegistry.resolve(id, :deny, reg)
+    Task.await(task)
+
+    assert_receive {[:mcp, :hold, :resolved], ^ref, %{count: 1}, %{outcome: :denied}}
+  end
+
+  test "a hold that times out emits telemetry with outcome :timeout", %{reg: reg} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:mcp, :hold, :resolved]])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    id = HoldRegistry.park(spec(%{timeout_ms: 40, on_timeout: :deny}), reg)
+    HoldRegistry.await(id, 2_000, reg)
+
+    assert_receive {[:mcp, :hold, :resolved], ^ref, %{count: 1}, %{outcome: :timeout}}
+  end
 end

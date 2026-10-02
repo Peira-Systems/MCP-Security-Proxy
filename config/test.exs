@@ -29,6 +29,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.RugPull, []},
     {PhoenixElxirBeam.MCP.Plugins.SecretLeak, []},
+    {PhoenixElxirBeam.MCP.Plugins.ProvenanceTaint, []},
     {PhoenixElxirBeam.MCP.Plugins.ResponseSizeGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.StreamGuard, config: %{"max_bytes" => 500}},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []}

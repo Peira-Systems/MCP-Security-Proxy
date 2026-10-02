@@ -39,10 +39,11 @@ call into a *send it somewhere* call.
 |---|---|---|
 | Tag-based chaining rules | pre-existing | `ChainExfil` / `RuleEngine` deny egress after a `:sensitive_read`, per operator tags |
 | Session taint tracking | pre-existing + M4.1 | `SecretLeak` marks a leaked credential with per-session **HMAC markers**; `TaintedArgGuard` blocks a later call whose arguments carry that secret *or a base64/hex/URL-encoded copy*; `TaintGuard` is the coarse backstop (any egress after any leak) |
+| Provenance taint tracking | new | `ProvenanceTaint` taints the session whenever a tool tagged `:untrusted_source` returns a response, **independent of content**. Value-fingerprinting (above) is blind to a paraphrased secret and to untrusted content that was never credential-shaped to begin with (a prompt-injection payload in a scraped page); tagging the *source* instead of the value closes that gap. Operator opt-in per tool/server, same place tool tags are already assigned — nothing is untrusted by default |
 | Response scanning | pre-existing + M1.2 | `SecretLeak` redacts credentials out of `tools/call` / `resources/read` / `prompts/get` content before the agent sees them |
 | Streaming early-cut | M1.3 | `StreamGuard` inspects an `:http` response incrementally and cuts the stream mid-transfer once a budget is exceeded — the rest never crosses |
 | Behavioural baseline | pre-existing | `BaselineGuard` denies once the rate of watched calls exceeds a baseline |
-| Human-in-the-loop | pre-existing | `ApprovalGate` parks egress for operator sign-off |
+| Human-in-the-loop | pre-existing | `ApprovalGate` parks egress for operator sign-off. `HoldFatigueMonitor` watches the resolution rate and raises `:approval_gate_fatigue` once approvals get sustained and high — the gate is only a control as long as it's reviewed, not rubber-stamped |
 | Prompt-injection detection | M4.3 | maintained ruleset over tool descriptions (`discovery`, quarantines) and responses (`post_call`, finding + redaction) — see [injection-detection.md](injection-detection.md) |
 | Default-deny | M4.2 | `UnclassifiedGuard` (prod: `hold`) parks calls to tools the operator has not classified |
 
@@ -65,12 +66,21 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   account (`viewer` < `operator` < `admin`, M3.4a).
 - **A malicious or swapped MCP server.** Tools are hashed at registration;
   discovery scanners (`RugPull`) re-check on every re-handshake and quarantine a
-  tool whose description/schema drifted.
+  tool whose description/schema drifted, and raise a `:rug_pull` alert
+  separate from the quarantine — a changed tool definition is its own kind of
+  incident, not just one more row in the event feed.
 - **A tampered or swapped plugin.** Sidecar plugins are provenance-pinned (code
   digest + manifest digest); a mismatch stops the plugin and alerts (M3.5).
 - **Audit tampering.** Rows are hash-chained; `AuditIntegrity` verifies the
   chain every 15 min and against an off-DB signed checkpoint, so a truncated log
   is caught even if it verifies internally (M2.3).
+- **Tracing a block back to its cause.** A `blocked` / `held` / `shadow_blocked`
+  / `shadow_held` row carries a `call_chain` — the session's prior calls (tool,
+  tags, timestamp) in the 60s/50-call window `BaselineGuard` already tracks —
+  so an operator doesn't have to manually correlate `session_id` across the raw
+  log to see what led to the block. Excluded from the hash chain (it's context
+  for a verdict, not an input the verdict depended on) and only attached to
+  block/hold-shaped events, not every `ok`.
 - **Resource exhaustion.** Body-size cap (413), per-key rate limit (429),
   per-stream buffer ceiling + deadline, sidecar `prlimit` caps, DB queue
   fail-fast (M1.5 / M3.5).

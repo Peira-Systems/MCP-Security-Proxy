@@ -1,7 +1,7 @@
 defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
   use PhoenixElxirBeamWeb.ConnCase, async: true
 
-  alias PhoenixElxirBeam.MCP.ServerRegistry
+  alias PhoenixElxirBeam.MCP.{Alerts, ServerRegistry}
 
   setup do
     name = :"server_registry_#{System.unique_integer([:positive])}"
@@ -140,6 +140,8 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
 
     {:ok, _} = ServerRegistry.set_tool_tags(server.id, "note", [:sensitive_read], name)
 
+    Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, Alerts.topic())
+
     # Make the server's tools/list drift, then re-handshake.
     File.write!(sentinel, "")
     {:ok, re} = ServerRegistry.rehandshake(server.id, name)
@@ -149,9 +151,21 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistryTest do
     assert note.quarantined
     assert :sensitive_read in note.tags
 
+    assert_receive {:alert, %{key: :rug_pull, severity: :critical, detail: detail}}
+    assert detail =~ "note"
+
     {:ok, cleared} = ServerRegistry.clear_tool_block(server.id, "note", name)
     assert Enum.find(cleared.tools, &(&1.name == "note")).quarantined == false
 
     ServerRegistry.remove_server(server.id, name)
+  end
+
+  test "re-handshake with no drift raises no rug_pull alert", %{name: name, base_url: base_url} do
+    {:ok, server} = ServerRegistry.register_server("Files", base_url, [], name)
+    Phoenix.PubSub.subscribe(PhoenixElxirBeam.PubSub, Alerts.topic())
+
+    {:ok, _re} = ServerRegistry.rehandshake(server.id, name)
+
+    refute_receive {:alert, %{key: :rug_pull}}, 50
   end
 end

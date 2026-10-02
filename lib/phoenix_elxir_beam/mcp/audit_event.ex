@@ -26,10 +26,18 @@ defmodule PhoenixElxirBeam.MCP.AuditEvent do
     tags: [],
     status: :ok,
     decisions: [],
-    findings: []
+    findings: [],
+    call_chain: []
   ]
 
   @type decision :: %{plugin: String.t() | nil, verdict: atom(), reason: String.t() | nil}
+
+  @type call_chain_entry :: %{
+          call_id: String.t(),
+          tool_name: String.t() | nil,
+          tags: [atom()],
+          at: DateTime.t()
+        }
 
   @type t :: %__MODULE__{
           event_id: String.t(),
@@ -44,7 +52,8 @@ defmodule PhoenixElxirBeam.MCP.AuditEvent do
           tags: [atom()],
           status: Event.status(),
           decisions: [decision()],
-          findings: [Finding.t()]
+          findings: [Finding.t()],
+          call_chain: [call_chain_entry()]
         }
 
   @doc """
@@ -66,7 +75,8 @@ defmodule PhoenixElxirBeam.MCP.AuditEvent do
       tags: event.tags,
       status: event.status,
       decisions: Keyword.get(opts, :decisions, []),
-      findings: Keyword.get(opts, :findings, [])
+      findings: Keyword.get(opts, :findings, []),
+      call_chain: Keyword.get(opts, :call_chain, [])
     }
   end
 end

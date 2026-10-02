@@ -113,6 +113,31 @@ defmodule PhoenixElxirBeam.MCP.EventLogTest do
     assert [%{"plugin" => "chain-exfil", "verdict" => "deny"}] = row.decisions
   end
 
+  test "persists call_chain and reads it back, and it does not affect the chain hash" do
+    chain = [
+      %{call_id: "c-1", tool_name: "read_secrets", tags: [:sensitive_read], at: hours_ago(1)}
+    ]
+
+    {:ok, _} =
+      EventLog.record(
+        event(%{
+          event_id: "evt-e",
+          status: :blocked,
+          reason: "nope",
+          call_chain: chain
+        })
+      )
+
+    {:ok, _} =
+      EventLog.record(event(%{event_id: "evt-f", status: :blocked, reason: "nope"}))
+
+    %{entries: [without_chain, with_chain]} = EventLog.list(%{status: "blocked"})
+
+    assert [%{"tool_name" => "read_secrets"}] = with_chain.call_chain
+    assert without_chain.call_chain == []
+    assert EventLog.verify_chain() == :ok
+  end
+
   test "verify_chain/0 returns :ok for an untouched log" do
     for i <- 1..4, do: {:ok, _} = EventLog.record(event(%{event_id: "evt-#{i}"}))
     assert EventLog.verify_chain() == :ok

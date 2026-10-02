@@ -123,6 +123,45 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     assert [%{"plugin" => "chain-exfil", "verdict" => "deny"}] = row.decisions
   end
 
+  test "a block's durable record carries the prior calls in this session as its call chain", %{
+    name: name
+  } do
+    session_id = "session-call-chain"
+    :ok = PolicyEngine.start_session(session_id, :attack, nil, name)
+
+    {:allow, _} =
+      PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    {:allow, _} =
+      PolicyEngine.record_call(session_id, "files", "read_secrets", [:sensitive_read], name)
+
+    {:block, event} =
+      PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+
+    tool_names = Enum.map(row.call_chain, & &1["tool_name"])
+    assert tool_names == ["read_secrets", "list_files"]
+    refute Enum.any?(row.call_chain, &(&1["tool_name"] == "post_webhook"))
+  end
+
+  test "an ok event's durable record carries an empty call chain", %{name: name} do
+    session_id = "session-call-chain-ok"
+    :ok = PolicyEngine.start_session(session_id, :benign, nil, name)
+
+    {:allow, _} =
+      PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+
+    {:allow, event} =
+      PolicyEngine.record_call(session_id, "net", "check_status", [], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+
+    assert row.call_chain == []
+  end
+
   test "record_blocked/5 receipts a blocked event without needing session state", %{name: name} do
     assert {:block, event} =
              PolicyEngine.record_blocked(

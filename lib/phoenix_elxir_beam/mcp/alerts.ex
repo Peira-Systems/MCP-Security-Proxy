@@ -13,6 +13,12 @@ defmodule PhoenixElxirBeam.MCP.Alerts do
     * `:sidecar_circuit_open` / `:wasm_circuit_open` — a sidecar/Wasm plugin's circuit
       breaker tripped
     * `:upstream_unreachable` — a registered upstream failed the readiness probe
+    * `:approval_gate_fatigue` — `ApprovalGate` holds are being approved at a
+      sustained high rate (`MCP.HoldFatigueMonitor`); a sign operators are
+      rubber-stamping rather than reviewing
+    * `:rug_pull` — a `discovery` re-handshake found a tool definition changed
+      since registration (`Plugins.RugPull`); the tool is also quarantined,
+      this is a parallel "look now" signal, not a substitute for it
 
   (Not an exhaustive list — every call site chooses its own key; these are the ones worth
   knowing about up front.)

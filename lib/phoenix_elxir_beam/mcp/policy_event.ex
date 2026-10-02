@@ -30,12 +30,13 @@ defmodule PhoenixElxirBeam.MCP.PolicyEvent do
     field(:hash, :string)
     field(:decisions, {:array, :map}, default: [])
     field(:findings, {:array, :map}, default: [])
+    field(:call_chain, {:array, :map}, default: [])
 
     timestamps(updated_at: false, type: :utc_datetime_usec)
   end
 
   @fields ~w(event_id session_id agent_id scenario server_id tool_name tags status reason
-             occurred_at prev_hash hash decisions findings)a
+             occurred_at prev_hash hash decisions findings call_chain)a
 
   @doc "Builds an insert changeset from a `PhoenixElxirBeam.MCP.AuditEvent` (via `EventLog`)."
   def changeset(%__MODULE__{} = event_log, attrs) do
