@@ -43,7 +43,7 @@ call into a *send it somewhere* call.
 | Response scanning | pre-existing + M1.2 | `SecretLeak` redacts credentials out of `tools/call` / `resources/read` / `prompts/get` content before the agent sees them |
 | Streaming early-cut | M1.3 | `StreamGuard` inspects an `:http` response incrementally and cuts the stream mid-transfer once a budget is exceeded — the rest never crosses |
 | Behavioural baseline | pre-existing | `BaselineGuard` denies once the rate of watched calls exceeds a baseline |
-| Human-in-the-loop | pre-existing | `ApprovalGate` parks egress for operator sign-off |
+| Human-in-the-loop | pre-existing | `ApprovalGate` parks egress for operator sign-off. `HoldFatigueMonitor` watches the resolution rate and raises `:approval_gate_fatigue` once approvals get sustained and high — the gate is only a control as long as it's reviewed, not rubber-stamped |
 | Prompt-injection detection | M4.3 | maintained ruleset over tool descriptions (`discovery`, quarantines) and responses (`post_call`, finding + redaction) — see [injection-detection.md](injection-detection.md) |
 | Default-deny | M4.2 | `UnclassifiedGuard` (prod: `hold`) parks calls to tools the operator has not classified |
 
@@ -66,7 +66,9 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   account (`viewer` < `operator` < `admin`, M3.4a).
 - **A malicious or swapped MCP server.** Tools are hashed at registration;
   discovery scanners (`RugPull`) re-check on every re-handshake and quarantine a
-  tool whose description/schema drifted.
+  tool whose description/schema drifted, and raise a `:rug_pull` alert
+  separate from the quarantine — a changed tool definition is its own kind of
+  incident, not just one more row in the event feed.
 - **A tampered or swapped plugin.** Sidecar plugins are provenance-pinned (code
   digest + manifest digest); a mismatch stops the plugin and alerts (M3.5).
 - **Audit tampering.** Rows are hash-chained; `AuditIntegrity` verifies the

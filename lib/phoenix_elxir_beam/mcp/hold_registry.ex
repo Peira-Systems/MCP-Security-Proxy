@@ -24,7 +24,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{HoldStore, PolicyEngine, PolicyStore}
+  alias PhoenixElxirBeam.MCP.{HoldFatigueMonitor, HoldStore, PolicyEngine, PolicyStore, Telemetry}
 
   @pubsub PhoenixElxirBeam.PubSub
   @topic "mcp:holds"
@@ -83,6 +83,8 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
       )
 
     HoldStore.resolve(row.hold_id)
+    Telemetry.hold_resolved(:orphaned, row.tool_name)
+    HoldFatigueMonitor.record(:orphaned)
 
     Logger.info(
       "mcp.hold orphaned id=#{row.hold_id} session=#{row.session_id} " <>
@@ -144,7 +146,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   def handle_call({:resolve, hold_id, decision}, _from, state) do
     case Map.get(state.holds, hold_id) do
       nil -> {:reply, {:error, :not_found}, state}
-      hold -> {:reply, :ok, finalize(state, hold, outcome(decision))}
+      hold -> {:reply, :ok, finalize(state, hold, outcome(decision), outcome(decision))}
     end
   end
 
@@ -165,7 +167,7 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
     case Map.get(state.holds, hold_id) do
       nil -> {:noreply, state}
       %{resolution: r} when r != nil -> {:noreply, state}
-      hold -> {:noreply, finalize(state, hold, hold.on_timeout |> timeout_outcome())}
+      hold -> {:noreply, finalize(state, hold, hold.on_timeout |> timeout_outcome(), :timeout)}
     end
   end
 
@@ -175,11 +177,13 @@ defmodule PhoenixElxirBeam.MCP.HoldRegistry do
   defp outcome(:approve), do: :approved
   defp outcome(:deny), do: :denied
 
-  defp finalize(state, hold, resolution) do
+  defp finalize(state, hold, resolution, telemetry_outcome) do
     if hold.timer, do: Process.cancel_timer(hold.timer)
     if hold.waiter, do: GenServer.reply(hold.waiter, {:ok, resolution})
     HoldStore.resolve(hold.id)
     broadcast({:hold_resolved, hold.id, resolution})
+    Telemetry.hold_resolved(telemetry_outcome, hold.tool_name)
+    HoldFatigueMonitor.record(telemetry_outcome)
     %{state | holds: Map.delete(state.holds, hold.id)}
   end
 

@@ -32,6 +32,7 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
   require Logger
 
   alias PhoenixElxirBeam.MCP.{
+    Alerts,
     CallContext,
     HttpTransport,
     Pipeline,
@@ -462,8 +463,25 @@ defmodule PhoenixElxirBeam.MCP.ServerRegistry do
     {:ok, findings, tool_updates} =
       Pipeline.run_discovery(ctx, PluginRegistry.active_scanners(:discovery))
 
+    alert_on_rug_pull(server, findings)
+
     tools = Enum.map(server.tools, &apply_tool_update(&1, tool_updates))
     %{server | tools: tools, findings: findings}
+  end
+
+  # A changed tool definition is a different class of event than a blocked
+  # call — it usually means a vetted integration got compromised or swapped,
+  # not that an agent did something wrong — so it gets its own alert key
+  # (dashboard banner + SIEM line + its own Prometheus series), separate from
+  # the rug_pull finding/quarantine that already happens regardless.
+  defp alert_on_rug_pull(server, findings) do
+    for finding <- findings, finding.type == "rug_pull" do
+      Alerts.emit(:rug_pull, :critical, finding.title, %{
+        server_id: server.id,
+        server_name: server.name,
+        evidence: finding.evidence
+      })
+    end
   end
 
   defp apply_tool_update(tool, tool_updates) do

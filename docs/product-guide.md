@@ -337,6 +337,7 @@ Details: [ci-cd.md](ci-cd.md), [runbook.md](runbook.md#deploy-a-new-version).
 | `MCP.AuditIntegrity` `interval_ms` | `config.exs` | `900_000` | Audit-chain verification cadence (15 min). |
 | `MCP.AuditRetention` `retention_days` | `runtime.exs` (prod) | `nil` | Set via `AUDIT_RETENTION_DAYS`. |
 | `PhoenixElxirBeam.MCP` `plugins:` | `config/{dev,test,prod}.exs` | see [§7](#7-the-plugin-pipeline) | The full plugin pipeline for that env. |
+| `:approval_gate_alert` `rate` / `min_samples` / `window` | `config.exs` | `0.9` / `10` / `50` | Threshold for the `:approval_gate_fatigue` alert — approval rate over the trailing window of resolved holds, below `min_samples` never alerts. |
 | `force_ssl` exclude list | `prod.exs` | `/health*`, `/metrics`, loopback | Paths served over plain HTTP. |
 
 The `plugins:` list is set **once per environment** — `Config` merges
@@ -648,8 +649,8 @@ email** — that was a deliberate decision; wire Alertmanager to
 want paging.
 
 App alert keys: `audit_integrity`, `sidecar_provenance`, `sidecar_circuit_open`,
-`plugin_fail_open`, `upstream_unreachable`. Per-alert response:
-[runbook.md](runbook.md#responding-to-alerts).
+`plugin_fail_open`, `upstream_unreachable`, `approval_gate_fatigue`, `rug_pull`.
+Per-alert response: [runbook.md](runbook.md#responding-to-alerts).
 
 ### 8.4 Grafana + Loki
 
