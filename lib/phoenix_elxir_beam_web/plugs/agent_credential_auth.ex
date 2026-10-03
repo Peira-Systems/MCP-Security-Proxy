@@ -36,6 +36,9 @@ defmodule PhoenixElxirBeamWeb.Plugs.AgentCredentialAuth do
           {:ok, cred} -> assign(conn, :verified_agent_id, cred.agent_id)
           {:error, _reason} -> deny(conn)
         end
+
+      _ ->
+        deny(conn)
     end
   end
 

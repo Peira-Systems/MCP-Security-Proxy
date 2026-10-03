@@ -69,8 +69,15 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   session's policy matching — narrowing, not fully closing, the "API key =
   fixed identity" limitation: a key with no agent credential presented still
   uses its static default, and the credential itself is still just a bearer
-  secret, not a stronger proof of the agent's identity. The dashboard / `/dev`
-  need an operator account (`viewer` < `operator` < `admin`, M3.4a).
+  secret, not a stronger proof of the agent's identity. Presenting the header
+  is opt-in: an agent sharing a key with others can simply not send
+  `X-Agent-Credential` and fall back to the key's own default `agent_id`,
+  silently escaping a deny rule scoped to its verified identity — an
+  agent-scoped rule only binds a client that actually presents its
+  credential. An operator issuing one shared key to multiple agents should
+  set that key's default `agent_id` to the most restrictive identity
+  appropriate for the group. The dashboard / `/dev` need an operator account
+  (`viewer` < `operator` < `admin`, M3.4a).
 - **A malicious or swapped MCP server.** Tools are hashed at registration;
   discovery scanners (`RugPull`) re-check on every re-handshake and quarantine a
   tool whose description/schema drifted, and raise a `:rug_pull` alert

@@ -465,6 +465,15 @@ never silently falls back — that would let an attacker probe for valid
 `agent_id` strings for free). Revoke with
 `PhoenixElxirBeam.MCP.AgentCredential.revoke(agent_id)`.
 
+Presenting the header is opt-in, not enforced: an agent sharing a key with
+others can simply omit `X-Agent-Credential` and fall back to that key's own
+default `agent_id`, escaping any deny rule scoped to its verified identity. A
+rule written against `agent://specific-bot` only binds a client that actually
+presents that credential. If you issue one API key to multiple agents, set
+that key's own default `agent_id` to the **most restrictive** identity
+appropriate for the whole group — per-agent rules only protect the agents
+that opt in.
+
 ### 6.5 Point an MCP client at the proxy
 
 The proxy speaks **JSON-RPC 2.0 over the MCP Streamable HTTP transport** at

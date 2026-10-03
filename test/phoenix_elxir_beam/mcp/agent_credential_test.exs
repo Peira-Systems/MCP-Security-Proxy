@@ -30,6 +30,19 @@ defmodule PhoenixElxirBeam.MCP.AgentCredentialTest do
     assert {:error, :malformed} = AgentCredential.authenticate(nil)
   end
 
+  test "authenticate splits on the LAST dot, so a dotted agent_id round-trips" do
+    {cred, token} = issue(%{agent_id: "agent://bot.acme.com"})
+
+    assert {:ok, authed} = AgentCredential.authenticate(token)
+    assert authed.id == cred.id
+    assert authed.agent_id == "agent://bot.acme.com"
+
+    # tampering with the secret half still fails, proving the split landed
+    # on the real secret boundary, not somewhere inside the dotted agent_id
+    assert {:error, :bad_secret} =
+             AgentCredential.authenticate("agent://bot.acme.com.wrong-secret")
+  end
+
   test "a disabled credential is rejected even with the correct secret" do
     {cred, token} = issue()
     :ok = AgentCredential.revoke(cred.agent_id)

@@ -40,18 +40,39 @@ defmodule PhoenixElxirBeam.MCP.AgentCredential do
 
   defp cred_token(%{agent_id: agent_id}, secret), do: agent_id <> "." <> secret
 
-  @doc "Authenticates a presented `<agent_id>.<secret>` token."
+  @doc """
+  Authenticates a presented `<agent_id>.<secret>` token.
+
+  Splits on the LAST `.`, not the first: `agent_id` may itself contain dots
+  (e.g. `"agent://bot.acme.com"`), while the secret -- `Base.url_encode64/2`
+  output -- never does (base64url's alphabet is `A-Za-z0-9-_`). Splitting on
+  the first dot would silently truncate such an `agent_id`.
+  """
   @spec authenticate(String.t() | nil) ::
           {:ok, AgentCredential.t()}
           | {:error, :malformed | :unknown_agent | :disabled | :bad_secret}
   def authenticate(token) when is_binary(token) do
-    case String.split(token, ".", parts: 2) do
-      [agent_id, secret] when byte_size(secret) > 0 -> verify(agent_id, secret)
-      _ -> {:error, :malformed}
+    case String.split(token, ".") do
+      [_single] -> {:error, :malformed}
+      parts -> split_last(parts)
     end
   end
 
   def authenticate(_token), do: {:error, :malformed}
+
+  # `parts` is the full token split on every `.`; the secret is the last
+  # element (never empty, since base64url never produces one), and the
+  # `agent_id` is everything before it rejoined with `.`.
+  defp split_last(parts) do
+    {agent_parts, [secret]} = Enum.split(parts, -1)
+    agent_id = Enum.join(agent_parts, ".")
+
+    if agent_id != "" and byte_size(secret) > 0 do
+      verify(agent_id, secret)
+    else
+      {:error, :malformed}
+    end
+  end
 
   defp verify(agent_id, secret) do
     case Repo.get_by(AgentCredential, agent_id: agent_id) do
