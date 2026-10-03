@@ -77,8 +77,14 @@ doing nothing.
 - `MTLS_REQUIRED` — `true`/`1`/`yes` to reject connections that don't
   present a client certificate at all. Defaults to `false` (verify a
   presented cert against the CA, but don't require one), which lets an
-  operator roll this out in a "log but don't yet enforce" mode before
-  requiring it.
+  operator verify any certificates agents do present, without yet
+  rejecting agents that present none — useful for confirming agents are
+  presenting valid certificates before switching to `MTLS_REQUIRED=true`
+  to enforce it. This proxy does not currently log whether a connecting
+  agent presented a client certificate, so an operator relying on this
+  rollout path needs their own TLS-layer observability (e.g. the reverse
+  proxy's or Bandit's own connection logs) to confirm adoption before
+  enforcing.
 
 This is connection-level mutual authentication only — it does not extract
 an identity from the client certificate for policy purposes (no mapping to
@@ -113,9 +119,13 @@ your.domain.example {
 }
 ```
 
-Adapt `mode` (e.g. `request` for verify-but-don't-require, matching this
-repo's own `MTLS_REQUIRED=false` default) and the forwarded-identity header
-convention to your own operational needs.
+Use `mode require_and_verify` to match this proxy's own
+`MTLS_REQUIRED=true` (enforce), or `mode verify_if_given` to match
+`MTLS_REQUIRED=false`/unset (verify if presented, don't require) — never
+`mode request`, which asks for a client certificate but never checks it
+against the CA at all, silently accepting any self-signed certificate.
+Adapt the forwarded-identity header convention to your own operational
+needs.
 
 ## Bring it up
 

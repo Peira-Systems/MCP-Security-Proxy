@@ -27,6 +27,12 @@ defmodule PhoenixElxirBeam.MtlsConfig do
   here, with a clear message, at config-build time.
   """
   @spec build(boolean(), String.t() | nil, boolean() | nil) :: keyword() | no_return()
+  def build(_ssl_cert_set?, nil, true) do
+    raise "MTLS_REQUIRED is set to true but MTLS_CA_CERT_PATH is not -- " <>
+            "requiring a client certificate with no CA to verify it against " <>
+            "would silently accept every client, defeating the purpose."
+  end
+
   def build(_ssl_cert_set?, nil, _required), do: []
 
   def build(false, ca_cert_path, _required) when is_binary(ca_cert_path) do

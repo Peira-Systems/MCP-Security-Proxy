@@ -296,8 +296,18 @@ if config_env() == :prod do
 
   mtls_required =
     case System.get_env("MTLS_REQUIRED") do
-      nil -> nil
-      value -> value in ~w(true 1 yes)
+      nil ->
+        nil
+
+      value when value in ~w(true 1 yes) ->
+        true
+
+      value when value in ~w(false 0 no) ->
+        false
+
+      value ->
+        raise "MTLS_REQUIRED has an unrecognized value: #{inspect(value)} -- " <>
+                "use one of: true, 1, yes, false, 0, no (unset to default to false)."
     end
 
   case {System.get_env("SSL_CERT_PATH"), System.get_env("SSL_KEY_PATH")} do

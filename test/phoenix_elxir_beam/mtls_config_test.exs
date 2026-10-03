@@ -31,4 +31,10 @@ defmodule PhoenixElxirBeam.MtlsConfigTest do
     result = MtlsConfig.build(true, "/path/to/ca.pem", false)
     assert result[:transport_options][:fail_if_no_peer_cert] == false
   end
+
+  test "raises when MTLS_REQUIRED is true but no CA path is configured" do
+    assert_raise RuntimeError, ~r/MTLS_REQUIRED.*MTLS_CA_CERT_PATH/, fn ->
+      MtlsConfig.build(true, nil, true)
+    end
+  end
 end
