@@ -60,6 +60,63 @@ openssl rand -base64 24 > secrets/postgres_password.txt
 - To have Bandit terminate TLS itself instead of a reverse proxy, set
   `SSL_CERT_PATH` / `SSL_KEY_PATH` / `SSL_PORT`.
 
+### Optional mutual TLS (agent → proxy)
+
+`MTLS_CA_CERT_PATH` and `MTLS_REQUIRED` let Bandit require and verify a
+client certificate from the connecting agent, as an additional
+authentication factor layered on top of (not replacing) the existing
+API-key bearer token. Both are no-ops unless `SSL_CERT_PATH` /
+`SSL_KEY_PATH` are also set — Bandit has to be terminating TLS itself for
+peer-certificate verification to apply at all. Setting `MTLS_CA_CERT_PATH`
+without the base TLS cert/key fails loudly at boot instead of silently
+doing nothing.
+
+- `MTLS_CA_CERT_PATH` — path to a CA bundle (PEM). When set, the proxy
+  verifies that a connecting client presents a certificate signed by this
+  CA.
+- `MTLS_REQUIRED` — `true`/`1`/`yes` to reject connections that don't
+  present a client certificate at all. Defaults to `false` (verify a
+  presented cert against the CA, but don't require one), which lets an
+  operator roll this out in a "log but don't yet enforce" mode before
+  requiring it.
+
+This is connection-level mutual authentication only — it does not extract
+an identity from the client certificate for policy purposes (no mapping to
+`agent_id`), and it does not check revocation (no CRL/OCSP). It is scoped
+to the Bandit-terminated TLS path only.
+
+#### If TLS terminates at a reverse proxy instead
+
+The Docker Compose reference setup can also put a reverse proxy (Caddy /
+nginx) in front of the app for TLS instead of having Bandit terminate it.
+`MTLS_CA_CERT_PATH` / `MTLS_REQUIRED` have no effect in that topology,
+since the proxy — not Bandit — sees the raw TLS handshake. Mutual TLS has
+to be configured at whichever layer actually terminates TLS. If your
+deployment terminates TLS at a reverse proxy, configure client-certificate
+verification there and forward the verified identity to the app via a
+header the proxy sets after verifying the handshake. This repo doesn't own
+or ship that proxy's configuration; the following is an unmaintained
+starting point only, not a config tested or supported by this project.
+
+A minimal, illustrative Caddy `client_auth` directive:
+
+```caddyfile
+your.domain.example {
+    tls /path/to/cert.pem /path/to/key.pem {
+        client_auth {
+            mode require_and_verify
+            trusted_ca_cert_file /path/to/mtls-ca.pem
+        }
+    }
+
+    reverse_proxy localhost:4000
+}
+```
+
+Adapt `mode` (e.g. `request` for verify-but-don't-require, matching this
+repo's own `MTLS_REQUIRED=false` default) and the forwarded-identity header
+convention to your own operational needs.
+
 ## Bring it up
 
 ```bash
