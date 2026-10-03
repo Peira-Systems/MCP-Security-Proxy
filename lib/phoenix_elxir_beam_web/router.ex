@@ -54,6 +54,19 @@ defmodule PhoenixElxirBeamWeb.Router do
     get "/logout", SessionController, :delete
   end
 
+  # Operator SSO (OIDC/OAuth2) login, entirely opt-in (Phase 1 identity
+  # work). Route registration is a compile-time decision, same as
+  # `dev_routes` below — toggling `OIDC_ISSUER_URL` requires a rebuild.
+  if Application.compile_env(:phoenix_elxir_beam, :oidc_sso_enabled?, false) do
+    scope "/auth", PhoenixElxirBeamWeb do
+      pipe_through [:browser, :redirect_if_authenticated]
+
+      get "/:provider", SsoSessionController, :request
+      get "/:provider/callback", SsoSessionController, :callback
+      post "/:provider/callback", SsoSessionController, :callback
+    end
+  end
+
   ## Operator console — requires an authenticated account
 
   scope "/", PhoenixElxirBeamWeb do
