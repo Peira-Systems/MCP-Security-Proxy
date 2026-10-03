@@ -120,11 +120,19 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 - **Splitting a secret across multiple calls / arguments.** Taint markers catch
   encodings of a whole secret, not a secret chunked into pieces reassembled
   downstream.
-- **DNS rebinding between check and request.** `MetadataEgressGuard` resolves
-  a hostname at `pre_call` time; a resolver that returns a public address on
-  that lookup and a private one moments later (TTL-based rebinding) is not
-  caught. Closing this needs the resolved address pinned through to the
-  actual upstream request, which the proxy does not currently do.
+- **DNS rebinding for a fetch the upstream server itself makes.**
+  `MetadataEgressGuard` resolves every `http(s)://` host in a call's
+  arguments at `pre_call` and now checks every returned address, escalating
+  to `:critical` when a forbidden hit carries a TTL under 60 seconds (a
+  rebinding-tooling signature). What it cannot close: the actual fetch for
+  an agent-controlled URL happens inside the *upstream MCP server's own tool
+  implementation*, not inside this proxy — there is no second, proxy-owned
+  outbound request to pin a resolved address to. A rebinding attack that
+  serves its forbidden answer only on the upstream server's own, later
+  lookup is invisible to this proxy by construction, not by an
+  implementation gap. Closing that fully requires the upstream server to
+  resolve once and connect by the resolved address itself — outside this
+  repo's control, though worth requesting of upstream vendors.
 - **A compromised operator account with `admin`.** An admin can disable every
   plugin and issue keys. The mitigation is the audit chain (the actions are
   recorded and checkpointed off-DB), not prevention.

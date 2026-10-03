@@ -69,7 +69,23 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
   end
 
   test "allows a hostname that fails to resolve (left to fail upstream, not this guard's job)" do
+    Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn _ -> :error end)
+    on_exit(fn -> Application.delete_env(:phoenix_elxir_beam, :metadata_egress_resolver) end)
+
     ctx = ctx(%{"url" => "http://this-host-does-not-exist.invalid/"})
+    assert %{verdict: :allow} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+  end
+
+  test "allows a hostname with only an AAAA record (IPv6-only is not checked, by design)" do
+    Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn _ -> :error end)
+    on_exit(fn -> Application.delete_env(:phoenix_elxir_beam, :metadata_egress_resolver) end)
+
+    # An :a-only resolver (this plugin's default_resolver/1 queries :in, :a)
+    # sees no answer for an AAAA-only host and falls through to :error, same
+    # as any other unresolvable host -- allowed, same as today. This test
+    # exists to make that an intentional, documented behavior rather than a
+    # gap someone discovers later.
+    ctx = ctx(%{"url" => "http://ipv6-only.test/"})
     assert %{verdict: :allow} = MetadataEgressGuard.evaluate(:pre_call, ctx)
   end
 
