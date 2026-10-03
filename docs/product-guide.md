@@ -326,6 +326,8 @@ Details: [ci-cd.md](ci-cd.md), [runbook.md](runbook.md#deploy-a-new-version).
 | `MCP_HOST_LOOPBACK_ALIAS` | `host.docker.internal` (compose) | Lets a registered `localhost` upstream URL be dialed from inside the container. |
 | `DNS_CLUSTER_QUERY` | — | Leave blank for single-node. |
 | `GRAFANA_USER` / `GRAFANA_PASSWORD` | — | Grafana admin creds (observability overlay). |
+| `OIDC_ISSUER_URL` | — | OpenID Connect issuer URL. Unset ⇒ SSO disabled (default). **Required to enable SSO.** See [§6.2](#62-operator-sso-oidcoauth2). |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | OAuth2 client credentials registered with the IdP. Required when `OIDC_ISSUER_URL` is set; boot raises otherwise. |
 
 ### 5.3 Compile-time config (`config/*.exs` — needs a rebuild to change)
 
@@ -376,23 +378,30 @@ via an enterprise auth system, SSO is available for operator login and pre-provi
 
 #### Setup
 
-Three environment variables govern SSO (all compile-time; a rebuild is required to toggle):
+Three environment variables govern SSO, read at **boot** (`config/runtime.exs`) —
+toggling them only needs a restart, never a rebuild:
 
 - `OIDC_ISSUER_URL` — the OpenID Connect issuer (e.g.
   `https://auth.example.com`). **Required to enable SSO.**
 - `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` — OAuth2 client credentials registered
   with the provider.
 
-Set them in `.env` (or secret files, like other deployment secrets), then rebuild
-the image:
+Set them in `.env` (or secret files, like other deployment secrets), then restart
+the app (no rebuild required — these are read at boot, not compiled in):
 
 ```bash
-docker compose build app
 docker compose up -d
 ```
 
+Register this redirect URI with your IdP:
+
+```
+https://<host>/auth/operator_sso/callback
+```
+
 When SSO is enabled, the login page shows a **"Sign in with SSO"** link; when
-disabled, the page is unchanged (password login only).
+disabled, the page is unchanged (password login only) and any `/auth/*`
+request is redirected to `/login`.
 
 #### Pre-provisioning accounts
 

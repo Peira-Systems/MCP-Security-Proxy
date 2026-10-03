@@ -32,6 +32,18 @@ config :phoenix_elxir_beam, :upstream_tls_verify, true
 # provider config) only when OIDC_ISSUER_URL is set at boot.
 config :phoenix_elxir_beam, :oidc_sso_enabled?, false
 
+# Always set a (possibly empty) :providers list at compile time.
+# `Ueberauth.init/1` does `{:ok, providers} = Keyword.fetch(environment, :providers)`
+# (deps/ueberauth/lib/ueberauth.ex) -- an UNSET :providers key is a MatchError,
+# not a clean "no provider configured" result. SsoSessionController calls
+# `Ueberauth.init/1` fresh per request (see Fix 1: no `plug Ueberauth` macro,
+# since that would re-introduce the compile-time init crash), so this default
+# must exist even when SSO has never been configured, e.g. in test envs that
+# flip `oidc_sso_enabled?` to true via `Application.put_env/3` without ever
+# setting real provider config. `config/runtime.exs` overrides this with the
+# real provider list when OIDC_ISSUER_URL is set at boot.
+config :ueberauth, Ueberauth, providers: []
+
 # Off-DB anchoring of the audit hash chain (M2.3). In prod the key comes
 # from AUDIT_CHECKPOINT_KEY and the path should be on a volume separate from
 # Postgres (config/runtime.exs).

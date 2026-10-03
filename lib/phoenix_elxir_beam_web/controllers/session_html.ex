@@ -29,7 +29,7 @@ defmodule PhoenixElxirBeamWeb.SessionHTML do
       </.form>
 
       <div :if={@sso_enabled?} class="mt-4 text-center">
-        <.link href="/auth/operator_sso" class="text-sm font-medium underline">
+        <.link href={~p"/auth/operator_sso"} class="text-sm font-medium underline">
           Sign in with SSO
         </.link>
       </div>
