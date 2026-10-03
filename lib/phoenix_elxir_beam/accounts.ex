@@ -35,6 +35,7 @@ defmodule PhoenixElxirBeam.Accounts do
     user = get_user_by_email(email)
 
     cond do
+      user && user.auth_source != :local -> nil
       user && not is_nil(user.disabled_at) -> nil
       User.valid_password?(user, password) -> user
       true -> nil
@@ -47,6 +48,13 @@ defmodule PhoenixElxirBeam.Accounts do
   def create_user(attrs) do
     %User{}
     |> User.registration_changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc "Admin-provisions an SSO-authenticated account. `attrs` needs `:email` and `:role`."
+  def create_sso_user(attrs) do
+    %User{}
+    |> User.sso_registration_changeset(attrs)
     |> Repo.insert()
   end
 
