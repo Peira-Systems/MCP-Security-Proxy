@@ -88,4 +88,26 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
     assert policy.fail_mode == :fail_closed
     assert "call.arguments" in policy.data_needs
   end
+
+  test "resolve_all/2 returns every address and TTL from an injected resolver" do
+    fake_resolver = fn
+      ~c"multi.test" -> {:ok, [{{93, 184, 216, 34}, 300}, {{169, 254, 169, 254}, 30}]}
+      _ -> :error
+    end
+
+    assert {:ok, [{{93, 184, 216, 34}, 300}, {{169, 254, 169, 254}, 30}]} =
+             MetadataEgressGuard.resolve_all("multi.test", fake_resolver)
+  end
+
+  test "resolve_all/2 returns :error when the injected resolver fails" do
+    fake_resolver = fn _ -> :error end
+    assert :error = MetadataEgressGuard.resolve_all("nowhere.test", fake_resolver)
+  end
+
+  test "resolve_all/2 parses an IP-literal host without calling the resolver" do
+    fake_resolver = fn _ -> raise "resolver should not be called for an IP literal" end
+
+    assert {:ok, [{{127, 0, 0, 1}, 0}]} =
+             MetadataEgressGuard.resolve_all("127.0.0.1", fake_resolver)
+  end
 end

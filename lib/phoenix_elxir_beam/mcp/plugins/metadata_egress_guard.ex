@@ -75,7 +75,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
   defp extract_hosts(_), do: []
 
   defp forbidden_target(host) do
-    with {:ok, ip_tuple} <- resolve(host),
+    with {:ok, [{ip_tuple, _ttl} | _rest]} <- resolve_all(host),
          true <- forbidden_ip?(ip_tuple) do
       {host, :inet.ntoa(ip_tuple) |> to_string()}
     else
@@ -83,18 +83,37 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
     end
   end
 
-  defp resolve(host) do
+  @doc false
+  @spec resolve_all(String.t(), (charlist() -> {:ok, [{tuple(), non_neg_integer()}]} | :error)) ::
+          {:ok, [{tuple(), non_neg_integer()}]} | :error
+  def resolve_all(host, resolver \\ &default_resolver/1) do
     charlist = String.to_charlist(host)
 
     case :inet.parse_address(charlist) do
-      {:ok, ip_tuple} ->
-        {:ok, ip_tuple}
+      {:ok, ip_tuple} -> {:ok, [{ip_tuple, 0}]}
+      {:error, :einval} -> resolver.(charlist)
+    end
+  end
 
-      {:error, :einval} ->
-        case :inet.gethostbyname(charlist) do
-          {:ok, {:hostent, _, _, _, _, [ip_tuple | _]}} -> {:ok, ip_tuple}
-          _ -> :error
+  @doc false
+  @spec default_resolver(charlist()) :: {:ok, [{tuple(), non_neg_integer()}]} | :error
+  def default_resolver(charlist) do
+    case :inet_res.resolve(charlist, :in, :a) do
+      {:ok, dns_rec} ->
+        answers =
+          dns_rec
+          |> :inet_dns.msg(:anlist)
+          |> Enum.map(fn rr ->
+            {:inet_dns.rr(rr, :data), :inet_dns.rr(rr, :ttl)}
+          end)
+
+        case answers do
+          [] -> :error
+          _ -> {:ok, answers}
         end
+
+      {:error, _} ->
+        :error
     end
   end
 
