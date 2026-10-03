@@ -70,6 +70,46 @@ case System.get_env("MCP_RULE_COVERAGE_EXTRA_RULE") do
     :ok
 end
 
+# Operator SSO (OIDC/OAuth2) is entirely opt-in. Unset OIDC_ISSUER_URL ⇒
+# oidc_sso_enabled? stays false (config/config.exs default) and no
+# ueberauth/ueberauth_oidcc provider config is registered -- an existing
+# deployment upgrading sees no behavior change until it sets this.
+oidc_issuer_url = System.get_env("OIDC_ISSUER_URL")
+
+config :phoenix_elxir_beam, :oidc_sso_enabled?, is_binary(oidc_issuer_url)
+
+if is_binary(oidc_issuer_url) do
+  oidc_client_id =
+    System.get_env("OIDC_CLIENT_ID") ||
+      raise "OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set"
+
+  oidc_client_secret =
+    System.get_env("OIDC_CLIENT_SECRET") ||
+      raise "OIDC_CLIENT_SECRET is required when OIDC_ISSUER_URL is set"
+
+  config :ueberauth_oidcc,
+    issuers: [
+      %{
+        name: :operator_sso,
+        issuer: oidc_issuer_url
+      }
+    ]
+
+  config :ueberauth, Ueberauth,
+    providers: [
+      operator_sso:
+        {Ueberauth.Strategy.Oidcc,
+         [
+           issuer: :operator_sso,
+           client_id: oidc_client_id,
+           client_secret: oidc_client_secret,
+           scopes: ~w(openid email profile)
+         ]}
+    ]
+else
+  config :phoenix_elxir_beam, :oidc_sso_enabled?, false
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,

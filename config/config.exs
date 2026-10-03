@@ -27,6 +27,11 @@ config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Plugs.RequestLimits, max_body_by
 # Set false only for a dev server with a self-signed cert.
 config :phoenix_elxir_beam, :upstream_tls_verify, true
 
+# Operator SSO (OIDC) is opt-in. Default false so dev/test boot unchanged;
+# config/runtime.exs flips this to true (and registers ueberauth/ueberauth_oidcc
+# provider config) only when OIDC_ISSUER_URL is set at boot.
+config :phoenix_elxir_beam, :oidc_sso_enabled?, false
+
 # Off-DB anchoring of the audit hash chain (M2.3). In prod the key comes
 # from AUDIT_CHECKPOINT_KEY and the path should be on a volume separate from
 # Postgres (config/runtime.exs).

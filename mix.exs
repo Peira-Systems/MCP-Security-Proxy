@@ -102,6 +102,8 @@ defmodule PhoenixElxirBeam.MixProject do
       # docs/wasm-plugin-plan.md). Added ahead of W2's WasmRunner per the W0 spike; no
       # code depends on it yet.
       {:wasmex, "~> 0.15"},
+      {:ueberauth, "~> 0.10"},
+      {:ueberauth_oidcc, "~> 0.3"},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
