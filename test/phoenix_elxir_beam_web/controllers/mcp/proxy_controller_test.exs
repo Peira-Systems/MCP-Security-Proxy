@@ -55,6 +55,19 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert json_response(conn, 401)
   end
 
+  test "an invalid Authorization bearer token is rejected before X-Agent-Credential is ever checked",
+       %{sid: sid} do
+    conn =
+      authed("mcpk_nope.whatever")
+      |> put_req_header("x-agent-credential", "agent://irrelevant.also-whatever")
+      |> proxy_post(sid, rpc("initialize", %{}))
+
+    assert json_response(conn, 401)
+    # The agent-credential error message must never appear -- proof ApiKeyAuth
+    # halted first and AgentCredentialAuth never ran.
+    refute conn.resp_body =~ "invalid agent credential"
+  end
+
   # -- transport hardening (M1.5) -----------------------------------
 
   test "an oversized request body is rejected with 413", %{sid: sid, token: token} do

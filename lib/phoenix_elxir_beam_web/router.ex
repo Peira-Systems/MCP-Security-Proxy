@@ -34,6 +34,7 @@ defmodule PhoenixElxirBeamWeb.Router do
     plug :accepts, ["json"]
     plug PhoenixElxirBeamWeb.Plugs.RequestLimits
     plug PhoenixElxirBeamWeb.Plugs.ApiKeyAuth
+    plug PhoenixElxirBeamWeb.Plugs.AgentCredentialAuth
     plug PhoenixElxirBeamWeb.Plugs.RateLimit
   end
 
