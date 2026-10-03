@@ -6,14 +6,20 @@ defmodule PhoenixElxirBeamWeb.SessionController do
   alias PhoenixElxirBeamWeb.UserAuth
 
   def new(conn, _params) do
-    render(conn, :new, error_message: nil)
+    render(conn, :new,
+      error_message: nil,
+      sso_enabled?: Application.get_env(:phoenix_elxir_beam, :oidc_sso_enabled?, false)
+    )
   end
 
   def create(conn, %{"user" => %{"email" => email, "password" => password}}) do
     case Accounts.get_user_by_email_and_password(email, password) do
       nil ->
         # Do not reveal which half was wrong.
-        render(conn, :new, error_message: "Invalid email or password")
+        render(conn, :new,
+          error_message: "Invalid email or password",
+          sso_enabled?: Application.get_env(:phoenix_elxir_beam, :oidc_sso_enabled?, false)
+        )
 
       user ->
         conn

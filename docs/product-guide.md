@@ -369,7 +369,56 @@ keyword-shaped lists by key, so there is no base list to override.
    `admin` (+ key management, `/dev` routes).
 3. Confirm `/health/ready` is `200` and Prometheus can scrape `/metrics`.
 
-### 6.2 Register an MCP server
+### 6.2 Operator SSO (OIDC/OAuth2)
+
+**Optional.** If you operate your own identity provider or have federated access
+via an enterprise auth system, SSO is available for operator login and pre-provisioned accounts.
+
+#### Setup
+
+Three environment variables govern SSO (all compile-time; a rebuild is required to toggle):
+
+- `OIDC_ISSUER_URL` — the OpenID Connect issuer (e.g.
+  `https://auth.example.com`). **Required to enable SSO.**
+- `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` — OAuth2 client credentials registered
+  with the provider.
+
+Set them in `.env` (or secret files, like other deployment secrets), then rebuild
+the image:
+
+```bash
+docker compose build app
+docker compose up -d
+```
+
+When SSO is enabled, the login page shows a **"Sign in with SSO"** link; when
+disabled, the page is unchanged (password login only).
+
+#### Pre-provisioning accounts
+
+SSO does not auto-provision operators. An account must exist in Postgres *before*
+an operator can sign in via SSO — it is always a pre-provisioning step:
+
+```bash
+# Release console
+docker compose exec app /app/bin/phoenix_elxir_beam remote
+```
+
+```elixir
+alias PhoenixElxirBeam.Accounts
+# Each operator must be created first
+{:ok, _user} = Accounts.create_sso_user(%{email: "alice@example.com", role: :operator})
+```
+
+Only accounts with `auth_source: :sso` can log in via SSO — password login is
+disabled for them. Accounts with `auth_source: :local` (or created before SSO was
+added) can only log in with a password, never SSO, even if their email matches an
+IdP account.
+
+Password-based login always remains available for local accounts, independent of
+SSO's enabled status.
+
+### 6.3 Register an MCP server
 
 **Dashboard → Servers & tools → Register.** Give a name and the upstream's
 **Streamable HTTP base URL** (e.g. `http://host.docker.internal:9000/mcp`).
@@ -390,7 +439,7 @@ PhoenixElxirBeam.MCP.ServerRegistry.register_stdio_server(
 )
 ```
 
-### 6.3 Classify tools
+### 6.4 Classify tools
 
 With default-deny on (prod ships `UnclassifiedGuard` in `hold` mode), **a call to
 an unclassified tool is parked** until an operator classifies it.
@@ -416,7 +465,7 @@ a tag on then off, or switch `UnclassifiedGuard` to `off` once curation is done.
 **Every tag change is written to the audit chain** (actor, before → after) and is
 one-click revertible from the **Policy changes** panel.
 
-### 6.4 Issue an agent key
+### 6.5 Issue an agent key
 
 **Dashboard → Client keys (admin) → Issue.** Provide:
 
@@ -474,7 +523,7 @@ that key's own default `agent_id` to the **most restrictive** identity
 appropriate for the whole group — per-agent rules only protect the agents
 that opt in.
 
-### 6.5 Point an MCP client at the proxy
+### 6.6 Point an MCP client at the proxy
 
 The proxy speaks **JSON-RPC 2.0 over the MCP Streamable HTTP transport** at
 `POST /mcp/proxy/:server_id`. A conforming MCP client needs only:
@@ -541,7 +590,7 @@ If the client's `Accept` header includes `text/event-stream` and the upstream
 emits `notifications/progress`, the proxy relays those frames live over a chunked
 SSE response and delivers the fully-scanned result as the terminal frame.
 
-### 6.6 The dashboard
+### 6.7 The dashboard
 
 `/mcp/dashboard` (also `/`). Header shows server / session / plugin counts, the
 audit-chain status pill, and the signed-in identity.
@@ -556,7 +605,7 @@ audit-chain status pill, and the signed-in identity.
 | **Client keys** | issued keys; **Issue** / **Revoke** | admin |
 | **Servers & tools** | register / remove servers; expand to classify tools, re-handshake, clear a quarantine | operator classifies; admin registers |
 
-### 6.7 Change policy at runtime
+### 6.8 Change policy at runtime
 
 **Dashboard → Plugins (operator).** Enable / disable / reorder plugins without a
 redeploy; state persists across restarts (`plugin_states` overlays the config
@@ -566,7 +615,7 @@ revert button.
 Still needs a config change + redeploy: `RuleEngine` rule edits, and the
 `UnclassifiedGuard` `mode`.
 
-### 6.8 Dry-run mode
+### 6.9 Dry-run mode
 
 **Dashboard → Plugins (operator).** Turns the proxy's enforcement into
 observe-only: a plugin's `deny`/`hold` is logged instead of acted on, and the
