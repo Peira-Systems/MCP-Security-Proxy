@@ -123,7 +123,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
   test "resolve_all/2 parses an IP-literal host without calling the resolver" do
     fake_resolver = fn _ -> raise "resolver should not be called for an IP literal" end
 
-    assert {:ok, [{{127, 0, 0, 1}, 0}]} =
+    assert {:ok, [{{127, 0, 0, 1}, nil}]} =
              MetadataEgressGuard.resolve_all("127.0.0.1", fake_resolver)
   end
 
@@ -169,13 +169,27 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
       assert %{verdict: :deny, severity: :high} = MetadataEgressGuard.evaluate(:pre_call, ctx)
     end
 
-    test "an IP-literal host (synthetic TTL of 0) is never treated as a short-TTL rebinding signal" do
+    test "an IP-literal host (synthetic TTL of nil) is never treated as a short-TTL rebinding signal" do
       ctx = ctx(%{"url" => "http://169.254.169.254/"})
 
       assert %{verdict: :deny, severity: :high, reason: reason} =
                MetadataEgressGuard.evaluate(:pre_call, ctx)
 
       refute reason =~ "short TTL"
+    end
+
+    test "escalates severity to :critical when a real DNS TTL of exactly 0 is returned" do
+      Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn
+        ~c"zero-ttl.test" -> {:ok, [{{169, 254, 169, 254}, 0}]}
+        _ -> :error
+      end)
+
+      ctx = ctx(%{"url" => "http://zero-ttl.test/"})
+
+      assert %{verdict: :deny, severity: :critical, reason: reason} =
+               MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+      assert reason =~ "short TTL"
     end
   end
 end

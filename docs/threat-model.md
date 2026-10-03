@@ -124,14 +124,15 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   `MetadataEgressGuard` resolves every `http(s)://` host in a call's
   arguments at `pre_call` and now checks every returned address, escalating
   to `:critical` when a forbidden hit carries a TTL under 60 seconds (a
-  rebinding-tooling signature). What it cannot close: the actual fetch for
+  rebinding-tooling signature, and a real, legal TTL value, not just a
+  sentinel for "no TTL info"). What it cannot close: the actual fetch for
   an agent-controlled URL happens inside the *upstream MCP server's own tool
-  implementation*, not inside this proxy — there is no second, proxy-owned
+  implementation*, not inside this proxy; there is no second, proxy-owned
   outbound request to pin a resolved address to. A rebinding attack that
   serves its forbidden answer only on the upstream server's own, later
   lookup is invisible to this proxy by construction, not by an
   implementation gap. Closing that fully requires the upstream server to
-  resolve once and connect by the resolved address itself — outside this
+  resolve once and connect by the resolved address itself, outside this
   repo's control, though worth requesting of upstream vendors.
 - **A compromised operator account with `admin`.** An admin can disable every
   plugin and issue keys. The mitigation is the audit chain (the actions are

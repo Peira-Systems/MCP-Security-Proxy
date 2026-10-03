@@ -90,7 +90,7 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
   defp forbidden_target(host, resolver) do
     with {:ok, answers} <- resolve_all(host, resolver),
          {ip_tuple, ttl} <- Enum.find(answers, fn {ip, _ttl} -> forbidden_ip?(ip) end) do
-      severity = if ttl > 0 and ttl < @short_ttl_threshold_s, do: :critical, else: :high
+      severity = if is_integer(ttl) and ttl < @short_ttl_threshold_s, do: :critical, else: :high
       {host, :inet.ntoa(ip_tuple) |> to_string(), severity}
     else
       _ -> nil
@@ -98,36 +98,45 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
   end
 
   @doc false
-  @spec resolve_all(String.t(), (charlist() -> {:ok, [{tuple(), non_neg_integer()}]} | :error)) ::
-          {:ok, [{tuple(), non_neg_integer()}]} | :error
+  @spec resolve_all(
+          String.t(),
+          (charlist() -> {:ok, [{tuple(), non_neg_integer() | nil}]} | :error)
+        ) ::
+          {:ok, [{tuple(), non_neg_integer() | nil}]} | :error
   def resolve_all(host, resolver \\ &default_resolver/1) do
     charlist = String.to_charlist(host)
 
     case :inet.parse_address(charlist) do
-      {:ok, ip_tuple} -> {:ok, [{ip_tuple, 0}]}
+      {:ok, ip_tuple} -> {:ok, [{ip_tuple, nil}]}
       {:error, :einval} -> resolver.(charlist)
     end
   end
 
   @doc false
-  @spec default_resolver(charlist()) :: {:ok, [{tuple(), non_neg_integer()}]} | :error
+  @spec default_resolver(charlist()) :: {:ok, [{tuple(), non_neg_integer() | nil}]} | :error
   def default_resolver(charlist) do
-    case :inet_res.resolve(charlist, :in, :a) do
-      {:ok, dns_rec} ->
-        answers =
+    native_answers =
+      case :inet.getaddrs(charlist, :inet) do
+        {:ok, ip_tuples} -> Enum.map(ip_tuples, fn ip -> {ip, nil} end)
+        {:error, _} -> []
+      end
+
+    dns_answers =
+      case :inet_res.resolve(charlist, :in, :a) do
+        {:ok, dns_rec} ->
           dns_rec
           |> :inet_dns.msg(:anlist)
           |> Enum.map(fn rr ->
             {:inet_dns.rr(rr, :data), :inet_dns.rr(rr, :ttl)}
           end)
 
-        case answers do
-          [] -> :error
-          _ -> {:ok, answers}
-        end
+        {:error, _} ->
+          []
+      end
 
-      {:error, _} ->
-        :error
+    case native_answers ++ dns_answers do
+      [] -> :error
+      answers -> {:ok, answers}
     end
   end
 
