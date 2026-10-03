@@ -61,9 +61,16 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 ## Other threats in scope
 
 - **Unauthenticated access.** Every proxy request needs a signed API key
-  (`Authorization: Bearer mcpk_…`); agent identity is a property of the key, not
-  a client-asserted header (M1.4). The dashboard / `/dev` need an operator
-  account (`viewer` < `operator` < `admin`, M3.4a).
+  (`Authorization: Bearer mcpk_…`); agent identity defaults to a property of
+  the key, not a client-asserted header (M1.4). An agent can now
+  independently verify its own `agent_id` per-session via a separate
+  `AgentCredential` and the `X-Agent-Credential` header
+  (`AgentCredentialAuth`), which overrides the key's default for that
+  session's policy matching — narrowing, not fully closing, the "API key =
+  fixed identity" limitation: a key with no agent credential presented still
+  uses its static default, and the credential itself is still just a bearer
+  secret, not a stronger proof of the agent's identity. The dashboard / `/dev`
+  need an operator account (`viewer` < `operator` < `admin`, M3.4a).
 - **A malicious or swapped MCP server.** Tools are hashed at registration;
   discovery scanners (`RugPull`) re-check on every re-handshake and quarantine a
   tool whose description/schema drifted, and raise a `:rug_pull` alert

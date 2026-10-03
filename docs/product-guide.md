@@ -434,6 +434,37 @@ Authorization: Bearer mcpk_<key-id>.<secret>
 **Revoke** takes effect on the agent's next request — mid-session too (the session
 is also bound to its `key_id`, so another key cannot drive it).
 
+#### Verified per-agent identity (optional)
+
+An API key's `agent_id` is a *default* — every agent sharing that key is
+otherwise stamped with the same identity for policy matching. To let distinct
+agents behind one shared key assert their own identity, issue each one an
+`AgentCredential` and have it present an `X-Agent-Credential` header:
+
+```elixir
+# from a release console (no dashboard UI yet — same bootstrap caveat as
+# issuing the first admin account: this runs with full application access)
+{:ok, _cred, token} =
+  PhoenixElxirBeam.MCP.AgentCredential.issue(%{agent_id: "agent://specific-bot"})
+# token is "agent://specific-bot.<secret>" — shown once, like an API key's token
+```
+
+The agent then sends both headers on every request:
+
+```
+Authorization: Bearer mcpk_<id>.<secret>
+X-Agent-Credential: agent://specific-bot.<secret>
+```
+
+When `X-Agent-Credential` is present and valid, its `agent_id` overrides the
+API key's own default for that session — so a RuleEngine rule scoped to
+`agent://specific-bot` matches the verified identity, not whatever the shared
+key happened to default to. A missing header falls back to the key's default
+exactly as before; a present but invalid header is rejected with 401 (it
+never silently falls back — that would let an attacker probe for valid
+`agent_id` strings for free). Revoke with
+`PhoenixElxirBeam.MCP.AgentCredential.revoke(agent_id)`.
+
 ### 6.5 Point an MCP client at the proxy
 
 The proxy speaks **JSON-RPC 2.0 over the MCP Streamable HTTP transport** at

