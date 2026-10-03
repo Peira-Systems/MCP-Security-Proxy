@@ -85,6 +85,28 @@ defmodule PhoenixElxirBeamWeb.SsoSessionControllerTest do
       assert redirected_to(conn) == ~p"/login"
     end
 
+    test "rejects login when the matching auth_source: :sso account is disabled", %{conn: conn} do
+      {:ok, user} = Accounts.create_sso_user(%{email: "disabled@example.com", role: :operator})
+      {:ok, _user} = Accounts.set_user_disabled(user, true)
+
+      auth = %Ueberauth.Auth{
+        info: %Ueberauth.Auth.Info{email: "disabled@example.com"},
+        extra: %Ueberauth.Auth.Extra{
+          raw_info: %UeberauthOidcc.RawInfo{claims: %{"email_verified" => true}}
+        }
+      }
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> Phoenix.Controller.fetch_flash()
+        |> Plug.Conn.assign(:ueberauth_auth, auth)
+        |> PhoenixElxirBeamWeb.SsoSessionController.callback(%{})
+
+      refute get_session(conn, "user_token")
+      assert redirected_to(conn) == ~p"/login"
+    end
+
     test "rejects login when the matching account is auth_source: :local", %{conn: conn} do
       {:ok, _user} =
         Accounts.create_user(%{

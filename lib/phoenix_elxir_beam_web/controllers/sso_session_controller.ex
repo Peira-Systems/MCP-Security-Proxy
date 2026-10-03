@@ -22,7 +22,8 @@ defmodule PhoenixElxirBeamWeb.SsoSessionController do
 
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
     with {:ok, email} <- verified_email(auth),
-         %Accounts.User{auth_source: :sso} = user <- Accounts.get_user_by_email(email) do
+         %Accounts.User{auth_source: :sso, disabled_at: nil} = user <-
+           Accounts.get_user_by_email(email) do
       conn
       |> put_flash(:info, "Welcome back.")
       |> UserAuth.log_in_user(user)
