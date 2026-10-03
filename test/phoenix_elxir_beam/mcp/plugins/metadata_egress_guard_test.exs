@@ -110,4 +110,56 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuardTest do
     assert {:ok, [{{127, 0, 0, 1}, 0}]} =
              MetadataEgressGuard.resolve_all("127.0.0.1", fake_resolver)
   end
+
+  describe "multi-answer and TTL handling" do
+    setup do
+      on_exit(fn -> Application.delete_env(:phoenix_elxir_beam, :metadata_egress_resolver) end)
+    end
+
+    test "denies a call when a forbidden address appears as a non-first DNS answer" do
+      Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn
+        ~c"sneaky.test" -> {:ok, [{{93, 184, 216, 34}, 300}, {{169, 254, 169, 254}, 300}]}
+        _ -> :error
+      end)
+
+      ctx = ctx(%{"url" => "http://sneaky.test/"})
+
+      assert %{verdict: :deny, reason: reason} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+      assert reason =~ "169.254.169.254"
+    end
+
+    test "escalates severity to :critical when the forbidden answer's TTL is under 60s" do
+      Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn
+        ~c"rebinder.test" -> {:ok, [{{169, 254, 169, 254}, 15}]}
+        _ -> :error
+      end)
+
+      ctx = ctx(%{"url" => "http://rebinder.test/"})
+
+      assert %{verdict: :deny, severity: :critical, reason: reason} =
+               MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+      assert reason =~ "short TTL"
+    end
+
+    test "keeps :high severity when the forbidden answer's TTL is not suspiciously short" do
+      Application.put_env(:phoenix_elxir_beam, :metadata_egress_resolver, fn
+        ~c"normal.test" -> {:ok, [{{169, 254, 169, 254}, 3600}]}
+        _ -> :error
+      end)
+
+      ctx = ctx(%{"url" => "http://normal.test/"})
+
+      assert %{verdict: :deny, severity: :high} = MetadataEgressGuard.evaluate(:pre_call, ctx)
+    end
+
+    test "an IP-literal host (synthetic TTL of 0) is never treated as a short-TTL rebinding signal" do
+      ctx = ctx(%{"url" => "http://169.254.169.254/"})
+
+      assert %{verdict: :deny, severity: :high, reason: reason} =
+               MetadataEgressGuard.evaluate(:pre_call, ctx)
+
+      refute reason =~ "short TTL"
+    end
+  end
 end

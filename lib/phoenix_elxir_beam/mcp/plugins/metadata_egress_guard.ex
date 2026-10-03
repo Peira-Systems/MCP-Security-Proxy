@@ -42,19 +42,32 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
 
   @impl true
   def evaluate(:pre_call, %CallContext{call: call}) do
+    resolver =
+      Application.get_env(:phoenix_elxir_beam, :metadata_egress_resolver, &default_resolver/1)
+
     call
     |> Map.get(:arguments, %{})
     |> extract_hosts()
-    |> Enum.find_value(&forbidden_target/1)
+    |> Enum.find_value(&forbidden_target(&1, resolver))
     |> case do
       nil -> Decision.allow()
-      {host, ip_string} -> deny(host, ip_string)
+      {host, ip_string, severity} -> deny(host, ip_string, severity)
     end
   end
 
-  defp deny(host, ip_string) do
+  @short_ttl_threshold_s 60
+
+  defp deny(host, ip_string, :critical) do
     Decision.deny(
-      :high,
+      :critical,
+      "network egress blocked: target #{host} resolves to #{ip_string}, a disallowed address " <>
+        "(short TTL on this record suggests active DNS rebinding)"
+    )
+  end
+
+  defp deny(host, ip_string, severity) do
+    Decision.deny(
+      severity,
       "network egress blocked: target #{host} resolves to #{ip_string}, a disallowed address"
     )
   end
@@ -74,10 +87,11 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
 
   defp extract_hosts(_), do: []
 
-  defp forbidden_target(host) do
-    with {:ok, [{ip_tuple, _ttl} | _rest]} <- resolve_all(host),
-         true <- forbidden_ip?(ip_tuple) do
-      {host, :inet.ntoa(ip_tuple) |> to_string()}
+  defp forbidden_target(host, resolver) do
+    with {:ok, answers} <- resolve_all(host, resolver),
+         {ip_tuple, ttl} <- Enum.find(answers, fn {ip, _ttl} -> forbidden_ip?(ip) end) do
+      severity = if ttl > 0 and ttl < @short_ttl_threshold_s, do: :critical, else: :high
+      {host, :inet.ntoa(ip_tuple) |> to_string(), severity}
     else
       _ -> nil
     end
