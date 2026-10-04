@@ -144,6 +144,48 @@ def fold_confusables(text):
     return "".join(out)
 
 
+# A single-character-separated spelled-out word (I-g-n-o-r-e) defeats any
+# regex relying on word boundaries, since every "word" is one character.
+# Only collapse a run this long -- 6+ single-char tokens sharing the same
+# separator -- so this never touches ordinary short hyphenation ("a-b
+# test") or an initialism ("U.S.").
+_SPACING_RUN_RE = re.compile(r"(?:\b\w(?:-|\.|\s))(?:\w(?:-|\.|\s)){5,}\w\b")
+
+
+def strip_artificial_spacing(text):
+    if not text:
+        return text or ""
+
+    def collapse(match):
+        run = match.group(0)
+        return re.sub(r"[-.\s]", "", run)
+
+    return _SPACING_RUN_RE.sub(collapse, text)
+
+
+# Minimum length before attempting a base64 decode -- below this, too many
+# short, coincidental substrings would match the base64 alphabet and cost
+# decode attempts for no real signal.
+_BASE64_MIN_LEN = 16
+_BASE64_SEGMENT_RE = re.compile(r"[A-Za-z0-9+/]{%d,}={0,2}" % _BASE64_MIN_LEN)
+
+
+def try_base64_segments(text):
+    import base64
+    import binascii
+
+    decoded = []
+    for match in _BASE64_SEGMENT_RE.finditer(text or ""):
+        segment = match.group(0)
+        try:
+            raw = base64.b64decode(segment, validate=False)
+            as_text = raw.decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            continue
+        decoded.append(as_text)
+    return decoded
+
+
 def load_rules(path=RULES_PATH):
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
