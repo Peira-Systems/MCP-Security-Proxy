@@ -149,7 +149,7 @@ def fold_confusables(text):
 # Only collapse a run this long -- 6+ single-char tokens sharing the same
 # separator -- so this never touches ordinary short hyphenation ("a-b
 # test") or an initialism ("U.S.").
-_SPACING_RUN_RE = re.compile(r"\b(?:\w[-.]){5,}\w\b")
+_SPACING_RUN_RE = re.compile(r"\b(?:\w[-.]){3,}\w\b")
 
 
 def strip_artificial_spacing(text):

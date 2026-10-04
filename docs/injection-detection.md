@@ -42,16 +42,26 @@ same attacks (see Limits below) — which `score_injection.py` measures and
 prints separately but does not gate CI on. Measured, that out-of-scope
 set catches **0/23 (0.0 recall)**.
 
-Five gaps previously in the out-of-scope set were closed this round via
+Four gaps previously in the out-of-scope set were closed this round via
 generalizable text-normalization transforms in `prompt_injection_scanner.py`
-(not new rules): confusables-folding (cross-script homoglyphs like
-Cyrillic "о" for Latin "o"), zero-width-character stripping (scattered
-single zero-width codepoints between letters, distinct from the
+(not new rules): zero-width-character stripping (scattered single
+zero-width codepoints between letters, distinct from the
 `poison-zero-width` RULE's dense-block signature), artificial-spacing
 stripping (`I-g-n-o-r-e`-style single-character separation), base64
 segment decoding, and whole-string reversal. Each candidate transform is
 checked against the same, unchanged ruleset — see
 `docs/superpowers/specs/2026-10-04-injection-detection-normalization-closure-design.md`.
+
+A fifth, confusables-folding (cross-script homoglyphs like Cyrillic "о"
+for Latin "o"), was also added this round and works correctly in
+isolation, but the specific out-of-scope corpus row it targets
+(`obfuscation_homoglyph`) turned out to already be caught by an unrelated
+pre-existing rule (`override-act-as`, on an unobfuscated clause elsewhere
+in the same sample) — so its closure isn't attributable to this
+transform for that particular sample. The transform itself is kept
+(it is independently covered by the unit test suite, now run in CI per
+the fix above) since a differently-worded homoglyph attack without an
+incidental unobfuscated trigger phrase would still need it.
 
 Earlier closed gaps from the prior round remain in place: Unicode NFKC
 normalization (fullwidth-character evasion) and newline-tolerant middle
