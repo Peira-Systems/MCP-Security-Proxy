@@ -63,6 +63,83 @@ IMPORTANT_BLOCK = r"(?is)<\s*important\s*>.*?<\s*/\s*important\s*>"
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
+# Zero-width codepoints with no visible rendering, used to split a trigger
+# phrase's letters apart so a word-boundary-based regex never sees them
+# adjacent. NFKC does not strip these (they have no compatibility
+# decomposition). Distinct from the `poison-zero-width` RULE in
+# injection_rules.json, which flags a dense run of 3+ as its own signature
+# -- this strips scattered SINGLE occurrences so the underlying trigger
+# phrase becomes visible to the existing rules, a different obfuscation
+# shape than the rule's dense-block pattern.
+_ZERO_WIDTH_CODEPOINTS = "​‌‍‎‏﻿"
+_ZERO_WIDTH_RE = re.compile(f"[{_ZERO_WIDTH_CODEPOINTS}]")
+
+
+def strip_zero_width(text):
+    return _ZERO_WIDTH_RE.sub("", text or "")
+
+
+# Cross-script look-alike characters that NFKC does not fold (NFKC only
+# unifies compatibility-equivalent forms *within* a script, e.g. fullwidth
+# Latin to ordinary Latin -- it has no concept of "this Cyrillic letter
+# looks like that Latin letter"). Scoped to the look-alikes relevant to
+# defeating THIS ruleset's existing Latin-script trigger phrases, not a
+# general-purpose transliteration of Cyrillic/Greek text -- see the
+# confusables table maintained by the Unicode Consortium
+# (unicode.org/Public/security/latest/confusables.txt) for the much larger
+# full set this intentionally does not replicate.
+_CONFUSABLES = {
+    "а": "a", "А": "A",  # Cyrillic a
+    "е": "e", "Е": "E",  # Cyrillic ye
+    "о": "o", "О": "O",  # Cyrillic o
+    "р": "p", "Р": "P",  # Cyrillic er
+    "с": "c", "С": "C",  # Cyrillic es
+    "х": "x", "Х": "X",  # Cyrillic ha
+    "у": "y", "У": "Y",  # Cyrillic u
+    "і": "i", "І": "I",  # Cyrillic/Ukrainian i
+    "ѕ": "s", "Ѕ": "S",  # Cyrillic dze
+    "ј": "j", "Ј": "J",  # Cyrillic je
+    "ԛ": "q",            # Cyrillic qa
+    "ԝ": "w",            # Cyrillic we
+    "α": "a", "Α": "A",  # Greek alpha
+    "β": "b", "Β": "B",  # Greek beta
+    "ο": "o", "Ο": "O",  # Greek omicron
+    "ρ": "p", "Ρ": "P",  # Greek rho
+    "τ": "t", "Τ": "T",  # Greek tau
+    "υ": "u", "Υ": "Y",  # Greek upsilon
+}
+_CONFUSABLES_RE = re.compile("[" + "".join(_CONFUSABLES.keys()) + "]")
+
+
+def fold_confusables(text):
+    if not text:
+        return text or ""
+    # Only fold confusables in predominantly Latin text (where they're used to
+    # disguise Latin trigger phrases). If the text is predominantly non-Latin
+    # (e.g., real Cyrillic or Greek text), leave it unchanged to avoid
+    # transliterating genuine non-Latin content.
+    latin_count = 0
+    non_latin_count = 0
+    for char in text:
+        if char.isalpha():
+            name = unicodedata.name(char, "")
+            if "LATIN" in name:
+                latin_count += 1
+            elif "CYRILLIC" in name or "GREEK" in name:
+                non_latin_count += 1
+
+    total = latin_count + non_latin_count
+    if total == 0:
+        # No alphabetic characters, return as-is
+        return text
+
+    # Only fold if Latin characters are the majority
+    if latin_count < non_latin_count:
+        return text
+
+    return _CONFUSABLES_RE.sub(lambda m: _CONFUSABLES[m.group(0)], text)
+
+
 def load_rules(path=RULES_PATH):
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
