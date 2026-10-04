@@ -27,6 +27,7 @@ import re
 import sys
 import json
 import os
+import unicodedata
 
 # The ruleset path may be passed as argv[1] (so it is covered by the sidecar's
 # provenance pin, M3.5); otherwise it sits next to this file.
