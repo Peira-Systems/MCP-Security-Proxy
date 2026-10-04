@@ -34,22 +34,42 @@ corpus:
 | precision (flags that are real) | ≥ 0.90 |
 | false-positive rate (benign misflagged) | ≤ 0.05 |
 
-Current (M4.3 corpus-growth follow-up): recall 1.00, precision 1.00, FP 0.00 on
-115 **in-scope** samples (49 malicious, 66 benign). The corpus now also carries
-28 samples explicitly tagged `"scope": "out_of_scope"` — paraphrase,
-multilingual, and heavily-obfuscated variants of the same attacks (see Limits
-below) — which `score_injection.py` measures and prints separately but does
-not gate CI on. Measured, that out-of-scope set catches **1/28 (0.036
-recall)**: this is the honest number the original "corpus and ruleset were
-authored together" 1.00 was hiding. Two gaps found this way were genuinely
-closable and got fixed in the ruleset/scanner rather than left as accepted
-misses: Unicode NFKC normalization (closes the fullwidth-character evasion
-class) and newline-tolerant middle clauses on `override-ignore-previous`
-(closes a regex design gap that let a single embedded newline split a trigger
-phrase past `[^.\n]`). Everything still in the out-of-scope set is a case the
-"Limits" section below already, independently disclaims — treat that 3.6% as
-a floor on generalization, not a bug to chase with narrower and narrower
-per-sample rules (see step 3 below).
+Current (2026-10-04 normalization-closure follow-up): recall 1.00,
+precision 1.00, FP 0.00 on 124 **in-scope** samples (54 malicious, 70
+benign). The corpus now carries 23 samples explicitly tagged
+`"scope": "out_of_scope"` — paraphrase and multilingual variants of the
+same attacks (see Limits below) — which `score_injection.py` measures and
+prints separately but does not gate CI on. Measured, that out-of-scope
+set catches **0/23 (0.0 recall)**.
+
+Four gaps previously in the out-of-scope set were closed this round via
+generalizable text-normalization transforms in `prompt_injection_scanner.py`
+(not new rules): zero-width-character stripping (scattered single
+zero-width codepoints between letters, distinct from the
+`poison-zero-width` RULE's dense-block signature), artificial-spacing
+stripping (`I-g-n-o-r-e`-style single-character separation), base64
+segment decoding, and whole-string reversal. Each candidate transform is
+checked against the same, unchanged ruleset — see
+`docs/superpowers/specs/2026-10-04-injection-detection-normalization-closure-design.md`.
+
+A fifth, confusables-folding (cross-script homoglyphs like Cyrillic "о"
+for Latin "o"), was also added this round and works correctly in
+isolation, but the specific out-of-scope corpus row it targets
+(`obfuscation_homoglyph`) turned out to already be caught by an unrelated
+pre-existing rule (`override-act-as`, on an unobfuscated clause elsewhere
+in the same sample) — so its closure isn't attributable to this
+transform for that particular sample. The transform itself is kept
+(it is independently covered by the unit test suite, now run in CI per
+the fix above) since a differently-worded homoglyph attack without an
+incidental unobfuscated trigger phrase would still need it.
+
+Earlier closed gaps from the prior round remain in place: Unicode NFKC
+normalization (fullwidth-character evasion) and newline-tolerant middle
+clauses on `override-ignore-previous`. Everything still in the out-of-scope
+set (paraphrase, multilingual) is a case the "Limits" section below
+already, independently disclaims — closing those needs semantic/
+statistical matching, not further text-normalization transforms, and is
+scoped as a separate plan.
 
 ## Maintaining it
 
@@ -77,17 +97,14 @@ per-sample rules (see step 3 below).
   four categories were caught (see the corpus's `*_paraphrase` rows).
 - Detection is advisory on `post_call` (finding + redaction, response still
   delivered) and blocking on `discovery` (with the `block` grant).
-- Multi-lingual and heavily-obfuscated payloads are largely out of scope —
-  measured: 0/8 multilingual and 1/5 heavily-obfuscated malicious samples were caught
-  (the one catch, a homoglyph sample, fired on an unrelated unobfuscated
-  trigger phrase elsewhere in the same sentence, not on defeating the
-  homoglyph substitution itself). Two specific, narrow obfuscation classes
-  *are* handled — Unicode-compatibility tricks (fullwidth/halfwidth forms, via
-  NFKC normalization) and a single embedded newline splitting a trigger phrase
-  — because both are closable regex/encoding-normalization fixes rather than
-  open-ended language coverage. Cross-script homoglyphs, base64/rotated
-  encodings, reversed text, and zero-width interleaving remain out of scope; a
-  representative sample of each is kept in the corpus (tagged
-  `"scope": "out_of_scope"`) as a tracked, non-gating regression check rather
-  than silently dropped.
+- Multi-lingual payloads remain out of scope — measured: 0/8 multilingual
+  malicious samples caught. Heavily-obfuscated payloads are now
+  substantially covered: all five previously-uncaught obfuscation classes
+  (cross-script homoglyphs, single-character spacing, zero-width
+  interleaving, base64 encoding, whole-string reversal) are closed via
+  text-normalization transforms, alongside the two already-closed classes
+  from the prior round (Unicode-compatibility tricks via NFKC, a single
+  embedded newline splitting a trigger phrase). A representative sample of
+  each closed class stays in the corpus, now in-scope and CI-gated, as a
+  permanent regression check rather than a one-time fix.
 - It does not see agent↔model traffic, only tool descriptions and tool responses.

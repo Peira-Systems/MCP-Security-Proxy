@@ -87,6 +87,15 @@ jobs:
       - name: Injection ruleset score
         run: python3 priv/plugins/score_injection.py
 
+      # Unit tests for the normalization-transform functions
+      # (strip_zero_width, fold_confusables, strip_artificial_spacing,
+      # try_base64_segments) added by the 2026-10-04 normalization-closure
+      # plan. Catches a regression to any of these even in cases where the
+      # corpus-level budget gate above wouldn't notice (e.g. a row that
+      # happens to already be caught by an unrelated rule).
+      - name: Normalization transform unit tests
+        run: python3 priv/plugins/test_normalization_transforms.py
+
 
   dialyzer:
     name: dialyzer

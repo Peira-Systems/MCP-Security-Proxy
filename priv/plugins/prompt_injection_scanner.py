@@ -63,6 +63,129 @@ IMPORTANT_BLOCK = r"(?is)<\s*important\s*>.*?<\s*/\s*important\s*>"
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
+# Zero-width codepoints with no visible rendering, used to split a trigger
+# phrase's letters apart so a word-boundary-based regex never sees them
+# adjacent. NFKC does not strip these (they have no compatibility
+# decomposition). Distinct from the `poison-zero-width` RULE in
+# injection_rules.json, which flags a dense run of 3+ as its own signature
+# -- this strips scattered SINGLE occurrences so the underlying trigger
+# phrase becomes visible to the existing rules, a different obfuscation
+# shape than the rule's dense-block pattern.
+_ZERO_WIDTH_CODEPOINTS = "​‌‍‎‏﻿"
+_ZERO_WIDTH_RE = re.compile(f"[{_ZERO_WIDTH_CODEPOINTS}]")
+
+
+def strip_zero_width(text):
+    return _ZERO_WIDTH_RE.sub("", text or "")
+
+
+# Cross-script look-alike characters that NFKC does not fold (NFKC only
+# unifies compatibility-equivalent forms *within* a script, e.g. fullwidth
+# Latin to ordinary Latin -- it has no concept of "this Cyrillic letter
+# looks like that Latin letter"). Scoped to the look-alikes relevant to
+# defeating THIS ruleset's existing Latin-script trigger phrases, not a
+# general-purpose transliteration of Cyrillic/Greek text -- see the
+# confusables table maintained by the Unicode Consortium
+# (unicode.org/Public/security/latest/confusables.txt) for the much larger
+# full set this intentionally does not replicate.
+#
+# Folds confusables using a *local-context* gate: a confusable character is
+# folded only when it sits inside a contiguous run of word-characters
+# (letters/digits/confusables) that also contains at least one genuine ASCII
+# Latin letter. This catches homoglyph-disguised Latin phrases wherever they
+# appear (even embedded in otherwise non-Latin documents) while never
+# touching runs that are genuinely all non-Latin.
+_CONFUSABLES = {
+    "а": "a", "А": "A",  # Cyrillic a
+    "е": "e", "Е": "E",  # Cyrillic ye
+    "о": "o", "О": "O",  # Cyrillic o
+    "р": "p", "Р": "P",  # Cyrillic er
+    "с": "c", "С": "C",  # Cyrillic es
+    "х": "x", "Х": "X",  # Cyrillic ha
+    "у": "y", "У": "Y",  # Cyrillic u
+    "і": "i", "І": "I",  # Cyrillic/Ukrainian i
+    "ѕ": "s", "Ѕ": "S",  # Cyrillic dze
+    "ј": "j", "Ј": "J",  # Cyrillic je
+    "ԛ": "q",            # Cyrillic qa
+    "ԝ": "w",            # Cyrillic we
+    "α": "a", "Α": "A",  # Greek alpha
+    "β": "b", "Β": "B",  # Greek beta
+    "ο": "o", "Ο": "O",  # Greek omicron
+    "ρ": "p", "Ρ": "P",  # Greek rho
+    "τ": "t", "Τ": "T",  # Greek tau
+    "υ": "u", "Υ": "Y",  # Greek upsilon
+}
+
+
+def fold_confusables(text):
+    if not text:
+        return text or ""
+
+    def is_wordish(c):
+        return c.isalnum() or c in _CONFUSABLES
+
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if is_wordish(text[i]):
+            j = i
+            while j < n and is_wordish(text[j]):
+                j += 1
+            run = text[i:j]
+            has_ascii_latin = any(c.isascii() and c.isalpha() for c in run)
+            if has_ascii_latin:
+                run = "".join(_CONFUSABLES.get(c, c) for c in run)
+            out.append(run)
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+# A single-character-separated spelled-out word (I-g-n-o-r-e) defeats any
+# regex relying on word boundaries, since every "word" is one character.
+# Only collapse a run this long -- 6+ single-char tokens sharing the same
+# separator -- so this never touches ordinary short hyphenation ("a-b
+# test") or an initialism ("U.S.").
+_SPACING_RUN_RE = re.compile(r"\b(?:\w[-.]){3,}\w\b")
+
+
+def strip_artificial_spacing(text):
+    if not text:
+        return text or ""
+
+    def collapse(match):
+        run = match.group(0)
+        return re.sub(r"[-.\s]", "", run)
+
+    return _SPACING_RUN_RE.sub(collapse, text)
+
+
+# Minimum length before attempting a base64 decode -- below this, too many
+# short, coincidental substrings would match the base64 alphabet and cost
+# decode attempts for no real signal.
+_BASE64_MIN_LEN = 16
+_BASE64_SEGMENT_RE = re.compile(r"[A-Za-z0-9+/]{%d,}={0,2}" % _BASE64_MIN_LEN)
+
+
+def try_base64_segments(text):
+    import base64
+    import binascii
+
+    decoded = []
+    for match in _BASE64_SEGMENT_RE.finditer(text or ""):
+        segment = match.group(0)
+        try:
+            raw = base64.b64decode(segment, validate=False)
+            as_text = raw.decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            continue
+        decoded.append(as_text)
+    return decoded
+
+
 def load_rules(path=RULES_PATH):
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -81,16 +204,9 @@ def load_rules(path=RULES_PATH):
 RULES, RULESET_VERSION = load_rules()
 
 
-def scan_text(text):
-    """Returns a list of {id, category, severity, confidence, evidence} hits."""
-    # NFKC-normalize before matching: folds Unicode *compatibility* variants
-    # (fullwidth/halfwidth forms, certain ligatures) down to their ordinary
-    # ASCII/Latin equivalents, so e.g. fullwidth "ｉｇｎｏｒｅ" matches the
-    # same rule as "ignore" without every pattern needing a fullwidth
-    # alternative. It does NOT fold cross-script homoglyphs (Cyrillic "о" has
-    # no compatibility decomposition to Latin "o") or reverse other encodings
-    # (base64, reversed text) -- those remain a documented ruleset limit.
-    text = unicodedata.normalize("NFKC", text or "")
+def _match_rules(text):
+    """The per-candidate matching loop, unchanged in substance from the
+    original scan_text body -- extracted so multiple candidates can share it."""
     hits = []
     for rule in RULES:
         m = rule["re"].search(text)
@@ -104,6 +220,47 @@ def scan_text(text):
             "evidence": _snippet(text, m.start(), m.end()),
         })
     return hits
+
+
+def _tag_transform(hits, transform_name):
+    if transform_name == "direct":
+        return hits
+    for hit in hits:
+        hit["evidence"] = f"[via {transform_name}] {hit['evidence']}"
+    return hits
+
+
+def scan_text(text):
+    """Returns a list of {id, category, severity, confidence, evidence} hits.
+
+    Checks the input directly first (NFKC-normalized, as before), then --
+    only if that finds nothing -- a small set of reversible transforms
+    (confusables folding, zero-width stripping, artificial-spacing
+    stripping, whole-string reversal, and any base64-decoded substrings)
+    against the same, unchanged ruleset. See
+    docs/superpowers/specs/2026-10-04-injection-detection-normalization-closure-design.md.
+
+    NFKC still runs first on every candidate's base text: it folds Unicode
+    *compatibility* variants (fullwidth/halfwidth forms, certain ligatures)
+    that none of the newer transforms touch, so e.g. a fullwidth-encoded
+    trigger phrase that is ALSO reversed still gets NFKC-folded before the
+    reversal check runs.
+    """
+    text = unicodedata.normalize("NFKC", text or "")
+
+    candidates = [("direct", text)]
+    candidates.append(("confusables_folded", fold_confusables(text)))
+    candidates.append(("zero_width_stripped", strip_zero_width(text)))
+    candidates.append(("spacing_stripped", strip_artificial_spacing(text)))
+    candidates.append(("reversed", text[::-1]))
+    for decoded in try_base64_segments(text):
+        candidates.append(("base64_decoded", decoded))
+
+    for transform_name, candidate in candidates:
+        hits = _match_rules(candidate)
+        if hits:
+            return _tag_transform(hits, transform_name)
+    return []
 
 
 def is_injection(text):
