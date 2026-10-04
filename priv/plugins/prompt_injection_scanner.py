@@ -149,7 +149,7 @@ def fold_confusables(text):
 # Only collapse a run this long -- 6+ single-char tokens sharing the same
 # separator -- so this never touches ordinary short hyphenation ("a-b
 # test") or an initialism ("U.S.").
-_SPACING_RUN_RE = re.compile(r"(?:\b\w(?:-|\.|\s))(?:\w(?:-|\.|\s)){5,}\w\b")
+_SPACING_RUN_RE = re.compile(r"\b(?:\w[-.]){5,}\w\b")
 
 
 def strip_artificial_spacing(text):
@@ -204,16 +204,9 @@ def load_rules(path=RULES_PATH):
 RULES, RULESET_VERSION = load_rules()
 
 
-def scan_text(text):
-    """Returns a list of {id, category, severity, confidence, evidence} hits."""
-    # NFKC-normalize before matching: folds Unicode *compatibility* variants
-    # (fullwidth/halfwidth forms, certain ligatures) down to their ordinary
-    # ASCII/Latin equivalents, so e.g. fullwidth "ｉｇｎｏｒｅ" matches the
-    # same rule as "ignore" without every pattern needing a fullwidth
-    # alternative. It does NOT fold cross-script homoglyphs (Cyrillic "о" has
-    # no compatibility decomposition to Latin "o") or reverse other encodings
-    # (base64, reversed text) -- those remain a documented ruleset limit.
-    text = unicodedata.normalize("NFKC", text or "")
+def _match_rules(text):
+    """The per-candidate matching loop, unchanged in substance from the
+    original scan_text body -- extracted so multiple candidates can share it."""
     hits = []
     for rule in RULES:
         m = rule["re"].search(text)
@@ -227,6 +220,47 @@ def scan_text(text):
             "evidence": _snippet(text, m.start(), m.end()),
         })
     return hits
+
+
+def _tag_transform(hits, transform_name):
+    if transform_name == "direct":
+        return hits
+    for hit in hits:
+        hit["evidence"] = f"[via {transform_name}] {hit['evidence']}"
+    return hits
+
+
+def scan_text(text):
+    """Returns a list of {id, category, severity, confidence, evidence} hits.
+
+    Checks the input directly first (NFKC-normalized, as before), then --
+    only if that finds nothing -- a small set of reversible transforms
+    (confusables folding, zero-width stripping, artificial-spacing
+    stripping, whole-string reversal, and any base64-decoded substrings)
+    against the same, unchanged ruleset. See
+    docs/superpowers/specs/2026-10-04-injection-detection-normalization-closure-design.md.
+
+    NFKC still runs first on every candidate's base text: it folds Unicode
+    *compatibility* variants (fullwidth/halfwidth forms, certain ligatures)
+    that none of the newer transforms touch, so e.g. a fullwidth-encoded
+    trigger phrase that is ALSO reversed still gets NFKC-folded before the
+    reversal check runs.
+    """
+    text = unicodedata.normalize("NFKC", text or "")
+
+    candidates = [("direct", text)]
+    candidates.append(("confusables_folded", fold_confusables(text)))
+    candidates.append(("zero_width_stripped", strip_zero_width(text)))
+    candidates.append(("spacing_stripped", strip_artificial_spacing(text)))
+    candidates.append(("reversed", text[::-1]))
+    for decoded in try_base64_segments(text):
+        candidates.append(("base64_decoded", decoded))
+
+    for transform_name, candidate in candidates:
+        hits = _match_rules(candidate)
+        if hits:
+            return _tag_transform(hits, transform_name)
+    return []
 
 
 def is_injection(text):
