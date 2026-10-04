@@ -27,7 +27,6 @@ import re
 import sys
 import json
 import os
-import unicodedata
 
 # The ruleset path may be passed as argv[1] (so it is covered by the sidecar's
 # provenance pin, M3.5); otherwise it sits next to this file.
@@ -88,6 +87,13 @@ def strip_zero_width(text):
 # confusables table maintained by the Unicode Consortium
 # (unicode.org/Public/security/latest/confusables.txt) for the much larger
 # full set this intentionally does not replicate.
+#
+# Folds confusables using a *local-context* gate: a confusable character is
+# folded only when it sits inside a contiguous run of word-characters
+# (letters/digits/confusables) that also contains at least one genuine ASCII
+# Latin letter. This catches homoglyph-disguised Latin phrases wherever they
+# appear (even embedded in otherwise non-Latin documents) while never
+# touching runs that are genuinely all non-Latin.
 _CONFUSABLES = {
     "а": "a", "А": "A",  # Cyrillic a
     "е": "e", "Е": "E",  # Cyrillic ye
@@ -108,36 +114,33 @@ _CONFUSABLES = {
     "τ": "t", "Τ": "T",  # Greek tau
     "υ": "u", "Υ": "Y",  # Greek upsilon
 }
-_CONFUSABLES_RE = re.compile("[" + "".join(_CONFUSABLES.keys()) + "]")
 
 
 def fold_confusables(text):
     if not text:
         return text or ""
-    # Only fold confusables in predominantly Latin text (where they're used to
-    # disguise Latin trigger phrases). If the text is predominantly non-Latin
-    # (e.g., real Cyrillic or Greek text), leave it unchanged to avoid
-    # transliterating genuine non-Latin content.
-    latin_count = 0
-    non_latin_count = 0
-    for char in text:
-        if char.isalpha():
-            name = unicodedata.name(char, "")
-            if "LATIN" in name:
-                latin_count += 1
-            elif "CYRILLIC" in name or "GREEK" in name:
-                non_latin_count += 1
 
-    total = latin_count + non_latin_count
-    if total == 0:
-        # No alphabetic characters, return as-is
-        return text
+    def is_wordish(c):
+        return c.isalnum() or c in _CONFUSABLES
 
-    # Only fold if Latin characters are the majority
-    if latin_count < non_latin_count:
-        return text
-
-    return _CONFUSABLES_RE.sub(lambda m: _CONFUSABLES[m.group(0)], text)
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if is_wordish(text[i]):
+            j = i
+            while j < n and is_wordish(text[j]):
+                j += 1
+            run = text[i:j]
+            has_ascii_latin = any(c.isascii() and c.isalpha() for c in run)
+            if has_ascii_latin:
+                run = "".join(_CONFUSABLES.get(c, c) for c in run)
+            out.append(run)
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
 
 
 def load_rules(path=RULES_PATH):
