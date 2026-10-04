@@ -70,6 +70,46 @@ case System.get_env("MCP_RULE_COVERAGE_EXTRA_RULE") do
     :ok
 end
 
+# Operator SSO (OIDC/OAuth2) is entirely opt-in. Unset OIDC_ISSUER_URL ⇒
+# oidc_sso_enabled? stays false (config/config.exs default) and no
+# ueberauth/ueberauth_oidcc provider config is registered -- an existing
+# deployment upgrading sees no behavior change until it sets this.
+oidc_issuer_url = System.get_env("OIDC_ISSUER_URL")
+
+config :phoenix_elxir_beam, :oidc_sso_enabled?, is_binary(oidc_issuer_url)
+
+if is_binary(oidc_issuer_url) do
+  oidc_client_id =
+    System.get_env("OIDC_CLIENT_ID") ||
+      raise "OIDC_CLIENT_ID is required when OIDC_ISSUER_URL is set"
+
+  oidc_client_secret =
+    System.get_env("OIDC_CLIENT_SECRET") ||
+      raise "OIDC_CLIENT_SECRET is required when OIDC_ISSUER_URL is set"
+
+  config :ueberauth_oidcc,
+    issuers: [
+      %{
+        name: :operator_sso,
+        issuer: oidc_issuer_url
+      }
+    ]
+
+  config :ueberauth, Ueberauth,
+    providers: [
+      operator_sso:
+        {Ueberauth.Strategy.Oidcc,
+         [
+           issuer: :operator_sso,
+           client_id: oidc_client_id,
+           client_secret: oidc_client_secret,
+           scopes: ~w(openid email profile)
+         ]}
+    ]
+else
+  config :phoenix_elxir_beam, :oidc_sso_enabled?, false
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
@@ -248,17 +288,56 @@ if config_env() == :prod do
   # TLS termination in the app container. The Docker Compose reference setup
   # puts a reverse proxy (Caddy/nginx) in front for TLS instead; set these
   # only when Bandit should terminate TLS directly.
+  #
+  # Optional mutual TLS between an agent and this proxy (Phase 1 identity
+  # work): MTLS_CA_CERT_PATH/MTLS_REQUIRED are no-ops unless SSL_CERT_PATH/
+  # SSL_KEY_PATH are also set -- see PhoenixElxirBeam.MtlsConfig.build/3.
+  mtls_ca_cert_path = System.get_env("MTLS_CA_CERT_PATH")
+
+  mtls_required =
+    case System.get_env("MTLS_REQUIRED") do
+      nil ->
+        nil
+
+      value when value in ~w(true 1 yes) ->
+        true
+
+      value when value in ~w(false 0 no) ->
+        false
+
+      value ->
+        raise "MTLS_REQUIRED has an unrecognized value: #{inspect(value)} -- " <>
+                "use one of: true, 1, yes, false, 0, no (unset to default to false)."
+    end
+
   case {System.get_env("SSL_CERT_PATH"), System.get_env("SSL_KEY_PATH")} do
     {cert, key} when is_binary(cert) and is_binary(key) ->
-      config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint,
-        https: [
+      mtls_options = PhoenixElxirBeam.MtlsConfig.build(true, mtls_ca_cert_path, mtls_required)
+
+      # `https:` has no `thousand_island_options` of its own today (that
+      # key, when present, lives only under the separate `http:` listener
+      # at line ~275) -- so when mTLS is configured, `thousand_island_options`
+      # is added fresh here rather than merged. `MtlsConfig.build/3` returns
+      # `[transport_options: [...]]` (or `[]`); either must land NESTED under
+      # `thousand_island_options:`, never spliced as a top-level `https:` key.
+      https_options =
+        [
           port: String.to_integer(System.get_env("SSL_PORT", "443")),
           cipher_suite: :strong,
           certfile: cert,
           keyfile: key
-        ]
+        ] ++
+          case mtls_options do
+            [] -> []
+            opts -> [thousand_island_options: opts]
+          end
+
+      config :phoenix_elxir_beam, PhoenixElxirBeamWeb.Endpoint, https: https_options
 
     _ ->
+      # Still validate: a misconfigured MTLS_CA_CERT_PATH with no base TLS
+      # must fail loudly at boot, not silently do nothing.
+      PhoenixElxirBeam.MtlsConfig.build(false, mtls_ca_cert_path, mtls_required)
       :ok
   end
 

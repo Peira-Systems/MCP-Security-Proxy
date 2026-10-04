@@ -29,11 +29,16 @@ defmodule PhoenixElxirBeamWeb.Router do
     plug :redirect_if_user_is_authenticated
   end
 
+  pipeline :require_sso_enabled do
+    plug PhoenixElxirBeamWeb.Plugs.RequireSsoEnabled
+  end
+
   # The proxy endpoint: size-limited, authenticated, rate-limited (M1.4–M1.5).
   pipeline :mcp_api do
     plug :accepts, ["json"]
     plug PhoenixElxirBeamWeb.Plugs.RequestLimits
     plug PhoenixElxirBeamWeb.Plugs.ApiKeyAuth
+    plug PhoenixElxirBeamWeb.Plugs.AgentCredentialAuth
     plug PhoenixElxirBeamWeb.Plugs.RateLimit
   end
 
@@ -51,6 +56,22 @@ defmodule PhoenixElxirBeamWeb.Router do
 
     delete "/logout", SessionController, :delete
     get "/logout", SessionController, :delete
+  end
+
+  # Operator SSO (OIDC/OAuth2) login, entirely opt-in (Phase 1 identity
+  # work). The routes are registered UNCONDITIONALLY: whether SSO is
+  # enabled is a deployment choice made via OIDC_ISSUER_URL etc. at BOOT
+  # (config/runtime.exs), which cannot be known at compile time — unlike
+  # `dev_routes` below, which really is a compile-time-only decision (the
+  # Mix env). `require_sso_enabled` enforces the actual enable/disable
+  # decision per-request, reading config fresh every request, so toggling
+  # the env vars only needs a restart, never a rebuild.
+  scope "/auth", PhoenixElxirBeamWeb do
+    pipe_through [:browser, :redirect_if_authenticated, :require_sso_enabled]
+
+    get "/:provider", SsoSessionController, :request
+    get "/:provider/callback", SsoSessionController, :callback
+    post "/:provider/callback", SsoSessionController, :callback
   end
 
   ## Operator console — requires an authenticated account

@@ -326,6 +326,8 @@ Details: [ci-cd.md](ci-cd.md), [runbook.md](runbook.md#deploy-a-new-version).
 | `MCP_HOST_LOOPBACK_ALIAS` | `host.docker.internal` (compose) | Lets a registered `localhost` upstream URL be dialed from inside the container. |
 | `DNS_CLUSTER_QUERY` | — | Leave blank for single-node. |
 | `GRAFANA_USER` / `GRAFANA_PASSWORD` | — | Grafana admin creds (observability overlay). |
+| `OIDC_ISSUER_URL` | — | OpenID Connect issuer URL. Unset ⇒ SSO disabled (default). **Required to enable SSO.** See [§6.2](#62-operator-sso-oidcoauth2). |
+| `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | OAuth2 client credentials registered with the IdP. Required when `OIDC_ISSUER_URL` is set; boot raises otherwise. |
 
 ### 5.3 Compile-time config (`config/*.exs` — needs a rebuild to change)
 
@@ -369,7 +371,63 @@ keyword-shaped lists by key, so there is no base list to override.
    `admin` (+ key management, `/dev` routes).
 3. Confirm `/health/ready` is `200` and Prometheus can scrape `/metrics`.
 
-### 6.2 Register an MCP server
+### 6.2 Operator SSO (OIDC/OAuth2)
+
+**Optional.** If you operate your own identity provider or have federated access
+via an enterprise auth system, SSO is available for operator login and pre-provisioned accounts.
+
+#### Setup
+
+Three environment variables govern SSO, read at **boot** (`config/runtime.exs`) —
+toggling them only needs a restart, never a rebuild:
+
+- `OIDC_ISSUER_URL` — the OpenID Connect issuer (e.g.
+  `https://auth.example.com`). **Required to enable SSO.**
+- `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` — OAuth2 client credentials registered
+  with the provider.
+
+Set them in `.env` (or secret files, like other deployment secrets), then restart
+the app (no rebuild required — these are read at boot, not compiled in):
+
+```bash
+docker compose up -d
+```
+
+Register this redirect URI with your IdP:
+
+```
+https://<host>/auth/operator_sso/callback
+```
+
+When SSO is enabled, the login page shows a **"Sign in with SSO"** link; when
+disabled, the page is unchanged (password login only) and any `/auth/*`
+request is redirected to `/login`.
+
+#### Pre-provisioning accounts
+
+SSO does not auto-provision operators. An account must exist in Postgres *before*
+an operator can sign in via SSO — it is always a pre-provisioning step:
+
+```bash
+# Release console
+docker compose exec app /app/bin/phoenix_elxir_beam remote
+```
+
+```elixir
+alias PhoenixElxirBeam.Accounts
+# Each operator must be created first
+{:ok, _user} = Accounts.create_sso_user(%{email: "alice@example.com", role: :operator})
+```
+
+Only accounts with `auth_source: :sso` can log in via SSO — password login is
+disabled for them. Accounts with `auth_source: :local` (or created before SSO was
+added) can only log in with a password, never SSO, even if their email matches an
+IdP account.
+
+Password-based login always remains available for local accounts, independent of
+SSO's enabled status.
+
+### 6.3 Register an MCP server
 
 **Dashboard → Servers & tools → Register.** Give a name and the upstream's
 **Streamable HTTP base URL** (e.g. `http://host.docker.internal:9000/mcp`).
@@ -390,7 +448,7 @@ PhoenixElxirBeam.MCP.ServerRegistry.register_stdio_server(
 )
 ```
 
-### 6.3 Classify tools
+### 6.4 Classify tools
 
 With default-deny on (prod ships `UnclassifiedGuard` in `hold` mode), **a call to
 an unclassified tool is parked** until an operator classifies it.
@@ -416,7 +474,7 @@ a tag on then off, or switch `UnclassifiedGuard` to `off` once curation is done.
 **Every tag change is written to the audit chain** (actor, before → after) and is
 one-click revertible from the **Policy changes** panel.
 
-### 6.4 Issue an agent key
+### 6.5 Issue an agent key
 
 **Dashboard → Client keys (admin) → Issue.** Provide:
 
@@ -434,7 +492,47 @@ Authorization: Bearer mcpk_<key-id>.<secret>
 **Revoke** takes effect on the agent's next request — mid-session too (the session
 is also bound to its `key_id`, so another key cannot drive it).
 
-### 6.5 Point an MCP client at the proxy
+#### Verified per-agent identity (optional)
+
+An API key's `agent_id` is a *default* — every agent sharing that key is
+otherwise stamped with the same identity for policy matching. To let distinct
+agents behind one shared key assert their own identity, issue each one an
+`AgentCredential` and have it present an `X-Agent-Credential` header:
+
+```elixir
+# from a release console (no dashboard UI yet — same bootstrap caveat as
+# issuing the first admin account: this runs with full application access)
+{:ok, _cred, token} =
+  PhoenixElxirBeam.MCP.AgentCredential.issue(%{agent_id: "agent://specific-bot"})
+# token is "agent://specific-bot.<secret>" — shown once, like an API key's token
+```
+
+The agent then sends both headers on every request:
+
+```
+Authorization: Bearer mcpk_<id>.<secret>
+X-Agent-Credential: agent://specific-bot.<secret>
+```
+
+When `X-Agent-Credential` is present and valid, its `agent_id` overrides the
+API key's own default for that session — so a RuleEngine rule scoped to
+`agent://specific-bot` matches the verified identity, not whatever the shared
+key happened to default to. A missing header falls back to the key's default
+exactly as before; a present but invalid header is rejected with 401 (it
+never silently falls back — that would let an attacker probe for valid
+`agent_id` strings for free). Revoke with
+`PhoenixElxirBeam.MCP.AgentCredential.revoke(agent_id)`.
+
+Presenting the header is opt-in, not enforced: an agent sharing a key with
+others can simply omit `X-Agent-Credential` and fall back to that key's own
+default `agent_id`, escaping any deny rule scoped to its verified identity. A
+rule written against `agent://specific-bot` only binds a client that actually
+presents that credential. If you issue one API key to multiple agents, set
+that key's own default `agent_id` to the **most restrictive** identity
+appropriate for the whole group — per-agent rules only protect the agents
+that opt in.
+
+### 6.6 Point an MCP client at the proxy
 
 The proxy speaks **JSON-RPC 2.0 over the MCP Streamable HTTP transport** at
 `POST /mcp/proxy/:server_id`. A conforming MCP client needs only:
@@ -501,7 +599,7 @@ If the client's `Accept` header includes `text/event-stream` and the upstream
 emits `notifications/progress`, the proxy relays those frames live over a chunked
 SSE response and delivers the fully-scanned result as the terminal frame.
 
-### 6.6 The dashboard
+### 6.7 The dashboard
 
 `/mcp/dashboard` (also `/`). Header shows server / session / plugin counts, the
 audit-chain status pill, and the signed-in identity.
@@ -516,7 +614,7 @@ audit-chain status pill, and the signed-in identity.
 | **Client keys** | issued keys; **Issue** / **Revoke** | admin |
 | **Servers & tools** | register / remove servers; expand to classify tools, re-handshake, clear a quarantine | operator classifies; admin registers |
 
-### 6.7 Change policy at runtime
+### 6.8 Change policy at runtime
 
 **Dashboard → Plugins (operator).** Enable / disable / reorder plugins without a
 redeploy; state persists across restarts (`plugin_states` overlays the config
@@ -526,7 +624,7 @@ revert button.
 Still needs a config change + redeploy: `RuleEngine` rule edits, and the
 `UnclassifiedGuard` `mode`.
 
-### 6.8 Dry-run mode
+### 6.9 Dry-run mode
 
 **Dashboard → Plugins (operator).** Turns the proxy's enforcement into
 observe-only: a plugin's `deny`/`hold` is logged instead of acted on, and the

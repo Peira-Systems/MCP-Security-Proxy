@@ -102,6 +102,8 @@ defmodule PhoenixElxirBeam.MixProject do
       # docs/wasm-plugin-plan.md). Added ahead of W2's WasmRunner per the W0 spike; no
       # code depends on it yet.
       {:wasmex, "~> 0.15"},
+      {:ueberauth, "~> 0.10"},
+      {:ueberauth_oidcc, "~> 0.3"},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
@@ -130,7 +132,13 @@ defmodule PhoenixElxirBeam.MixProject do
       # server registrations — see .github/workflows/rule-coverage.yml and
       # docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md)
       # deliberately isn't in this list.
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "test",
+        "cmd MIX_ENV=prod mix compile --warnings-as-errors"
+      ],
       # The full gate CI runs on every PR. `deps.audit` + `dialyzer` on top of
       # precommit; `format --check-formatted` instead of rewriting in place.
       ci: [

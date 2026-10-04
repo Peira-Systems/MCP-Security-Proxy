@@ -42,19 +42,32 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
 
   @impl true
   def evaluate(:pre_call, %CallContext{call: call}) do
+    resolver =
+      Application.get_env(:phoenix_elxir_beam, :metadata_egress_resolver, &default_resolver/1)
+
     call
     |> Map.get(:arguments, %{})
     |> extract_hosts()
-    |> Enum.find_value(&forbidden_target/1)
+    |> Enum.find_value(&forbidden_target(&1, resolver))
     |> case do
       nil -> Decision.allow()
-      {host, ip_string} -> deny(host, ip_string)
+      {host, ip_string, severity} -> deny(host, ip_string, severity)
     end
   end
 
-  defp deny(host, ip_string) do
+  @short_ttl_threshold_s 60
+
+  defp deny(host, ip_string, :critical) do
     Decision.deny(
-      :high,
+      :critical,
+      "network egress blocked: target #{host} resolves to #{ip_string}, a disallowed address " <>
+        "(short TTL on this record suggests active DNS rebinding)"
+    )
+  end
+
+  defp deny(host, ip_string, severity) do
+    Decision.deny(
+      severity,
       "network egress blocked: target #{host} resolves to #{ip_string}, a disallowed address"
     )
   end
@@ -74,27 +87,56 @@ defmodule PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard do
 
   defp extract_hosts(_), do: []
 
-  defp forbidden_target(host) do
-    with {:ok, ip_tuple} <- resolve(host),
-         true <- forbidden_ip?(ip_tuple) do
-      {host, :inet.ntoa(ip_tuple) |> to_string()}
+  defp forbidden_target(host, resolver) do
+    with {:ok, answers} <- resolve_all(host, resolver),
+         {ip_tuple, ttl} <- Enum.find(answers, fn {ip, _ttl} -> forbidden_ip?(ip) end) do
+      severity = if is_integer(ttl) and ttl < @short_ttl_threshold_s, do: :critical, else: :high
+      {host, :inet.ntoa(ip_tuple) |> to_string(), severity}
     else
       _ -> nil
     end
   end
 
-  defp resolve(host) do
+  @doc false
+  @spec resolve_all(
+          String.t(),
+          (charlist() -> {:ok, [{tuple(), non_neg_integer() | nil}]} | :error)
+        ) ::
+          {:ok, [{tuple(), non_neg_integer() | nil}]} | :error
+  def resolve_all(host, resolver \\ &default_resolver/1) do
     charlist = String.to_charlist(host)
 
     case :inet.parse_address(charlist) do
-      {:ok, ip_tuple} ->
-        {:ok, ip_tuple}
+      {:ok, ip_tuple} -> {:ok, [{ip_tuple, nil}]}
+      {:error, :einval} -> resolver.(charlist)
+    end
+  end
 
-      {:error, :einval} ->
-        case :inet.gethostbyname(charlist) do
-          {:ok, {:hostent, _, _, _, _, [ip_tuple | _]}} -> {:ok, ip_tuple}
-          _ -> :error
-        end
+  @doc false
+  @spec default_resolver(charlist()) :: {:ok, [{tuple(), non_neg_integer() | nil}]} | :error
+  def default_resolver(charlist) do
+    native_answers =
+      case :inet.getaddrs(charlist, :inet) do
+        {:ok, ip_tuples} -> Enum.map(ip_tuples, fn ip -> {ip, nil} end)
+        {:error, _} -> []
+      end
+
+    dns_answers =
+      case :inet_res.resolve(charlist, :in, :a) do
+        {:ok, dns_rec} ->
+          dns_rec
+          |> :inet_dns.msg(:anlist)
+          |> Enum.map(fn rr ->
+            {:inet_dns.rr(rr, :data), :inet_dns.rr(rr, :ttl)}
+          end)
+
+        {:error, _} ->
+          []
+      end
+
+    case native_answers ++ dns_answers do
+      [] -> :error
+      answers -> {:ok, answers}
     end
   end
 

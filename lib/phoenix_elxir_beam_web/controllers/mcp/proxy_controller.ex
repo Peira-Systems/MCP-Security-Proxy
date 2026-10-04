@@ -139,16 +139,17 @@ defmodule PhoenixElxirBeamWeb.MCP.ProxyController do
       true ->
         server = ServerRegistry.get_server(server_id)
         protocol = negotiate_protocol(rpc_params["protocolVersion"])
+        agent_id = conn.assigns[:verified_agent_id] || key.agent_id
 
         {:ok, session} =
           SessionStore.open(server_id,
             client_info: rpc_params["clientInfo"],
             protocol_version: protocol,
-            agent_id: key.agent_id,
+            agent_id: agent_id,
             key_id: key.key_id
           )
 
-        :ok = PolicyEngine.ensure_session(session.id, key.agent_id)
+        :ok = PolicyEngine.ensure_session(session.id, agent_id)
 
         result = %{
           "protocolVersion" => protocol,

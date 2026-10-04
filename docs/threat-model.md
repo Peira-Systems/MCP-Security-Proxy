@@ -61,9 +61,23 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 ## Other threats in scope
 
 - **Unauthenticated access.** Every proxy request needs a signed API key
-  (`Authorization: Bearer mcpk_…`); agent identity is a property of the key, not
-  a client-asserted header (M1.4). The dashboard / `/dev` need an operator
-  account (`viewer` < `operator` < `admin`, M3.4a).
+  (`Authorization: Bearer mcpk_…`); agent identity defaults to a property of
+  the key, not a client-asserted header (M1.4). An agent can now
+  independently verify its own `agent_id` per-session via a separate
+  `AgentCredential` and the `X-Agent-Credential` header
+  (`AgentCredentialAuth`), which overrides the key's default for that
+  session's policy matching — narrowing, not fully closing, the "API key =
+  fixed identity" limitation: a key with no agent credential presented still
+  uses its static default, and the credential itself is still just a bearer
+  secret, not a stronger proof of the agent's identity. Presenting the header
+  is opt-in: an agent sharing a key with others can simply not send
+  `X-Agent-Credential` and fall back to the key's own default `agent_id`,
+  silently escaping a deny rule scoped to its verified identity — an
+  agent-scoped rule only binds a client that actually presents its
+  credential. An operator issuing one shared key to multiple agents should
+  set that key's default `agent_id` to the most restrictive identity
+  appropriate for the group. The dashboard / `/dev` need an operator account
+  (`viewer` < `operator` < `admin`, M3.4a).
 - **A malicious or swapped MCP server.** Tools are hashed at registration;
   discovery scanners (`RugPull`) re-check on every re-handshake and quarantine a
   tool whose description/schema drifted, and raise a `:rug_pull` alert
@@ -120,11 +134,20 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
 - **Splitting a secret across multiple calls / arguments.** Taint markers catch
   encodings of a whole secret, not a secret chunked into pieces reassembled
   downstream.
-- **DNS rebinding between check and request.** `MetadataEgressGuard` resolves
-  a hostname at `pre_call` time; a resolver that returns a public address on
-  that lookup and a private one moments later (TTL-based rebinding) is not
-  caught. Closing this needs the resolved address pinned through to the
-  actual upstream request, which the proxy does not currently do.
+- **DNS rebinding for a fetch the upstream server itself makes.**
+  `MetadataEgressGuard` resolves every `http(s)://` host in a call's
+  arguments at `pre_call` and now checks every returned address, escalating
+  to `:critical` when a forbidden hit carries a TTL under 60 seconds (a
+  rebinding-tooling signature, and a real, legal TTL value, not just a
+  sentinel for "no TTL info"). What it cannot close: the actual fetch for
+  an agent-controlled URL happens inside the *upstream MCP server's own tool
+  implementation*, not inside this proxy; there is no second, proxy-owned
+  outbound request to pin a resolved address to. A rebinding attack that
+  serves its forbidden answer only on the upstream server's own, later
+  lookup is invisible to this proxy by construction, not by an
+  implementation gap. Closing that fully requires the upstream server to
+  resolve once and connect by the resolved address itself, outside this
+  repo's control, though worth requesting of upstream vendors.
 - **A compromised operator account with `admin`.** An admin can disable every
   plugin and issue keys. The mitigation is the audit chain (the actions are
   recorded and checkpointed off-DB), not prevention.

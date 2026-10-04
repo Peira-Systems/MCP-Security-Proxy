@@ -62,6 +62,28 @@ defmodule PhoenixElxirBeam.AccountsTest do
     end
   end
 
+  describe "create_sso_user/1" do
+    test "creates an auth_source: :sso user with no password" do
+      assert {:ok, user} = Accounts.create_sso_user(%{email: "sso@example.com", role: :operator})
+      assert user.auth_source == :sso
+      assert is_nil(user.hashed_password)
+    end
+  end
+
+  describe "get_user_by_email_and_password/2 with an sso account" do
+    test "refuses login even with a password set out-of-band" do
+      {:ok, user} = Accounts.create_sso_user(%{email: "sso2@example.com", role: :viewer})
+      # Simulate a stray hash existing (e.g. from a hypothetical future bug or manual DB edit) --
+      # the function must still refuse based on auth_source, not just absence of a hash.
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(hashed_password: Pbkdf2.hash_pwd_salt("somepassword123"))
+        |> PhoenixElxirBeam.Repo.update()
+
+      refute Accounts.get_user_by_email_and_password("sso2@example.com", "somepassword123")
+    end
+  end
+
   describe "role_at_least?/2" do
     test "orders viewer < operator < admin" do
       assert Accounts.role_at_least?(%User{role: :admin}, :operator)

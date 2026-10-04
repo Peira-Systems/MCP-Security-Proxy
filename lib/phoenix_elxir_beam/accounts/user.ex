@@ -15,10 +15,12 @@ defmodule PhoenixElxirBeam.Accounts.User do
   import Ecto.Changeset
 
   @roles ~w(viewer operator admin)a
+  @auth_sources ~w(local sso)a
 
   schema "users" do
     field :email, :string
     field :role, Ecto.Enum, values: @roles, default: :viewer
+    field :auth_source, Ecto.Enum, values: @auth_sources, default: :local
     field :hashed_password, :string, redact: true
     field :password, :string, virtual: true, redact: true
     field :disabled_at, :utc_datetime_usec
@@ -40,6 +42,21 @@ defmodule PhoenixElxirBeam.Accounts.User do
     |> validate_required([:role])
     |> validate_inclusion(:role, @roles)
     |> validate_password()
+  end
+
+  @doc """
+  Changeset for admin-provisioning an SSO-authenticated account. No password
+  is set or settable via this changeset -- `auth_source: :sso` accounts
+  never have a `hashed_password`, so local password login can never
+  authenticate them (see `Accounts.get_user_by_email_and_password/2`).
+  """
+  def sso_registration_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:email, :role])
+    |> put_change(:auth_source, :sso)
+    |> validate_email()
+    |> validate_required([:role])
+    |> validate_inclusion(:role, @roles)
   end
 
   @doc "Changeset for an admin changing another user's role."
