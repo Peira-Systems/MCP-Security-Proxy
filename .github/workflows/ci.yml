@@ -99,11 +99,20 @@ jobs:
         run: pip3 install --break-system-packages --no-cache-dir -r priv/plugins/requirements.txt
 
       - name: Fetch and verify similarity model files
+        # --retry/--retry-all-errors: the model.onnx download is ~470MB and
+        # has hit a transient curl exit-92 (HTTP/2 stream error) failure on
+        # this runner (2026-10-05, master post-merge CI) with no code change
+        # involved -- a retried download of the same URL succeeded
+        # immediately after. --fail so a non-2xx response (which -sL alone
+        # treats as success and would fail checksum verification with a
+        # useless error) is retried and reported as a curl failure instead.
         run: |
           mkdir -p priv/plugins/model
-          curl -sL -o priv/plugins/model/model.onnx \
+          curl -fsL --retry 3 --retry-all-errors --connect-timeout 10 \
+            -o priv/plugins/model/model.onnx \
             https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model.onnx
-          curl -sL -o priv/plugins/model/tokenizer.json \
+          curl -fsL --retry 3 --retry-all-errors --connect-timeout 10 \
+            -o priv/plugins/model/tokenizer.json \
             https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json
           echo "10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a  priv/plugins/model/model.onnx" | sha256sum -c -
           echo "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8  priv/plugins/model/tokenizer.json" | sha256sum -c -
