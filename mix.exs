@@ -133,6 +133,10 @@ defmodule PhoenixElxirBeam.MixProject do
       # docs/superpowers/specs/2026-09-30-rule-coverage-gate-design.md)
       # deliberately isn't in this list.
       precommit: [
+        # Idempotent; guards against a worktree/clone that was never run
+        # through `mix setup` and so is silently missing the watermark-
+        # stripping commit hooks (see scripts/git-hooks/).
+        "git.hooks.install",
         "compile --warnings-as-errors",
         "deps.unlock --unused",
         "format",

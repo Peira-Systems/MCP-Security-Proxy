@@ -20,6 +20,17 @@ env:
   ImageOS: ubuntu26
 
 jobs:
+  watermarks:
+    name: no AI-attribution watermarks
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: scripts/git-hooks/check-watermarks-ci.sh
+
   test:
     name: compile · format · audit · test
     runs-on: self-hosted
