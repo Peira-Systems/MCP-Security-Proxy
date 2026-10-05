@@ -84,7 +84,7 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
       :sidecar,
       # Provenance pin (M3.5) — the sidecar refuses to start if its script or
       # ruleset bytes change. Recompute both after editing either:
-      #   mix run --no-start -e 'p = &Application.app_dir(:phoenix_elxir_beam, "priv/plugins/#{&1}"); IO.puts PhoenixElxirBeam.MCP.Plugin.Provenance.code_digest("python3", [p.("prompt_injection_scanner.py"), p.("injection_rules.json")])'
+      #   mix run --no-start -e 'p = &Application.app_dir(:phoenix_elxir_beam, "priv/plugins/#{&1}"); IO.puts PhoenixElxirBeam.MCP.Plugin.Provenance.code_digest("python3", [p.("prompt_injection_scanner.py"), p.("injection_rules.json"), p.("model/model.onnx"), p.("model/tokenizer.json")])'
       # Add a `manifest:` entry too from the boot log to also pin its capabilities.
       # `limits` = best-effort kernel resource caps (Linux, needs `prlimit`); the
       # production-grade option is a container per sidecar — docs/plugin-supply-chain.md.
@@ -93,11 +93,13 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
       cmd: "python3",
       args: [
         {:priv, "plugins/prompt_injection_scanner.py"},
-        {:priv, "plugins/injection_rules.json"}
+        {:priv, "plugins/injection_rules.json"},
+        {:priv, "plugins/model/model.onnx"},
+        {:priv, "plugins/model/tokenizer.json"}
       ],
       config: %{},
       grants: %{block: true, mutate: [], network: false},
-      pin: [code: "sha256:5f5652c04820be0e1bcbb02a5b5e5eecf40ee5ca2fba2f2423f362fb1aa8254c"],
+      pin: [code: "sha256:94ed8da3067b007a913ee780af03cd0934fb65b568e12fbb7a1be7b1f26a3371"],
       limits: [as_mb: 512, cpu_s: 30]
     }
   ]

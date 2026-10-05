@@ -63,6 +63,12 @@ npm-debug.log
 __pycache__/
 *.pyc
 
+# Similarity-layer model/tokenizer files (2026-10-05 plan) -- fetched at
+# Docker build time and locally via Step 2 below, never committed (470MB
+# + 9MB, checksum-pinned in requirements.txt's accompanying doc comment
+# and in config/prod.exs's provenance pin instead of version control).
+/priv/plugins/model/
+
 # Rust build output for Wasm plugin crates (priv/wasm_plugins/*/) -- the
 # compiled .wasm artifact itself is checked in one level up; only the build
 # directory is regeneratable/large.

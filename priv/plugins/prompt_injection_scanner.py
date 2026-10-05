@@ -29,6 +29,8 @@ import json
 import os
 import unicodedata
 
+from similarity_layer import load_similarity_model, encode
+
 # The ruleset path may be passed as argv[1] (so it is covered by the sidecar's
 # provenance pin, M3.5); otherwise it sits next to this file.
 RULES_PATH = (
@@ -203,6 +205,112 @@ def load_rules(path=RULES_PATH):
 
 RULES, RULESET_VERSION = load_rules()
 
+# The similarity layer's model/tokenizer paths follow the same
+# argv-or-fallback convention as RULES_PATH above: argv[2]/argv[3] when
+# the sidecar is launched with them (covered by the provenance pin),
+# falling back to script-relative paths when run standalone (e.g. from
+# score_injection.py or a unit test, neither of which pass sidecar-style
+# argv).
+SIMILARITY_MODEL_PATH = (
+    sys.argv[2]
+    if len(sys.argv) > 2 and sys.argv[2].endswith(".onnx")
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "model.onnx")
+)
+SIMILARITY_TOKENIZER_PATH = (
+    sys.argv[3]
+    if len(sys.argv) > 3 and sys.argv[3].endswith(".json")
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "tokenizer.json")
+)
+
+
+def load_similarity_references(corpus_path):
+    """Returns the 54 in-scope malicious examples from the main labelled
+    corpus as similarity-check reference texts -- no separate reference
+    file is needed (unlike the abandoned TF-IDF design): the embedding
+    model is already multilingual, and catches multilingual target rows
+    using only these English references (verified during spec research:
+    10/23 target rows caught, including non-English ones, using only
+    this corpus's existing malicious examples)."""
+    references = []
+    with open(corpus_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if row.get("label") == "malicious" and row.get("scope") != "out_of_scope":
+                references.append({"text": row["text"], "category": row["category"]})
+    return references
+
+
+def build_similarity_index(model_path, tokenizer_path, corpus_path):
+    """Loads the ONNX model/tokenizer and encodes the reference examples
+    once. Called once at module load time, the same pattern as
+    `RULES, RULESET_VERSION = load_rules()` above. Any failure here
+    (missing/corrupt model files, missing corpus) propagates as an
+    unhandled exception, so the sidecar process exits non-zero and never
+    reaches its stdio read loop -- fail loudly, not a graceful degrade to
+    rule-only detection."""
+    session, tokenizer = load_similarity_model(model_path, tokenizer_path)
+    references = load_similarity_references(corpus_path)
+    reference_matrix = encode([r["text"] for r in references], session, tokenizer)
+    return session, tokenizer, reference_matrix, references
+
+
+_SIMILARITY_CORPUS_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "corpus", "injection_corpus.jsonl"
+)
+(
+    SIMILARITY_SESSION,
+    SIMILARITY_TOKENIZER,
+    SIMILARITY_MATRIX,
+    SIMILARITY_REFERENCES,
+) = build_similarity_index(SIMILARITY_MODEL_PATH, SIMILARITY_TOKENIZER_PATH, _SIMILARITY_CORPUS_PATH)
+
+# Measured against the current corpus during spec research: at this
+# threshold, catches 10/23 target out-of-scope rows with 0/70 false
+# positives on the benign corpus. Do not change without re-running the
+# full calibration sweep in docs/superpowers/specs/2026-10-04-injection-detection-similarity-layer-design.md.
+SIMILARITY_THRESHOLD = 0.605
+
+
+def check_similarity(text, session, tokenizer, reference_matrix, references, threshold):
+    """Returns {"reference_text", "category", "score"} for the
+    best-matching reference if its cosine similarity to `text` meets
+    `threshold`, else None."""
+    query_emb = encode([text], session, tokenizer)
+    scores = query_emb @ reference_matrix.T
+    best_idx = int(scores[0].argmax())
+    best_score = float(scores[0][best_idx])
+    if best_score < threshold:
+        return None
+    return {
+        "reference_text": references[best_idx]["text"],
+        "category": references[best_idx]["category"],
+        "score": best_score,
+    }
+
+
+def _similarity_severity(score):
+    if score >= 0.75:
+        return "high"
+    if score >= 0.65:
+        return "medium"
+    return "low"
+
+
+def _similarity_finding(hit):
+    return [{
+        "id": "similarity-match",
+        "category": hit["category"],
+        "severity": _similarity_severity(hit["score"]),
+        "confidence": hit["score"],
+        "evidence": (
+            f"similar to known attack ({hit['category']}, score {hit['score']:.2f}): "
+            f"{hit['reference_text'][:60]}"
+        ),
+    }]
+
 
 def _match_rules(text):
     """The per-candidate matching loop, unchanged in substance from the
@@ -260,6 +368,13 @@ def scan_text(text):
         hits = _match_rules(candidate)
         if hits:
             return _tag_transform(hits, transform_name)
+
+    similarity_hit = check_similarity(
+        text, SIMILARITY_SESSION, SIMILARITY_TOKENIZER, SIMILARITY_MATRIX,
+        SIMILARITY_REFERENCES, SIMILARITY_THRESHOLD,
+    )
+    if similarity_hit:
+        return _similarity_finding(similarity_hit)
     return []
 
 

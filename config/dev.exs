@@ -58,7 +58,9 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
      cmd: "python",
      args: [
        {:priv, "plugins/prompt_injection_scanner.py"},
-       {:priv, "plugins/injection_rules.json"}
+       {:priv, "plugins/injection_rules.json"},
+       {:priv, "plugins/model/model.onnx"},
+       {:priv, "plugins/model/tokenizer.json"}
      ],
      config: %{},
      grants: %{block: true, mutate: [], network: false},

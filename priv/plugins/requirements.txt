@@ -1,0 +1,14 @@
+# Exact-pinned dependencies for the similarity-layer detection stage
+# (2026-10-05 plan). Install with:
+#   pip3 install --break-system-packages --no-cache-dir -r priv/plugins/requirements.txt
+#
+# Model files (not listed here -- they're binary data, not pip packages)
+# are fetched separately; see docs/injection-detection.md and this
+# plan's Task 5.
+onnxruntime==1.30.0
+tokenizers==0.22.2
+# 2.4.6 (not 2.5.3, which requires Python >=3.12): the runtime container's
+# base image (debian:bookworm-20260824-slim) ships Python 3.11.2 via apt,
+# a fixed constraint of that stable Debian release. Discovered by Task 5's
+# real `docker build` run -- see task-5-report.md.
+numpy==2.4.6

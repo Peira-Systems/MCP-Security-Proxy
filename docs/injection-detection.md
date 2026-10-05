@@ -65,11 +65,31 @@ incidental unobfuscated trigger phrase would still need it.
 
 Earlier closed gaps from the prior round remain in place: Unicode NFKC
 normalization (fullwidth-character evasion) and newline-tolerant middle
-clauses on `override-ignore-previous`. Everything still in the out-of-scope
-set (paraphrase, multilingual) is a case the "Limits" section below
-already, independently disclaims — closing those needs semantic/
-statistical matching, not further text-normalization transforms, and is
-scoped as a separate plan.
+clauses on `override-ignore-previous`.
+
+A third round (2026-10-05) added a semantic similarity layer: a small
+multilingual sentence-embedding model (`paraphrase-multilingual-MiniLM-L12-v2`,
+run via ONNX Runtime, not PyTorch — see
+`docs/superpowers/specs/2026-10-04-injection-detection-similarity-layer-design.md`
+for why), checked only when the rule and transform stages above find
+nothing. This catches 10 of the 23 remaining paraphrase/multilingual
+rows at zero new false positives, including multilingual rows no
+lexical technique (regex or TF-IDF, both tried) could reach — the
+model places translations of the same meaning close together in
+embedding space regardless of surface wording. 13 rows remain uncaught;
+this is a real, bounded improvement, not comprehensive paraphrase or
+translation coverage. A lexical approach (TF-IDF cosine similarity) was
+tried first and measured at 0/23 caught at zero false positives — the
+project's benign corpus deliberately includes security-adjacent
+technical text that shares vocabulary with real attacks, defeating any
+purely lexical similarity check on this corpus.
+
+This layer adds the project's first non-stdlib Python dependencies
+(`onnxruntime`, `tokenizers`, `numpy`, ~122MB) plus a ~470MB model file
+and a ~9MB tokenizer file, fetched at Docker build time and
+checksum-pinned rather than committed to git — by far the largest
+dependency this project has taken on, accepted because it's the only
+approach that actually works on this corpus.
 
 ## Maintaining it
 
@@ -97,8 +117,12 @@ scoped as a separate plan.
   four categories were caught (see the corpus's `*_paraphrase` rows).
 - Detection is advisory on `post_call` (finding + redaction, response still
   delivered) and blocking on `discovery` (with the `block` grant).
-- Multi-lingual payloads remain out of scope — measured: 0/8 multilingual
-  malicious samples caught. Heavily-obfuscated payloads are now
+- Multi-lingual payloads are now partially covered by the similarity
+  layer (2026-10-05) — some multilingual rows score above its 0.605
+  threshold, but not all; a multilingual attack phrased very
+  differently from anything the embedding model places close to a
+  known English attack can still be missed.
+- Heavily-obfuscated payloads are now
   substantially covered: all five previously-uncaught obfuscation classes
   (cross-script homoglyphs, single-character spacing, zero-width
   interleaving, base64 encoding, whole-string reversal) are closed via
