@@ -7,11 +7,14 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
   The proxy owns canonical session state; a `CallContext` is a read-only view
   of it at one instant. Fields the current caller has no data for are left
   `nil`. On a `:pre_call` / `:post_call` context `PhoenixElxirBeam.MCP.PolicyEngine`
-  populates `phase`, `call`, `session.seen_tags`, `session.taint`,
-  `session.calls_so_far` (session-lifetime count), and `session.recent_calls`
-  (a bounded recent window of `%{tags, at}`, for behavioural baselining);
-  `call.arguments`, `tool`, and `response` are threaded in by later roadmap
-  steps (scanners, post_call).
+  populates `phase`, `call` (including `call.arguments`), `session.seen_tags`,
+  `session.taint`, `session.calls_so_far` (session-lifetime count), and
+  `session.recent_calls` (a bounded recent window of
+  `%{tool_name, tags, arg_fingerprint, at}` — `arg_fingerprint` is a one-way
+  digest of the call's arguments via `PhoenixElxirBeam.MCP.CallFingerprint`,
+  never the raw arguments — used for behavioural baselining and loop
+  detection); `tool` and `response` are threaded in by later roadmap steps
+  (scanners, post_call).
 
   On a `:discovery` context (built by `PhoenixElxirBeam.MCP.ServerRegistry` at
   registration / re-handshake) there is no single call: `discovery` carries the

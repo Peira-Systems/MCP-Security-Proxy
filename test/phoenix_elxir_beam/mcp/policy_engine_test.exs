@@ -3,7 +3,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
   # serially to avoid the file-wide write-lock contention with other suites.
   use ExUnit.Case, async: false
 
-  alias PhoenixElxirBeam.MCP.{EventLog, PolicyEngine}
+  alias PhoenixElxirBeam.MCP.{CallFingerprint, EventLog, PolicyEngine}
   alias PhoenixElxirBeam.Repo
 
   setup do
@@ -32,6 +32,31 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
              PolicyEngine.record_call(session_id, "net", "check_status", [], name)
 
     assert event2.status == :ok
+  end
+
+  test "a call's call_log entry carries tool_name and an arg_fingerprint derived from its own arguments",
+       %{name: name} do
+    session_id = "session-fingerprint"
+    :ok = PolicyEngine.start_session(session_id, :benign, nil, name)
+
+    assert {:allow, _event} =
+             PolicyEngine.record_call(session_id, "files", "write_file", [], name, %{
+               "path" => "/tmp/a"
+             })
+
+    assert {:allow, _event} =
+             PolicyEngine.record_call(session_id, "files", "write_file", [], name, %{
+               "path" => "/tmp/b"
+             })
+
+    state = :sys.get_state(name)
+    [second, first] = state.sessions[session_id].call_log
+
+    assert first.tool_name == "write_file"
+    assert second.tool_name == "write_file"
+    assert first.arg_fingerprint == CallFingerprint.compute(%{"path" => "/tmp/a"})
+    assert second.arg_fingerprint == CallFingerprint.compute(%{"path" => "/tmp/b"})
+    refute first.arg_fingerprint == second.arg_fingerprint
   end
 
   test "network egress after a sensitive read in the same session is blocked", %{name: name} do

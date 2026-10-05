@@ -53,7 +53,17 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WireTest do
       CallContext.new(%{
         phase: :pre_call,
         call: %{id: "c", session_id: "s", server_id: "files", tool_name: "read_secrets"},
-        session: %{seen_tags: [], recent_calls: [%{tags: [:sensitive_read], at: at}]}
+        session: %{
+          seen_tags: [],
+          recent_calls: [
+            %{
+              tool_name: "read_secrets",
+              tags: [:sensitive_read],
+              arg_fingerprint: "sha256:abc",
+              at: at
+            }
+          ]
+        }
       })
 
     refute Map.has_key?(Wire.encode_context(ctx, entry([]))["session"], "recentCalls")
@@ -61,7 +71,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.WireTest do
     wire = Wire.encode_context(ctx, entry(["session.recentCalls"]))
 
     assert wire["session"]["recentCalls"] == [
-             %{"tags" => ["sensitive_read"], "at" => "2026-08-29T12:00:00Z"}
+             %{
+               "toolName" => "read_secrets",
+               "tags" => ["sensitive_read"],
+               "argFingerprint" => "sha256:abc",
+               "at" => "2026-08-29T12:00:00Z"
+             }
            ]
   end
 

@@ -167,7 +167,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Wire do
         |> Map.get(:recent_calls, [])
         |> Enum.map(fn c ->
           %{
+            "toolName" => Map.get(c, :tool_name),
             "tags" => encode_tags(Map.get(c, :tags, [])),
+            "argFingerprint" => Map.get(c, :arg_fingerprint),
             "at" => encode_time(Map.get(c, :at))
           }
         end)

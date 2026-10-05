@@ -38,7 +38,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   use GenServer
   require Logger
 
-  alias PhoenixElxirBeam.MCP.{AuditEvent, CallContext, Event, HoldRegistry, Pipeline, PolicyStore}
+  alias PhoenixElxirBeam.MCP.{
+    AuditEvent,
+    CallContext,
+    CallFingerprint,
+    Event,
+    HoldRegistry,
+    Pipeline,
+    PolicyStore
+  }
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub
@@ -378,7 +386,16 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
 
         call_log =
           prune_call_log(
-            [%{call_id: call_id, tool_name: tool_name, tags: tags, at: now} | prior_calls],
+            [
+              %{
+                call_id: call_id,
+                tool_name: tool_name,
+                tags: tags,
+                arg_fingerprint: CallFingerprint.compute(arguments),
+                at: now
+              }
+              | prior_calls
+            ],
             now
           )
 
