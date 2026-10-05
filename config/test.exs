@@ -24,6 +24,12 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        "max_calls" => 3,
        "watch_tags" => ["sensitive_read"]
      }},
+    {PhoenixElxirBeam.MCP.Plugins.LoopGuard,
+     config: %{
+       "window_ms" => 10_000,
+       "max_identical_calls" => 3,
+       "max_same_tool_calls" => 15
+     }},
     {PhoenixElxirBeam.MCP.Plugins.ChainExfil, []},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     {PhoenixElxirBeam.MCP.Plugins.MetadataEgressGuard, []},

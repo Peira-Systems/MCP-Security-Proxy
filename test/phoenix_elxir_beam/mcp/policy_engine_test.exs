@@ -432,8 +432,15 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     session_id = "session-untagged-burst"
     :ok = PolicyEngine.start_session(session_id, :benign, "agent://demo", name)
 
-    for _ <- 1..6 do
-      assert {:allow, _} = PolicyEngine.record_call(session_id, "files", "list_files", [], name)
+    # Varying arguments per call so this only exercises BaselineGuard's
+    # tag-based counting — repeating the identical call here would also
+    # trip LoopGuard's own (correct, separate) identical-arguments
+    # threshold, which is not what this test is about.
+    for i <- 1..6 do
+      assert {:allow, _} =
+               PolicyEngine.record_call(session_id, "files", "list_files", [], name, %{
+                 "page" => i
+               })
     end
   end
 end

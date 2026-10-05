@@ -97,7 +97,18 @@ pins that plugin to it (see [product-guide.md §6.8](product-guide.md)).
   block/hold-shaped events, not every `ok`.
 - **Resource exhaustion.** Body-size cap (413), per-key rate limit (429),
   per-stream buffer ceiling + deadline, sidecar `prlimit` caps, DB queue
-  fail-fast (M1.5 / M3.5).
+  fail-fast (M1.5 / M3.5). **A stuck agent, not necessarily a malicious
+  one, thrashing on one tool** — `LoopGuard` denies once a session calls the
+  same tool with identical arguments (a genuine retry loop) or the same tool
+  with varying arguments (thrashing) past a configured limit. This is an
+  operational safety net, distinct from the defences in the table above: it
+  does not track outcome (success/failure — see
+  `docs/superpowers/plans/2026-10-05-loop-guard.md` for why that's a
+  separate, future piece of work) and it says nothing about whether the
+  calls themselves are malicious, only that their *rate and repetition*
+  looks like a stuck loop. It does not replace `RateLimiter`'s per-key HTTP
+  volume cap, which polices raw request rate independent of which tool was
+  called or with what arguments.
 - **Runaway / compromised sidecar.** Circuit breaker fast-fails; `prlimit`
   address-space + CPU-time caps; supervisor restart limits.
 - **Unauthorised policy change.** Runtime changes require `operator`; every

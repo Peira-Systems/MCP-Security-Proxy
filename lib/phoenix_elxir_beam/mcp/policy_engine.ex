@@ -47,6 +47,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
     Pipeline,
     PolicyStore
   }
+
   alias PhoenixElxirBeam.MCP.Plugin.Registry, as: PluginRegistry
 
   @pubsub PhoenixElxirBeam.PubSub

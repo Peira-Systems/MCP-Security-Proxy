@@ -40,6 +40,14 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        "max_calls" => 5,
        "watch_tags" => ["sensitive_read"]
      }},
+    # New (unreviewed in prod traffic yet): pin to dry-run from the dashboard
+    # before trusting it to enforce — see docs/threat-model.md "Dry-run mode".
+    {PhoenixElxirBeam.MCP.Plugins.LoopGuard,
+     config: %{
+       "window_ms" => 10_000,
+       "max_identical_calls" => 3,
+       "max_same_tool_calls" => 15
+     }},
     {PhoenixElxirBeam.MCP.Plugins.ApprovalGate, config: %{"timeout_ms" => 45_000}},
     {PhoenixElxirBeam.MCP.Plugins.TaintGuard, []},
     # New (unreviewed in prod traffic yet): pin to dry-run from the dashboard
