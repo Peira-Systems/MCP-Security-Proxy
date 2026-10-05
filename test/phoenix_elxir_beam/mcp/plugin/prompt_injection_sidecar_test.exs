@@ -18,7 +18,16 @@ defmodule PhoenixElxirBeam.MCP.Plugin.PromptInjectionSidecarTest do
     name = :"pi_sidecar_#{System.unique_integer([:positive])}"
 
     start_supervised!(
-      {SidecarRunner, name: name, cmd: python, args: [@script, @rules, @model, @tokenizer]},
+      {
+        SidecarRunner,
+        # Default 4s (SidecarRunner) is too tight for this plugin's ONNX model
+        # load -- measured ~12s on the project's self-hosted CI runner
+        # (2026-10-05); matches config/dev.exs and config/prod.exs.
+        name: name,
+        cmd: python,
+        args: [@script, @rules, @model, @tokenizer],
+        handshake_timeout_ms: 20_000
+      },
       id: name
     )
 

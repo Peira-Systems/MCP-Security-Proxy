@@ -25,6 +25,12 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
 
   @circuit_threshold 5
   @circuit_cooldown_ms 30_000
+  # Default `initialize` handshake deadline; override per-sidecar via the
+  # `:handshake_timeout_ms` opt for a plugin with real startup cost (e.g. one
+  # that loads an ONNX model) -- 4s is fine for a plain script but not enough
+  # for model-loading work even on modest hardware (measured ~12s for the
+  # prompt-injection-scanner's ONNX load on the project's self-hosted CI
+  # runner; see its sidecar config in config/dev.exs and config/prod.exs).
   @handshake_timeout_ms 4_000
   @default_request_timeout_ms 5_000
 
@@ -72,6 +78,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
     cmd = Keyword.fetch!(opts, :cmd)
     args = Keyword.get(opts, :args, [])
     limits = Keyword.get(opts, :limits)
+    handshake_timeout_ms = Keyword.get(opts, :handshake_timeout_ms, @handshake_timeout_ms)
 
     {exec, exec_args} = apply_resource_limits(cmd, args, limits)
     port = Port.open({:spawn_executable, exec}, [:binary, :exit_status, args: exec_args])
@@ -82,6 +89,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
       pending: %{},
       next_id: 2,
       manifest: nil,
+      handshake_timeout_ms: handshake_timeout_ms,
       config: Keyword.get(opts, :config, %{}),
       proxy: Keyword.get(opts, :proxy, %{name: "mcp-security-proxy", version: "0.1.0"}),
       failures: 0,
@@ -154,7 +162,7 @@ defmodule PhoenixElxirBeam.MCP.Plugin.SidecarRunner do
       }
     })
 
-    with {:ok, result, state} <- await_response(state, 1, @handshake_timeout_ms) do
+    with {:ok, result, state} <- await_response(state, 1, state.handshake_timeout_ms) do
       send_line(state.port, %{"jsonrpc" => "2.0", "method" => "initialized"})
       {:ok, %{state | manifest: Manifest.from_wire(result)}}
     end
