@@ -1,0 +1,10 @@
+# Exact-pinned dependencies for the similarity-layer detection stage
+# (2026-10-05 plan). Install with:
+#   pip3 install --break-system-packages --no-cache-dir -r priv/plugins/requirements.txt
+#
+# Model files (not listed here -- they're binary data, not pip packages)
+# are fetched separately; see docs/injection-detection.md and this
+# plan's Task 5.
+onnxruntime==1.30.0
+tokenizers==0.22.2
+numpy==2.5.3
