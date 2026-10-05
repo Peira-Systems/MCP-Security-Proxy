@@ -322,19 +322,9 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
          cmd when is_binary(cmd) <- resolve_cmd(Keyword.get(opts, :cmd)),
          runner = Module.concat(SidecarRunner, name),
          resolved_args = Enum.map(Keyword.get(opts, :args, []), &resolve_arg/1),
+         runner_opts = build_runner_opts(name, runner, cmd, resolved_args, opts),
          {:ok, _pid} <-
-           DynamicSupervisor.start_child(
-             supervisor,
-             {SidecarRunner,
-              name: runner,
-              plugin_name: to_string(name),
-              cmd: cmd,
-              cmd_string: to_string(Keyword.get(opts, :cmd)),
-              args: resolved_args,
-              config: Keyword.get(opts, :config, %{}),
-              pin: Keyword.get(opts, :pin),
-              limits: Keyword.get(opts, :limits)}
-           ),
+           DynamicSupervisor.start_child(supervisor, {SidecarRunner, runner_opts}),
          %Manifest{} = manifest <- SidecarRunner.manifest(runner),
          kind when not is_nil(kind) <-
            Enum.find(@capability_kinds, &Map.has_key?(manifest.capabilities, &1)) do
@@ -361,6 +351,27 @@ defmodule PhoenixElxirBeam.MCP.Plugin.Registry do
       nil -> {:error, "sidecar #{Keyword.get(opts, :name)}: manifest declares no capability"}
       {:error, reason} -> {:error, "sidecar #{Keyword.get(opts, :name)}: #{inspect(reason)}"}
       other -> {:error, "sidecar #{Keyword.get(opts, :name)}: #{inspect(other)}"}
+    end
+  end
+
+  # :handshake_timeout_ms is only forwarded when the plugin config sets it,
+  # so SidecarRunner.init/1's own Keyword.get(..., @handshake_timeout_ms)
+  # default still applies for every sidecar that doesn't need a longer one.
+  defp build_runner_opts(name, runner, cmd, resolved_args, opts) do
+    base = [
+      name: runner,
+      plugin_name: to_string(name),
+      cmd: cmd,
+      cmd_string: to_string(Keyword.get(opts, :cmd)),
+      args: resolved_args,
+      config: Keyword.get(opts, :config, %{}),
+      pin: Keyword.get(opts, :pin),
+      limits: Keyword.get(opts, :limits)
+    ]
+
+    case Keyword.get(opts, :handshake_timeout_ms) do
+      nil -> base
+      ms -> base ++ [handshake_timeout_ms: ms]
     end
   end
 

@@ -88,6 +88,9 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
       # Add a `manifest:` entry too from the boot log to also pin its capabilities.
       # `limits` = best-effort kernel resource caps (Linux, needs `prlimit`); the
       # production-grade option is a container per sidecar — docs/plugin-supply-chain.md.
+      # The default 4s handshake deadline (SidecarRunner) is too tight for this
+      # plugin's ONNX model load -- measured ~12s on the project's self-hosted
+      # CI runner (2026-10-05). 20s leaves real margin for a cold/loaded host.
       name: "prompt-injection-scanner",
       transport: :stdio,
       cmd: "python3",
@@ -100,7 +103,8 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
       config: %{},
       grants: %{block: true, mutate: [], network: false},
       pin: [code: "sha256:94ed8da3067b007a913ee780af03cd0934fb65b568e12fbb7a1be7b1f26a3371"],
-      limits: [as_mb: 512, cpu_s: 30]
+      limits: [as_mb: 512, cpu_s: 30],
+      handshake_timeout_ms: 20_000
     }
   ]
 

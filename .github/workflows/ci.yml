@@ -86,17 +86,15 @@ jobs:
           mix deps.audit
           mix hex.audit
 
-      - run: mix test
-
-      # Catch prod-only config / compile breakage (runtime.exs, prod.exs,
-      # force_ssl, releases) that MIX_ENV=test never exercises.
-      - name: Prod build compiles
-        run: MIX_ENV=prod mix compile --warnings-as-errors
-
       # Similarity-layer dependencies and model files (2026-10-05 plan)
-      # -- must be present before any step below that imports
-      # prompt_injection_scanner (score_injection.py calls scan_text,
-      # which now includes the similarity stage).
+      # -- must be present before `mix test` below: the Elixir sidecar
+      # test (prompt_injection_sidecar_test.exs) spawns
+      # prompt_injection_scanner.py directly, which imports these at
+      # module load time. Originally placed after `mix test` on the
+      # mistaken assumption that only the Python-level steps further
+      # down needed them; that left `mix test` failing on a bare
+      # runner with "No module named 'numpy'" the first time this ran
+      # for real (2026-10-05, PR #12 CI run).
       - name: Install sidecar Python dependencies
         run: pip3 install --break-system-packages --no-cache-dir -r priv/plugins/requirements.txt
 
@@ -109,6 +107,13 @@ jobs:
             https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json
           echo "10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a  priv/plugins/model/model.onnx" | sha256sum -c -
           echo "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8  priv/plugins/model/tokenizer.json" | sha256sum -c -
+
+      - run: mix test
+
+      # Catch prod-only config / compile breakage (runtime.exs, prod.exs,
+      # force_ssl, releases) that MIX_ENV=test never exercises.
+      - name: Prod build compiles
+        run: MIX_ENV=prod mix compile --warnings-as-errors
 
       # Prompt-injection ruleset vs the labelled corpus (M4.3) — fails if recall
       # or the false-positive rate falls outside budget. See docs/injection-detection.md.

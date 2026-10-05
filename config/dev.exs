@@ -52,19 +52,25 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
     {PhoenixElxirBeam.MCP.Plugins.StreamGuard, config: %{"max_bytes" => 1_200}},
     {PhoenixElxirBeam.MCP.Plugins.EventLogSink, []},
     {PhoenixElxirBeam.MCP.Plugins.StructuredLogSink, []},
-    {:sidecar,
-     name: "prompt-injection-scanner",
-     transport: :stdio,
-     cmd: "python",
-     args: [
-       {:priv, "plugins/prompt_injection_scanner.py"},
-       {:priv, "plugins/injection_rules.json"},
-       {:priv, "plugins/model/model.onnx"},
-       {:priv, "plugins/model/tokenizer.json"}
-     ],
-     config: %{},
-     grants: %{block: true, mutate: [], network: false},
-     pin: [code: "sha256:aa5f802f3cdfd99edcb04dd04d233826bbf95fd5e634f634540c2703d9db39bb"]},
+    {
+      :sidecar,
+      # The default 4s handshake deadline (SidecarRunner) is too tight for this
+      # plugin's ONNX model load -- measured ~12s on the project's self-hosted
+      # CI runner (2026-10-05). 20s leaves real margin for a cold/loaded host.
+      name: "prompt-injection-scanner",
+      transport: :stdio,
+      cmd: "python",
+      args: [
+        {:priv, "plugins/prompt_injection_scanner.py"},
+        {:priv, "plugins/injection_rules.json"},
+        {:priv, "plugins/model/model.onnx"},
+        {:priv, "plugins/model/tokenizer.json"}
+      ],
+      config: %{},
+      grants: %{block: true, mutate: [], network: false},
+      handshake_timeout_ms: 20_000,
+      pin: [code: "sha256:aa5f802f3cdfd99edcb04dd04d233826bbf95fd5e634f634540c2703d9db39bb"]
+    },
     # W4 reference Wasm plugin (docs/wasm-plugin-plan.md) -- a wasm32-wasip1 port of
     # RuleEngine above, verdict-parity-tested against it
     # (rule_engine_wasm_parity_test.exs). Ships alongside, not instead of, the trusted
