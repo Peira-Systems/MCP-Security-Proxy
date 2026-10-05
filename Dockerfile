@@ -42,11 +42,16 @@ COPY assets assets
 # download; the build fails if either doesn't match (the same integrity
 # principle as this project's provenance pins, applied to a build-time
 # fetch). `curl` is already installed above for the tailwind/esbuild
-# mix tasks.
+# mix tasks. --retry/--retry-all-errors/--fail: the ~470MB model.onnx
+# download has hit a transient curl exit-92 (HTTP/2 stream error) on
+# flaky network conditions (observed in CI, 2026-10-05) with no code
+# change involved -- retrying the same URL succeeded immediately after.
 RUN mkdir -p priv/plugins/model && \
-    curl -sL -o priv/plugins/model/model.onnx \
+    curl -fsL --retry 3 --retry-all-errors --connect-timeout 10 \
+      -o priv/plugins/model/model.onnx \
       https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model.onnx && \
-    curl -sL -o priv/plugins/model/tokenizer.json \
+    curl -fsL --retry 3 --retry-all-errors --connect-timeout 10 \
+      -o priv/plugins/model/tokenizer.json \
       https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json && \
     echo "10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a  priv/plugins/model/model.onnx" | sha256sum -c - && \
     echo "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8  priv/plugins/model/tokenizer.json" | sha256sum -c -
