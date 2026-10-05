@@ -98,15 +98,41 @@ def main():
         otp, ofp, otn, ofn, omisses, _ = measure(out_of_scope)
         omal = otp + ofn
         orecall = otp / omal if omal else 1.0
-        print(f"\n  out-of-scope corpus (paraphrase / multilingual / heavy obfuscation --")
+        print(f"\n  out-of-scope corpus (paraphrase / multilingual --")
         print(f"  informational only, NOT budget-gated, see docs/injection-detection.md#limits):")
         print(f"    recall   {orecall:.3f}  [{otp}/{omal} caught]")
+
+        # Per-stage attribution: which detection stage actually caught
+        # each caught row, so a regression in one stage (e.g. the
+        # similarity layer silently stops matching) is visible even
+        # though the aggregate recall number alone wouldn't localize it.
+        by_stage = {}
+        for row in out_of_scope:
+            hits = scan_text(row["text"])
+            if not hits:
+                continue
+            hit_id = hits[0]["id"]
+            if hit_id == "similarity-match":
+                stage = "similarity"
+            elif "evidence" in hits[0] and hits[0]["evidence"].startswith("[via "):
+                stage = "transform"
+            else:
+                stage = "rule"
+            by_stage.setdefault(stage, 0)
+            by_stage[stage] += 1
+        if by_stage:
+            print("    caught by stage:")
+            for stage, count in sorted(by_stage.items()):
+                print(f"      - {stage}: {count}")
+
         by_cat = {}
         for m in omisses:
             by_cat.setdefault(m["category"], 0)
             by_cat[m["category"]] += 1
-        for cat, count in sorted(by_cat.items()):
-            print(f"    - [{cat}] {count} missed")
+        if by_cat:
+            print("    still missed, by category:")
+            for cat, count in sorted(by_cat.items()):
+                print(f"      - [{cat}] {count} missed")
 
     ok = recall >= MIN_RECALL and fp_rate <= MAX_FP_RATE and precision >= MIN_PRECISION
     print("\nRESULT:", "PASS" if ok else "FAIL")
