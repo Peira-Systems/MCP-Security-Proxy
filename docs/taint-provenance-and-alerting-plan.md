@@ -1,6 +1,6 @@
 # Provenance-tagged taint, call-chain on block alerts, approval-gate fire-rate, rug-pull alert channel — design note
 
-**Status:** Proposed · **Date:** 2026-10-01
+**Status:** Complete (P1–P5 all done) · **Date:** 2026-10-01
 
 Source: feedback on the r/MCPservers launch thread (see `docs/threat-model.md` for the
 existing taint model this extends). Four items, bundled because the first two touch the

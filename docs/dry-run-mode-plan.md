@@ -1,6 +1,6 @@
 # Dry-run mode — implementation plan
 
-**Status:** Proposed · **Date:** 2026-09-30
+**Status:** Complete (D1–D5 all done) · **Date:** 2026-09-30
 
 ## Why
 
