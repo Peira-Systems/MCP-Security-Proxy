@@ -7,8 +7,11 @@ defmodule PhoenixElxirBeam.MCP.Plugins.BaselineGuard do
   Where the other guards key off *what* a single call is (its tags, its
   arguments, the session's taint), `BaselineGuard` keys off the *rate* of a
   sequence of calls. It reads `session.recent_calls` — the bounded window of
-  `%{tags, at}` the proxy threads into every `pre_call` `CallContext` — and
-  applies its own, shorter window and threshold from operator config:
+  `%{tool_name, tags, arg_fingerprint, at}` the proxy threads into every
+  `pre_call` `CallContext` (this plugin only looks at `tags`/`at`; see
+  `Plugins.LoopGuard` for the sibling that keys off `tool_name` /
+  `arg_fingerprint` instead) — and applies its own, shorter window and
+  threshold from operator config:
 
       config: %{
         "window_ms"  => 10_000,          # look-back window

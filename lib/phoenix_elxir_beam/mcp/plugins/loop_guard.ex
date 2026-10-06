@@ -8,24 +8,45 @@ defmodule PhoenixElxirBeam.MCP.Plugins.LoopGuard do
   `docs/superpowers/plans/2026-10-05-loop-guard.md`).
 
   Two independent thresholds, both counted over the same `window_ms`
-  look-back into `session.recent_calls`:
+  look-back into `session.recent_calls` — the call under evaluation is
+  already in that window when this runs (same convention as
+  `BaselineGuard`), so the `max_*+1`-th matching call is the one that
+  trips, not the `max_*`-th:
 
     * **`max_identical_calls`** — the same tool called with the *same*
-      arguments (via `PhoenixElxirBeam.MCP.CallFingerprint`, a one-way
-      fingerprint — raw arguments are never compared or logged here)
-      more than this many times. The tight signal: a genuine stuck retry
-      loop (e.g. the same failing `write_file` call repeated).
+      arguments (via `PhoenixElxirBeam.MCP.CallFingerprint`, a one-way,
+      per-session fingerprint — raw arguments are never compared or
+      logged here) more than this many times. The tight signal: a
+      genuine stuck retry loop (e.g. the same failing `write_file` call
+      repeated).
     * **`max_same_tool_calls`** — the same tool called with *any*
       arguments more than this many times. The loose signal: thrashing on
       a tool with varying inputs (e.g. hammering a search endpoint).
-      Set well above normal legitimate-use patterns like pagination —
-      see the plan's Review Focus for the false-positive trade-off.
+      **Must be set above legitimate high-volume same-tool patterns**
+      (e.g. an agent paginating through search results — same tool, same
+      shape, different page tokens each call) or this threshold will
+      false-positive on normal use; the tight threshold doesn't have this
+      problem since it requires identical arguments.
 
-      config: %{
-        "window_ms"            => 10_000,
-        "max_identical_calls"  => 3,
-        "max_same_tool_calls"  => 15
-      }
+  ```
+  config: %{
+    "window_ms"            => 10_000,
+    "max_identical_calls"  => 3,
+    "max_same_tool_calls"  => 15
+  }
+  ```
+
+  Both bounds are further capped by `PolicyEngine`'s own
+  `@call_log_window_ms` / `@call_log_max` (60s / 50 calls) — a
+  `window_ms` above 60s is silently clamped, and a `max_same_tool_calls`
+  at or above 50 can never trip.
+
+  **Outcome-agnostic by design**: this plugin does not know whether a
+  logged call succeeded or failed — only its rate and repetition.
+  Failure-aware detection (e.g. only counting calls that errored) is a
+  documented future extension requiring new plumbing from `post_call`
+  back into session history; see
+  `docs/superpowers/plans/2026-10-05-loop-guard.md`'s scope-split note.
 
   Heuristic by nature, so `fail_mode` is `:fail_open`, same as
   `BaselineGuard`, which this plugin otherwise mirrors in shape —
@@ -72,7 +93,8 @@ defmodule PhoenixElxirBeam.MCP.Plugins.LoopGuard do
     max_same_tool = int(cfg["max_same_tool_calls"], @default_max_same_tool_calls)
 
     tool_name = Map.get(ctx.call, :tool_name)
-    fingerprint = CallFingerprint.compute(Map.get(ctx.call, :arguments))
+    session_id = Map.get(ctx.call, :session_id)
+    fingerprint = CallFingerprint.compute(session_id, Map.get(ctx.call, :arguments))
 
     recent = Map.get(ctx.session, :recent_calls, [])
     now = latest_at(recent)

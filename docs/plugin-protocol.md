@@ -531,9 +531,10 @@ interface CallContext {
       }>;
     };
     recentCalls: Array<{                 // gated by dataNeeds ("session.recentCalls")
-      toolName: string;
+      toolName: string | null;           // null for an entry logged before this field existed
       tags: string[];
-      argFingerprint: string;            // one-way SHA-256 of canonicalized arguments; never the raw arguments
+      argFingerprint: string | null;     // HMAC-SHA256 keyed per session, never the raw arguments;
+                                          // null for an entry logged before this field existed
       at: string;                       // RFC 3339
     }>;                                  // bounded recent window, for behavioural baselining and loop detection
     findingsSoFar: Finding[];

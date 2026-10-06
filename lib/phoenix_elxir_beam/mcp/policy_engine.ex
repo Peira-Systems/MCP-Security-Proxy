@@ -62,9 +62,11 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
   @missing_session_reason "blocked: no session id presented"
 
   # Bounds on the per-session recent-call log threaded into the pre_call
-  # `CallContext` for behavioural baselining (`Plugins.BaselineGuard`). The
-  # proxy only caps memory here; a baselining plugin applies its own, shorter
-  # window on top.
+  # `CallContext` for behavioural baselining (`Plugins.BaselineGuard`) and
+  # loop detection (`Plugins.LoopGuard`). The proxy only caps memory here;
+  # each consuming plugin applies its own, shorter window on top — a
+  # `window_ms` configured above this cap is silently clamped to it, and a
+  # `max_*` threshold at or above `@call_log_max` can never trip.
   @call_log_window_ms 60_000
   @call_log_max 50
 
@@ -392,7 +394,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
                 call_id: call_id,
                 tool_name: tool_name,
                 tags: tags,
-                arg_fingerprint: CallFingerprint.compute(arguments),
+                arg_fingerprint: CallFingerprint.compute(session_id, arguments),
                 at: now
               }
               | prior_calls
@@ -439,7 +441,7 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngine do
         opts = [
           decisions: decisions_from(decision),
           findings: findings,
-          call_chain: prior_calls
+          call_chain: Enum.map(prior_calls, &Map.drop(&1, [:arg_fingerprint]))
         ]
 
         meta = {session, session_id, server_id, tool_name, tags}

@@ -54,9 +54,31 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
 
     assert first.tool_name == "write_file"
     assert second.tool_name == "write_file"
-    assert first.arg_fingerprint == CallFingerprint.compute(%{"path" => "/tmp/a"})
-    assert second.arg_fingerprint == CallFingerprint.compute(%{"path" => "/tmp/b"})
+    assert first.arg_fingerprint == CallFingerprint.compute(session_id, %{"path" => "/tmp/a"})
+    assert second.arg_fingerprint == CallFingerprint.compute(session_id, %{"path" => "/tmp/b"})
     refute first.arg_fingerprint == second.arg_fingerprint
+  end
+
+  test "a call's arg_fingerprint is scoped to its session (same arguments, different sessions, different fingerprint)",
+       %{name: name} do
+    session_a = "session-fp-a"
+    session_b = "session-fp-b"
+    :ok = PolicyEngine.start_session(session_a, :benign, nil, name)
+    :ok = PolicyEngine.start_session(session_b, :benign, nil, name)
+
+    args = %{"path" => "/tmp/shared"}
+
+    assert {:allow, _} =
+             PolicyEngine.record_call(session_a, "files", "write_file", [], name, args)
+
+    assert {:allow, _} =
+             PolicyEngine.record_call(session_b, "files", "write_file", [], name, args)
+
+    state = :sys.get_state(name)
+    [entry_a] = state.sessions[session_a].call_log
+    [entry_b] = state.sessions[session_b].call_log
+
+    refute entry_a.arg_fingerprint == entry_b.arg_fingerprint
   end
 
   test "network egress after a sensitive read in the same session is blocked", %{name: name} do
@@ -169,6 +191,26 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
     tool_names = Enum.map(row.call_chain, & &1["tool_name"])
     assert tool_names == ["read_secrets", "list_files"]
     refute Enum.any?(row.call_chain, &(&1["tool_name"] == "post_webhook"))
+  end
+
+  test "a block's durable call chain never carries the argument fingerprint", %{name: name} do
+    session_id = "session-call-chain-no-fingerprint"
+    :ok = PolicyEngine.start_session(session_id, :attack, nil, name)
+
+    {:allow, _} =
+      PolicyEngine.record_call(session_id, "files", "read_secrets", [:sensitive_read], name, %{
+        "path" => "/etc/shadow"
+      })
+
+    {:block, event} =
+      PolicyEngine.record_call(session_id, "net", "post_webhook", [:network_egress], name)
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+
+    assert [chain_entry] = row.call_chain
+    refute Map.has_key?(chain_entry, "arg_fingerprint")
+    refute Map.has_key?(chain_entry, "argFingerprint")
   end
 
   test "an ok event's durable record carries an empty call chain", %{name: name} do
@@ -442,5 +484,31 @@ defmodule PhoenixElxirBeam.MCP.PolicyEngineTest do
                  "page" => i
                })
     end
+  end
+
+  test "LoopGuard denies through the real pipeline once the same tool+arguments repeats past its threshold",
+       %{name: name} do
+    session_id = "session-loop-end-to-end"
+    :ok = PolicyEngine.start_session(session_id, :benign, nil, name)
+
+    args = %{"path" => "/tmp/stuck"}
+
+    # config/test.exs pins loop-guard's max_identical_calls to 3 — the 4th
+    # identical call (same tool, same arguments) should be denied by the
+    # real, globally-configured plugin, not a test double.
+    for _ <- 1..3 do
+      assert {:allow, _} =
+               PolicyEngine.record_call(session_id, "files", "write_file", [], name, args)
+    end
+
+    assert {:block, event} =
+             PolicyEngine.record_call(session_id, "files", "write_file", [], name, args)
+
+    assert event.status == :blocked
+    assert event.reason =~ "runaway loop"
+
+    %{entries: entries} = EventLog.list(%{page_size: 100})
+    row = Enum.find(entries, &(&1.event_id == event.id))
+    assert [%{"plugin" => "loop-guard", "verdict" => "deny"}] = row.decisions
   end
 end

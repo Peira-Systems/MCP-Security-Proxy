@@ -10,9 +10,10 @@ defmodule PhoenixElxirBeam.MCP.CallContext do
   populates `phase`, `call` (including `call.arguments`), `session.seen_tags`,
   `session.taint`, `session.calls_so_far` (session-lifetime count), and
   `session.recent_calls` (a bounded recent window of
-  `%{tool_name, tags, arg_fingerprint, at}` — `arg_fingerprint` is a one-way
-  digest of the call's arguments via `PhoenixElxirBeam.MCP.CallFingerprint`,
-  never the raw arguments — used for behavioural baselining and loop
+  `%{tool_name, tags, arg_fingerprint, at}` — `arg_fingerprint` is a one-way,
+  per-session HMAC digest of the call's arguments via
+  `PhoenixElxirBeam.MCP.CallFingerprint`, never the raw arguments and never
+  comparable across sessions — used for behavioural baselining and loop
   detection); `tool` and `response` are threaded in by later roadmap steps
   (scanners, post_call).
 

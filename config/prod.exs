@@ -71,9 +71,15 @@ config :phoenix_elxir_beam, PhoenixElxirBeam.MCP,
        "max_calls" => 5,
        "watch_tags" => ["sensitive_read"]
      }},
-    # New (unreviewed in prod traffic yet): pin to dry-run from the dashboard
-    # before trusting it to enforce — see docs/threat-model.md "Dry-run mode".
+    # New (unreviewed in prod traffic yet): registered disabled, not enabled.
+    # The default thresholds will deny ordinary polling patterns (status
+    # checks, no-argument tools called repeatedly) that look identical to a
+    # stuck loop from the proxy's vantage point — an operator must tune the
+    # thresholds for their own traffic and enable it from the dashboard
+    # (ideally pinned to dry-run first — see docs/threat-model.md "Dry-run
+    # mode") rather than have it start enforcing on a fresh deploy.
     {PhoenixElxirBeam.MCP.Plugins.LoopGuard,
+     enabled: false,
      config: %{
        "window_ms" => 10_000,
        "max_identical_calls" => 3,
